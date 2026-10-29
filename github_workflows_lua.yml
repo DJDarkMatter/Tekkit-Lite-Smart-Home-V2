@@ -1,0 +1,18 @@
+# Optional template only: GitHub activates this after placement in .github/workflows/.
+# Kept at the root to preserve the requested folder-free distribution.
+name: Lua 5.1 integration tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check bundled installer matches its source files
+        run: python3 tools_build_installer.py --check
+      - run: sudo apt-get update && sudo apt-get install -y lua5.1
+      - name: Check Lua syntax
+        run: find . -name '*.lua' -not -path './.git/*' -print0 | xargs -0 -n1 luac5.1 -p
+      - name: Test simulated computers and modems
+        run: lua5.1 tests_run.lua

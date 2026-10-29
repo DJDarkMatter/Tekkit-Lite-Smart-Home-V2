@@ -1,0 +1,8 @@
+# Local ComputerCraft configuration/checkpoints and installer backups
+/Configs/
+/configs_*.txt
+/configs_*.txt.tmp
+/configs_*.txt.bak
+*.pre_update
+*.download
+__pycache__/
