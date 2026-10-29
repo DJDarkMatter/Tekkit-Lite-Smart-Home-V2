@@ -1,5 +1,5 @@
 -- Optional SmartHome OS app. Install explicitly; all logic runs on the OS.
-local app = {minWidth = 12, minHeight = 6, maxWidth = 40, maxHeight = 12}
+local app = {minWidth = 12, minHeight = 6, preferredWidth = 30, preferredHeight = 10, backgroundService = true}
 local sinceSave, saveError, notice, runtimeStatus = 0, nil, nil, "Starting"
 local ready, noticeUntil = false, 0
 local steps = {1, 10, 60, 600, 3600}
@@ -44,7 +44,7 @@ end
 
 function app.init(state, api, context)
     ready = false
-    assert(api.pickIO and api.readInput, "Coffee requires the bundled-v4 OS update")
+    assert(api.pickIO and api.readInput and api.layoutWindow, "Coffee requires the bundled-v5 OS update")
     if state.version == nil then
         state.version, state.config = 1, {countdown = 14400, harvest = 60}
         state.phase, state.remainingTime, state.harvestRemaining = "countdown", 14400, 0
@@ -209,6 +209,13 @@ local function build(width, height, state, api, context)
         button(4, "+", "plus", half + 1, width)
         button(height - 1, width >= 16 and "Save: next cycle" or "Save (next)", "saveDuration")
         button(height, "Cancel", "settings")
+    elseif page == "actions" then
+        text(1, "Coffee menu")
+        button(2, state.paused and "Resume" or "Pause", "pause")
+        button(3, state.phase == "harvest" and "Harvest active" or "Harvest now", "force")
+        button(4, "Settings", "settings")
+        button(5, "Stats", "stats")
+        button(height, "Back", "main")
     elseif page == "stats" then
         text(1, "Harvests")
         text(2, "Total: " .. state.totalHarvests)
@@ -225,19 +232,26 @@ local function build(width, height, state, api, context)
         text(1, state.phase == "harvest" and "Coffee harvest" or "Coffee timer")
         text(2, clock(state.phase == "harvest" and state.harvestRemaining or state.remainingTime))
         text(3, saveError and "SAVE FAILED" or notice or runtimeStatus)
-        if height >= 7 then text(4, "Total: " .. state.totalHarvests) end
-        if height >= 8 then text(5, "Trip: " .. state.tripHarvests) end
-        if height >= 9 then
-            local address = state.playerInput
-            text(6, address and ("In: " .. address.clientId .. "/" .. address.side) or "Input not set")
+        if width < 24 or height < 9 then
+            button(height, "Menu", "actions")
+        else
+            local player = api.readInput(state.playerInput)
+            local details = {"Player: " .. (player == nil and "unknown" or player and "online" or "away"),
+                "Total: " .. state.totalHarvests, "Trip: " .. state.tripHarvests}
+            if width >= 36 and height >= 11 then
+                details[#details + 1] = "Countdown: " .. clock(state.config.countdown)
+                details[#details + 1] = "Harvest: " .. clock(state.config.harvest)
+                for _, item in ipairs({{"In", state.playerInput}, {"Out", state.outputAddress}}) do
+                    local address = item[2]
+                    details[#details + 1] = address and (item[1] .. ": " .. address.clientId .. "/" .. address.side
+                        .. "/" .. (address.color and tostring(address.color) or "Digital")) or item[1] .. ": not set"
+                end
+            end
+            for index, line in ipairs(details) do if index + 3 <= height - 3 then text(index + 3, line) end end
+            button(height - 2, state.paused and "Resume" or "Pause", "pause")
+            button(height - 1, state.phase == "harvest" and "Harvest active" or "Harvest now", "force")
+            button(height, "Settings", "settings")
         end
-        if height >= 10 then
-            local address = state.outputAddress
-            text(7, address and ("Out: " .. address.clientId .. "/" .. address.side) or "Output not set")
-        end
-        button(height - 2, state.paused and "Resume" or "Pause", "pause")
-        button(height - 1, state.phase == "harvest" and "Harvest active" or "Harvest now", "force")
-        button(height, "Settings", "settings")
     end
     return lines, hits
 end

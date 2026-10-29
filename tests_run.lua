@@ -461,16 +461,17 @@ function tests.monitors_forward_touches_close_minimize_resize_and_restore_window
     assert(os.server.monitors["monitor_13:top"].online)
     assert(os.server.monitors["monitor_13:left"].online)
     -- Launcher -> app; no client-supplied window IDs.
-    bus.queue(display, {"monitor_touch", "top", 2, 2}); bus.pump()
-    bus.queue(display, {"monitor_touch", "top", 2, 3}); bus.pump()
+    bus.queue(display, {"monitor_touch", "top", 2, top.height}); bus.pump()
+    local launch = os.server.monitors["monitor_13:top"].menuHits[1]
+    bus.queue(display, {"monitor_touch", "top", launch.x1, launch.y}); bus.pump()
     local win = os.server.state.windows[1]
     assert(win)
     bus.queue(display, {"monitor_touch", "top", win.x + 1, win.y + 2}); bus.pump()
     bus.advance(0.7)
     equal(io.bundled.left, 1)
-    bus.queue(display, {"monitor_touch", "top", 6, 2}); bus.pump()
+    bus.queue(display, {"monitor_touch", "top", 6, top.height}); bus.pump()
     equal(win.minimized, true)
-    bus.queue(display, {"monitor_touch", "top", 6, 2}); bus.pump()
+    bus.queue(display, {"monitor_touch", "top", 6, top.height}); bus.pump()
     equal(win.minimized, false)
     assert(os.server.api.placeWindow(1, 1, 3, 20, 6))
     local id = assert(os.server.api.openApp("switchboard", "monitor_13:top", nil, nil, 20, 6))
@@ -478,8 +479,8 @@ function tests.monitors_forward_touches_close_minimize_resize_and_restore_window
     local second = os.server.state.windows[id]
     assert(second.x >= 21, "Free space should be used for side-by-side windows")
     os.server.refreshMonitors(true); bus.pump()
-    equal(top.lines[second.y]:sub(second.x + second.width - 1, second.x + second.width - 1), "X")
-    bus.queue(display, {"monitor_touch", "top", second.x + second.width - 1, second.y}); bus.pump()
+    equal(top.lines[second.y]:sub(second.x, second.x + 2), "[X]")
+    bus.queue(display, {"monitor_touch", "top", second.x + 1, second.y}); bus.pump()
     equal(os.server.state.windows[2], nil)
     top.width, top.height = 8, 4
     bus.queue(display, {"monitor_resize", "top"}); bus.pump()
@@ -836,7 +837,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v4", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v6", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -904,6 +905,110 @@ function tests.app_installer_fetches_only_the_requested_app_and_defers_execution
     bus.advance(2.5)
     equal(comp.server.state.appStates.test_app.elapsed, 102.5, "An explicitly enabled service runs without windows")
 end
+function tests.app_installer_github_default_downloads_one_app_without_running_or_resetting_it()
+    local bus = newBus()
+    local comp = bus.computer(10, "server")
+    comp.env.shell = {dir = function() return "" end,
+        run = function() error("GitHub apps must not need another Pastebin paste") end}
+    local install = assert(comp.env.loadfile("install.lua"))
+    install("server", "--startup")
+    local startup = comp.disk.files.startup
+    local settings = serialize({customSetting = "keep", enabledApps = {existing = true}})
+    local saved = serialize({appStates = {test_app = {elapsed = 123}}})
+    comp.disk.files["configs_os.txt"], comp.disk.files["configs_os_state.txt"] = settings, saved
+    comp.disk.files["apps_test_app.lua"] = "-- original app"
+    local app = '_G.githubAppExecuted=true; return {background=function(dt,s) s.elapsed=(s.elapsed or 0)+dt end}'
+    local downloads, closed = 0, false
+    comp.env.http = {get = function(url)
+        equal(url, "https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/main/apps_test_app.lua")
+        downloads = downloads + 1
+        coroutine.yield("http_success") -- CC 1.5 cannot yield through pcall.
+        return {readAll = function() return app end, close = function() closed = true end}
+    end}
+    local thread = coroutine.create(function() install("app", "test_app") end)
+    local ok, event = coroutine.resume(thread)
+    assert(ok, event); equal(event, "http_success")
+    equal(comp.disk.files["apps_test_app.lua"], "-- original app", "Keep the installed app while downloading")
+    equal(comp.disk.files["configs_os.txt"], settings)
+    ok, event = coroutine.resume(thread)
+    assert(ok, event); equal(coroutine.status(thread), "dead")
+    equal(downloads, 1); equal(closed, true)
+    equal(comp.env.githubAppExecuted, nil, "Installing only compiles app code")
+    equal(comp.disk.files["apps_test_app.lua"], app)
+    equal(comp.disk.files["apps_test_app.lua.pre_update"], "-- original app")
+    equal(comp.disk.files["configs_os.txt.pre_update"], settings)
+    equal(comp.disk.files["configs_os_state.txt"], saved, "Downloading an update preserves app progress")
+    equal(comp.disk.files.startup, startup)
+    local enabled = unserialize(comp.disk.files["configs_os.txt"])
+    equal(enabled.enabledApps.test_app, true); equal(enabled.enabledApps.existing, true)
+    equal(enabled.customSetting, "keep")
+    install("server")
+    equal(downloads, 1, "Core OS installation never fetches apps")
+    comp:start()
+    equal(comp.env.githubAppExecuted, true)
+    bus.advance(2)
+    equal(comp.server.state.appStates.test_app.elapsed, 125)
+end
+
+function tests.app_installer_github_can_select_a_branch_or_commit()
+    for _, ref in ipairs({"testing/ui", string.rep("a", 40)}) do
+        local comp = newBus().computer(10, "server")
+        comp.env.shell = {dir = function() return "" end}
+        local install = assert(comp.env.loadfile("install.lua"))
+        install("server")
+        local closed = false
+        comp.env.http = {get = function(url)
+            equal(url, "https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/" .. ref .. "/apps_coffee.lua")
+            return {getResponseCode = function() return 200 end,
+                readAll = function() return "return {}" end, close = function() closed = true end}
+        end}
+        install("app", "coffee", "--ref", ref)
+        equal(closed, true)
+        equal(comp.disk.files["apps_coffee.lua"], "return {}")
+        equal(unserialize(comp.disk.files["configs_os.txt"]).enabledApps.coffee, true)
+    end
+end
+
+function tests.app_installer_github_failures_preserve_existing_code_settings_and_progress()
+    local expected = {disabled = "HTTP is disabled", missing_get = "HTTP is disabled",
+        network = "GitHub app download failed", status = "GitHub returned HTTP 404",
+        empty = "Empty app source", html = "Invalid app Lua", syntax = "Invalid app Lua",
+        ref = "Invalid GitHub branch or commit"}
+    for _, reason in ipairs({"disabled", "missing_get", "network", "status", "empty", "html", "syntax", "ref"}) do
+        local comp = newBus().computer(10, "server")
+        comp.env.shell = {dir = function() return "" end}
+        local install = assert(comp.env.loadfile("install.lua"))
+        install("server")
+        local settings = serialize({custom = 12, enabledApps = {other = true}})
+        local saved = serialize({appStates = {coffee = {remainingTime = 1234}}})
+        comp.disk.files["configs_os.txt"], comp.disk.files["configs_os_state.txt"] = settings, saved
+        comp.disk.files["apps_coffee.lua"], comp.disk.files.startup = "-- original coffee", "-- original startup"
+        local downloaded, closed = false, false
+        comp.env.http = {get = function()
+            downloaded = true
+            if reason == "network" then return nil, "Connection refused" end
+            return {getResponseCode = function() return reason == "status" and 404 or 200 end,
+                readAll = function()
+                    return reason == "empty" and "" or reason == "html" and "<!DOCTYPE html>"
+                        or reason == "syntax" and "return {" or "return {}"
+                end, close = function() closed = true end}
+        end}
+        if reason == "disabled" then comp.env.http = false
+        elseif reason == "missing_get" then comp.env.http = {} end
+        local ok, err
+        if reason == "ref" then ok, err = pcall(install, "app", "coffee", "--ref", "../other")
+        else ok, err = pcall(install, "app", "coffee") end
+        equal(ok, false, reason .. " should fail")
+        assert(tostring(err):find(expected[reason], 1, true), tostring(err))
+        if downloaded and reason ~= "network" then equal(closed, true) end
+        equal(comp.disk.files["apps_coffee.lua"], "-- original coffee", reason)
+        equal(comp.disk.files["configs_os.txt"], settings, reason)
+        equal(comp.disk.files["configs_os_state.txt"], saved, reason)
+        equal(comp.disk.files.startup, "-- original startup", reason)
+        equal(comp.disk.files["apps_coffee.lua.pre_update"], nil, reason)
+    end
+end
+
 function tests.app_installer_can_install_a_local_file_without_network()
     local bus = newBus()
     local comp = bus.computer(10, "server")
@@ -1040,6 +1145,7 @@ function tests.flat_upgrade_rejects_corrupt_legacy_data_and_failed_staging_witho
     end
 end
 assert(hostLoadfile("tests_coffee.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
+assert(hostLoadfile("tests_desktop.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 local names, failures = {}, {}
 for name in pairs(tests) do names[#names + 1] = name end
 table.sort(names)

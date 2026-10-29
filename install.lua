@@ -1,8 +1,9 @@
--- SmartHome OS installer: bundled-v4
+-- SmartHome OS installer: bundled-v6
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor [--startup]
--- User apps: inst app NAME PASTE_ID   or   inst app NAME --file PATH
+-- User apps: inst app NAME [--ref BRANCH_OR_COMMIT] (GitHub)
+-- Alternatives: inst app NAME PASTE_ID   or   inst app NAME --file PATH
 -- OS/client installation is offline. Apps are fetched only on request.
 local sources = {
     ["lib_storage.lua"] = [=[-- Lua 5.1 / ComputerCraft 1.5. Only plain, serializable data belongs here.
@@ -267,9 +268,169 @@ end
 
 return Picker
 ]=],
+    ["lib_desktop.lua"] = [=[-- Character-based desktop geometry and widgets. No peripheral calls here.
+local Desktop = {}
+local function clamp(value, low, high) return math.max(low, math.min(value, high)) end
+
+function Desktop.area(monitor)
+    return {x = 1, y = 1, width = monitor.width, height = monitor.height - 1}
+end
+
+function Desktop.bounds(app, monitor)
+    local area = Desktop.area(monitor)
+    return math.max(10, (app.minWidth or 8) + 2), (app.minHeight or 2) + 2,
+        math.min(area.width, app.maxWidth and app.maxWidth + 2 or area.width),
+        math.min(area.height, app.maxHeight and app.maxHeight + 2 or area.height)
+end
+
+function Desktop.fits(rect, app, monitor)
+    local minW, minH, maxW, maxH = Desktop.bounds(app, monitor)
+    return rect and rect.width >= minW and rect.height >= minH and rect.width <= maxW
+        and rect.height <= maxH and rect.x >= 1 and rect.y >= 1
+        and rect.x + rect.width - 1 <= monitor.width
+        and rect.y + rect.height - 1 < monitor.height
+end
+
+function Desktop.relative(rect, monitor)
+    local area = Desktop.area(monitor)
+    return {x = (rect.x - 1) / area.width, y = (rect.y - 1) / area.height,
+        width = rect.width / area.width, height = rect.height / area.height}
+end
+
+function Desktop.free(rect, relative, app, monitor)
+    local minW, minH, maxW, maxH = Desktop.bounds(app, monitor)
+    if maxW < minW or maxH < minH then return nil end
+    local area = Desktop.area(monitor)
+    local width, height, x, y
+    if relative then
+        width, height = math.floor(relative.width * area.width + 0.5), math.floor(relative.height * area.height + 0.5)
+        x, y = 1 + math.floor(relative.x * area.width + 0.5), 1 + math.floor(relative.y * area.height + 0.5)
+    else
+        width, height = tonumber(rect.width) or (app.preferredWidth or 30) + 2,
+            tonumber(rect.height) or (app.preferredHeight or 10) + 2
+        x, y = tonumber(rect.x) or 1, tonumber(rect.y) or 1
+    end
+    width, height = clamp(math.floor(width), minW, maxW), clamp(math.floor(height), minH, maxH)
+    return {x = clamp(math.floor(x), 1, area.width - width + 1),
+        y = clamp(math.floor(y), 1, area.height - height + 1), width = width, height = height}
+end
+
+function Desktop.zone(mode, monitor)
+    local area = Desktop.area(monitor)
+    local left, top = math.floor(area.width / 2), math.floor(area.height / 2)
+    local zones = {
+        maximize = {1, 1, area.width, area.height},
+        left = {1, 1, left, area.height}, right = {left + 1, 1, area.width - left, area.height},
+        top = {1, 1, area.width, top}, bottom = {1, top + 1, area.width, area.height - top},
+        top_left = {1, 1, left, top}, top_right = {left + 1, 1, area.width - left, top},
+        bottom_left = {1, top + 1, left, area.height - top},
+        bottom_right = {left + 1, top + 1, area.width - left, area.height - top},
+    }
+    local z = zones[mode]
+    if z then return {x = z[1], y = z[2], width = z[3], height = z[4]} end
+end
+
+function Desktop.layoutOptions(win, app, monitor)
+    local options = {{label = "Maximize", value = "maximize"}, {label = "Restore", value = "restore"},
+        {label = "Left half", value = "left"}, {label = "Right half", value = "right"},
+        {label = "Top half", value = "top"}, {label = "Bottom half", value = "bottom"},
+        {label = "Top-left qtr", value = "top_left"}, {label = "Top-right qtr", value = "top_right"},
+        {label = "Bottom-left", value = "bottom_left"}, {label = "Bottom-right", value = "bottom_right"},
+        {label = "Custom area", value = "custom"}, {label = "Move", value = "move"}, {label = "Cancel", value = "cancel"}}
+    for _, item in ipairs(options) do
+        if item.value == "restore" then item.enabled = win.layout ~= nil and win.layout ~= "normal"
+        elseif item.value == "custom" or item.value == "move" or item.value == "cancel" then item.enabled = true
+        else item.enabled = Desktop.fits(Desktop.zone(item.value, monitor), app, monitor) end
+    end
+    return options
+end
+
+-- Returns a complete taskbar line and exact touch regions, with stable window order.
+function Desktop.taskbar(windows, monitor, clock, saved, active)
+    local width = monitor.width
+    local line, hits = string.rep(" ", width), {}
+    local function put(x, label, stop)
+        label = label:sub(1, math.max(0, math.min(stop or width, width) - x + 1))
+        line = line:sub(1, x - 1) .. label .. line:sub(x + #label)
+    end
+    local function hit(x1, x2, action, id) hits[#hits + 1] = {x1 = x1, x2 = x2, action = action, id = id} end
+    put(1, "[+]"); hit(1, math.min(3, width), "launcher")
+    local clockWidth = (width >= 22 or (#windows == 0 and width >= 10)) and 6 or 0
+    if clockWidth > 0 then put(width - 4, clock) end
+    local first, last = 5, width - clockWidth
+    if last < first then return line, hits end
+    local labels, needed = {}, 0
+    for _, win in ipairs(windows) do
+        local marker = win.minimized and "_" or win.id == active and "*" or ""
+        local label = "[" .. marker .. win.appName .. "]"
+        if #label > 14 then label = label:sub(1, 13) .. "]" end
+        labels[#labels + 1] = label
+        needed = needed + #labels[#labels] + 1
+    end
+    local overflow = needed > last - first + 2
+    local scroll = tonumber(saved.scroll) or 1
+    if scroll ~= scroll then scroll = 1 end
+    saved.scroll = clamp(math.floor(scroll), 1, math.max(1, #windows))
+    if not overflow then saved.scroll = 1 end
+    if overflow then
+        if saved.scroll > 1 then put(first, "<"); hit(first, first, "previous") end
+        first, last = first + 1, last - 1
+    end
+    local x, finalVisible = first, saved.scroll - 1
+    for index = saved.scroll, #windows do
+        local available = last - x + 1
+        if available < 3 then break end
+        local label = labels[index]
+        local limit = math.min(14, available)
+        if #label > limit then label = label:sub(1, limit - 1) .. "]" end
+        put(x, label, last); hit(x, x + #label - 1, "window", windows[index].id)
+        x, finalVisible = x + #label + 1, index
+    end
+    if overflow and finalVisible < #windows then
+        put(last + 1, ">"); hit(last + 1, last + 1, "next")
+    end
+    return line, hits
+end
+
+-- Shared paginated popup geometry for the launcher and window layout menus.
+function Desktop.menu(monitor, title, items, page)
+    local area = Desktop.area(monitor)
+    local width = math.min(area.width, 26)
+    local height = math.min(area.height, math.max(4, #items + 3))
+    local slots = math.max(1, height - 3)
+    local pages = math.max(1, math.ceil(#items / slots))
+    page = clamp(page or 1, 1, pages)
+    local rect = {x = 1, y = area.height - height + 1, width = width, height = height}
+    local lines, hits = {}, {}
+    for y = 1, height do lines[y] = "|" .. string.rep(" ", math.max(0, width - 2)) .. "|" end
+    lines[1] = ("+" .. title .. string.rep("-", width)):sub(1, width - 1) .. "+"
+    lines[height] = "+" .. string.rep("-", math.max(0, width - 2)) .. "+"
+    for row = 1, slots do
+        local item = items[(page - 1) * slots + row]
+        if item then
+            local label = (item.enabled == false and "-" or " ") .. item.label
+            lines[row + 1] = "|" .. label:sub(1, width - 2) .. string.rep(" ", math.max(0, width - 2 - #label)) .. "|"
+            hits[#hits + 1] = {x1 = rect.x + 1, x2 = rect.x + width - 2, y = rect.y + row,
+                action = "item", item = item}
+        end
+    end
+    if #items == 0 then lines[2] = "|" .. ("No apps"):sub(1, width - 2) .. string.rep(" ", math.max(0, width - 9)) .. "|" end
+    if pages > 1 then
+        local half = math.floor((width - 2) / 2)
+        lines[height - 1] = "|" .. ("< Prev" .. string.rep(" ", width)):sub(1, half)
+            .. ("Next >" .. string.rep(" ", width)):sub(1, width - 2 - half) .. "|"
+        hits[#hits + 1] = {x1 = rect.x + 1, x2 = rect.x + half, y = rect.y + height - 2, action = "previous"}
+        hits[#hits + 1] = {x1 = rect.x + half + 1, x2 = rect.x + width - 2, y = rect.y + height - 2, action = "next"}
+    end
+    return rect, lines, hits, page, pages
+end
+
+return Desktop
+]=],
     ["lib_server.lua"] = [=[-- Central state, app lifecycle, desktops and logical IO routing. No redstone here.
 local Server = {}
 local Picker = dofile("lib_io_picker.lua")
+local Desktop = dofile("lib_desktop.lua")
 local sideSet = {top = true, bottom = true, left = true, right = true, front = true, back = true}
 local function integer(value, low, high)
     return type(value) == "number" and value == math.floor(value) and value >= low and value <= high
@@ -296,7 +457,7 @@ local function copy(value)
 end
 
 local function validState(value)
-    for _, key in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides"}) do
+    for _, key in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
         if value[key] ~= nil and type(value[key]) ~= "table" then return false end
     end
     for name, mapping in pairs(value.outputMap or {}) do
@@ -312,10 +473,11 @@ end
 
 local function validApp(app)
     if type(app) ~= "table" then return false end
-    for _, key in ipairs({"minWidth", "maxWidth", "minHeight", "maxHeight"}) do
+    for _, key in ipairs({"minWidth", "maxWidth", "minHeight", "maxHeight", "preferredWidth", "preferredHeight"}) do
         if app[key] ~= nil and not integer(app[key], 1, 512) then return false end
     end
-    for _, key in ipairs({"init", "background", "render", "handleTouch", "handleIOSelection"}) do
+    if app.backgroundService ~= nil and type(app.backgroundService) ~= "boolean" then return false end
+    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection"}) do
         if app[key] ~= nil and type(app[key]) ~= "function" then return false end
     end
     return (not app.maxWidth or app.maxWidth >= (app.minWidth or 8))
@@ -325,14 +487,15 @@ end
 function Server.new(net, storage, config)
     local loaded, source = storage.load(config.saveFile, validState)
     local state = loaded or {}
-    for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides"}) do
+    for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
         if type(state[name]) ~= "table" then state[name] = {} end
     end
     local server = {state = state, monitors = {}, ioClients = {}, sensorClients = {}, apps = {},
-        gameTime = "?:??", playerOnline = false, lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}}
+        gameTime = "?:??", playerOnline = false, lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}}
     local api, errors = {}, {}
     server.api = api
     state.nextWindowId = 1
+    local legacyDesktop = (tonumber(state.desktopVersion) or 1) < 2
     for id, win in pairs(state.windows) do
         if not integer(id, 1, 2147483646) or type(win) ~= "table"
             or type(win.appName) ~= "string" or type(win.monitorId) ~= "string" then
@@ -344,8 +507,10 @@ function Server.new(net, storage, config)
                 state.appStates[win.appName] = win.appState
             end
             win.appState = nil -- App state is shared with its background service.
+            if legacyDesktop then win.y = math.max(1, (tonumber(win.y) or 3) - 2) end
         end
     end
+    state.desktopVersion = 2
     state.bootCounter = (tonumber(state.bootCounter) or 0) + 1
     server.session = tostring(net.id) .. ":" .. state.bootCounter
     if source and source ~= config.saveFile then print("Recovered state from " .. source) end
@@ -354,7 +519,7 @@ function Server.new(net, storage, config)
     function server.save()
         local saved = {}
         for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides",
-            "nextWindowId", "bootCounter"}) do saved[name] = state[name] end
+            "nextWindowId", "bootCounter", "desktops", "desktopVersion"}) do saved[name] = state[name] end
         local ok, err = storage.save(config.saveFile, saved)
         if not ok then print("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
         return ok, err
@@ -370,6 +535,26 @@ function Server.new(net, storage, config)
             if errors[key] ~= a then print("App " .. key .. " failed: " .. tostring(a)); errors[key] = a end
         end
         return ok, a, b
+    end
+
+    local function isService(app) return app.backgroundService == true or app.render == nil end
+    local function hasViews(name)
+        for _, win in pairs(state.windows) do if win.appName == name then return true end end
+        return false
+    end
+    local function startApp(name)
+        if server.running[name] then return true end
+        server.running[name] = true
+        local ok, err = appCall(name, "init", state.appStates[name], api, {appName = name})
+        if not ok then server.running[name] = nil; return false, err end
+        return true
+    end
+    local function stopApp(name)
+        if server.running[name] and not isService(server.apps[name]) and not hasViews(name) then
+            appCall(name, "shutdown", state.appStates[name], api, {appName = name})
+            server.running[name] = nil
+            server.save()
+        end
     end
 
     local function viewContext(win)
@@ -540,38 +725,64 @@ function Server.new(net, storage, config)
     function api.getSystem() return {gameTime = server.gameTime, clockSource = server.clockSource,
         playerOnline = server.playerOnline} end
 
-    local function windowsFor(monitorId)
+    local function windowsFor(monitorId, stable)
         local list = {}
         for _, win in pairs(state.windows) do
             if win.monitorId == monitorId then list[#list + 1] = win end
         end
-        table.sort(list, function(a, b) return a.order < b.order end)
+        table.sort(list, function(a, b) return stable and a.id < b.id or not stable and a.order < b.order end)
         return list
+    end
+    local function desktopState(id)
+        if type(state.desktops[id]) ~= "table" then state.desktops[id] = {scroll = 1} end
+        return state.desktops[id]
     end
     local function focus(win)
         local order = 0
         for _, other in pairs(state.windows) do order = math.max(order, other.order) end
         win.order, win.minimized = order + 1, false
+        local monitor, visible = server.monitors[win.monitorId], false
+        for _, hit in ipairs(monitor and monitor.taskbar or {}) do
+            if hit.action == "window" and hit.id == win.id then visible = true end
+        end
+        if not visible then
+            for index, item in ipairs(windowsFor(win.monitorId, true)) do
+                if item.id == win.id then desktopState(win.monitorId).scroll = index; break end
+            end
+        end
+    end
+    local function validRelative(value)
+        if type(value) ~= "table" then return false end
+        for _, key in ipairs({"x", "y", "width", "height"}) do
+            if type(value[key]) ~= "number" or value[key] ~= value[key] or value[key] < 0 or value[key] > 1 then return false end
+        end
+        return value.width > 0 and value.height > 0
     end
     local function fit(win, monitor)
         local app = server.apps[win.appName]
-        if not app then return false end
-        local minW, minH = (app.minWidth or 8) + 2, (app.minHeight or 2) + 2
-        local maxW = math.min(monitor.width, (app.maxWidth or monitor.width) + 2)
-        local maxH = math.min(monitor.height - 2, (app.maxHeight or monitor.height) + 2)
-        if maxW < minW or maxH < minH then win.doesNotFit = true; return false end
-        win.width = math.max(minW, math.min(tonumber(win.width) or maxW, maxW))
-        win.height = math.max(minH, math.min(tonumber(win.height) or maxH, maxH))
-        win.x = math.max(1, math.min(tonumber(win.x) or 1, monitor.width - win.width + 1))
-        win.y = math.max(3, math.min(tonumber(win.y) or 3, monitor.height - win.height + 1))
-        win.x, win.y = math.floor(win.x), math.floor(win.y)
-        win.width, win.height, win.doesNotFit = math.floor(win.width), math.floor(win.height), false
+        if not app then win.doesNotFit = true; return false end
+        if not validRelative(win.relative) then win.relative = nil end
+        local rect
+        if win.layout and win.layout ~= "normal" then
+            rect = Desktop.zone(win.layout, monitor)
+            if not Desktop.fits(rect, app, monitor) then win.doesNotFit = true; return false end
+        else
+            win.layout = "normal"
+            rect = Desktop.free(win, win.relative, app, monitor)
+            if not rect then win.doesNotFit = true; return false end
+            if not win.relative then win.relative = Desktop.relative(rect, monitor) end
+        end
+        win.x, win.y, win.width, win.height = rect.x, rect.y, rect.width, rect.height
+        win.doesNotFit = false
         return true
     end
     local function compatible(name, monitor)
         local app = server.apps[name]
-        return app.render and monitor.width >= (app.minWidth or 8) + 2
-            and monitor.height >= (app.minHeight or 2) + 4
+        local minW, minH, maxW, maxH = Desktop.bounds(app, monitor)
+        return app.render and maxW >= minW and maxH >= minH
+    end
+    local function discardSmallDialog(win)
+        if win.width < 14 or win.height < 8 then server.dialogs[win.id] = nil end
     end
 
     function api.openApp(name, monitorId, x, y, width, height)
@@ -580,12 +791,11 @@ function Server.new(net, storage, config)
         if not monitor or not monitor.online then return nil, "Monitor is offline or unknown" end
         if not compatible(name, monitor) then return nil, "App does not fit this monitor" end
         local win = {id = state.nextWindowId, appName = name, monitorId = monitorId,
-            x = x, y = y, width = width, height = height, order = 0}
+            x = x, y = y, width = width, height = height, order = 0, layout = "normal"}
         fit(win, monitor)
-        -- Find a free rectangle first; fall back to overlap with explicit focus.
         if not x and not y then
             local existing, placed = windowsFor(monitorId), false
-            for cy = 3, monitor.height - win.height + 1 do
+            for cy = 1, monitor.height - win.height do
                 for cx = 1, monitor.width - win.width + 1 do
                     local free = true
                     for _, other in ipairs(existing) do
@@ -598,16 +808,28 @@ function Server.new(net, storage, config)
                 if placed then break end
             end
         end
-        focus(win)
+        win.relative = Desktop.relative(win, monitor)
         state.windows[win.id], state.nextWindowId = win, win.id + 1
-        server.save()
+        focus(win)
+        local ok, err = server.save()
+        if not ok then state.windows[win.id] = nil; return nil, err end
+        ok, err = startApp(name)
+        if not ok then state.windows[win.id] = nil; server.save(); return nil, err end
         return win.id
     end
     function api.closeWindow(id)
-        if not state.windows[id] then return false, "Unknown window" end
+        local win = state.windows[id]
+        if not win then return false, "Unknown window" end
         state.windows[id] = nil
+        local ok, err = server.save()
+        if not ok then state.windows[id] = win; return false, err end
         server.views[id], server.dialogs[id] = nil, nil
-        server.save()
+        local monitor = server.monitors[win.monitorId]
+        if monitor then
+            if monitor.layoutMenu and monitor.layoutMenu.windowId == id then monitor.layoutMenu = nil end
+            if monitor.placement and monitor.placement.windowId == id then monitor.placement = nil end
+        end
+        stopApp(win.appName)
         return true
     end
     function api.placeWindow(id, x, y, width, height)
@@ -618,11 +840,44 @@ function Server.new(net, storage, config)
         for _, value in pairs({x = x, y = y, width = width, height = height}) do
             if not integer(value, 1, 512) then return false, "Expected positive integer coordinates/sizes" end
         end
+        local previous = copy(win)
         win.x, win.y, win.width, win.height = x or win.x, y or win.y, width or win.width, height or win.height
-        fit(win, monitor)
+        win.layout, win.relative, win.restore = "normal", nil, nil
+        if not fit(win, monitor) then state.windows[id] = previous; return false, "App does not fit" end
+        win.relative = Desktop.relative(win, monitor)
         focus(win)
-        server.save()
+        local ok, err = server.save()
+        if not ok then state.windows[id] = previous; return false, err end
+        discardSmallDialog(win)
         return true
+    end
+    function api.layoutWindow(id, mode)
+        local win = state.windows[id]
+        if not win then return false, "Unknown window" end
+        if not server.apps[win.appName] then return false, "App is not available" end
+        local monitor = server.monitors[win.monitorId]
+        if not monitor or not monitor.online then return false, "Monitor is offline" end
+        local previous = copy(win)
+        if mode ~= "restore" and win.layout == mode then return true end
+        if mode == "restore" then
+            local restore = win.restore or {layout = "normal", relative = win.relative}
+            win.layout, win.relative, win.restore = restore.layout, copy(restore.relative), nil
+        else
+            local rect = Desktop.zone(mode, monitor)
+            if not Desktop.fits(rect, server.apps[win.appName], monitor) then return false, "Layout does not fit this app" end
+            win.restore = {layout = win.layout or "normal", relative = copy(win.relative)}
+            win.layout = mode
+        end
+        if not fit(win, monitor) then state.windows[id] = previous; return false, "Layout does not fit" end
+        focus(win)
+        local ok, err = server.save()
+        if not ok then state.windows[id] = previous; return false, err end
+        discardSmallDialog(win)
+        return true
+    end
+    local function beginPlacement(monitor, win, kind)
+        monitor.launcher, monitor.layoutMenu = false, nil
+        monitor.placement = {windowId = win.id, kind = kind}
     end
 
     local function renderMonitor(id, monitor)
@@ -633,23 +888,13 @@ function Server.new(net, storage, config)
             text = tostring(text or ""):sub(1, math.min(limit or monitor.width, monitor.width - x + 1))
             lines[y] = lines[y]:sub(1, x - 1) .. text .. lines[y]:sub(x + #text)
         end
-        local heading = " SmartHome OS | " .. server.gameTime
-        if #heading > monitor.width then heading = "Home | " .. server.gameTime end
-        if #heading > monitor.width then heading = server.gameTime end
-        write(1, 1, heading)
-        write(1, 2, "[+]")
-        monitor.taskbar, monitor.launcherApps = {}, {}
-        local tx = 5
+        write(1, 1, "SmartHome OS")
+        local active
         for _, win in ipairs(windowsFor(id)) do
-            local label = "[" .. (win.minimized and "_" or "") .. win.appName .. "]"
-            if tx <= monitor.width then
-                write(tx, 2, label)
-                monitor.taskbar[#monitor.taskbar + 1] = {x1 = tx, x2 = math.min(monitor.width, tx + #label - 1), id = win.id}
-            end
-            tx = tx + #label + 1
-            if fit(win, monitor) and not win.minimized then
-                local title = win.appName:sub(1, win.width - 2)
-                write(win.x, win.y, "+" .. title .. string.rep("-", win.width - #title - 2) .. "X", win.width)
+            if fit(win, monitor) and not win.minimized and server.running[win.appName] then
+                active = win.id
+                local title = ("[X][#][_] " .. win.appName):sub(1, win.width)
+                write(win.x, win.y, title .. string.rep("-", win.width - #title), win.width)
                 for y = win.y + 1, win.y + win.height - 2 do
                     write(win.x, y, "|" .. string.rep(" ", win.width - 2) .. "|")
                 end
@@ -665,16 +910,47 @@ function Server.new(net, storage, config)
                 for y = 1, win.height - 2 do write(win.x + 1, win.y + y, content[y] or "", win.width - 2) end
             end
         end
-        if monitor.launcher then
-            for y = 3, monitor.height do lines[y] = string.rep(" ", monitor.width) end
-            local y = 3
-            for _, name in ipairs(sortedKeys(server.apps)) do
-                if compatible(name, monitor) and y <= monitor.height then
-                    write(1, y, name)
-                    monitor.launcherApps[y], y = name, y + 1
+        local taskbar
+        taskbar, monitor.taskbar = Desktop.taskbar(windowsFor(id, true), monitor, server.gameTime, desktopState(id), active)
+        write(1, monitor.height, taskbar)
+        if monitor.launcher or monitor.layoutMenu then
+            local items, title, model
+            if monitor.launcher then
+                model, title, items = monitor, "Apps", {}
+                for _, name in ipairs(sortedKeys(server.apps)) do
+                    if compatible(name, monitor) then
+                        items[#items + 1] = {label = name .. (server.running[name] and " *" or ""), value = name, enabled = true}
+                    end
+                end
+                if #items == 0 then
+                    items[1] = {label = next(server.apps) and "No apps fit" or "No apps installed", enabled = false}
+                end
+            else
+                model, title = monitor.layoutMenu, monitor.layoutMenu.error or "Layout"
+                local win = state.windows[model.windowId]
+                items = win and Desktop.layoutOptions(win, server.apps[win.appName], monitor) or {}
+            end
+            local rect, content, hits, page, pages = Desktop.menu(monitor, title, items, model.menuPage)
+            model.menuPage, model.menuPages, model.menuHits = page, pages, hits
+            for row = 1, rect.height do write(rect.x, rect.y + row - 1, content[row], rect.width) end
+        end
+        local placement = monitor.placement
+        if placement then
+            local rect = placement.preview
+            if rect then
+                local mark = placement.error and "!" or "#"
+                write(rect.x, rect.y, string.rep(mark, rect.width), rect.width)
+                if rect.height > 1 then write(rect.x, rect.y + rect.height - 1, string.rep(mark, rect.width), rect.width) end
+                for y = rect.y + 1, rect.y + rect.height - 2 do
+                    write(rect.x, y, mark); write(rect.x + rect.width - 1, y, mark)
                 end
             end
-            if y == 3 then write(1, 3, next(server.apps) and "No apps fit this screen" or "No apps installed") end
+            if placement.first then write(placement.first.x, placement.first.y, "+") end
+            local hint = placement.error or (rect and "OK to apply" or placement.kind == "move" and "Pick position"
+                or placement.first and "Other corner" or "First corner")
+            if rect and not placement.error then hint = "OK: " .. rect.width .. "x" .. rect.height end
+            write(1, 1, hint .. string.rep(" ", monitor.width))
+            write(1, monitor.height, "[OK][Cancel]" .. string.rep(" ", math.max(0, monitor.width - 12)))
         end
         return lines
     end
@@ -697,25 +973,85 @@ function Server.new(net, storage, config)
     local function touch(id, x, y)
         local monitor = server.monitors[id]
         if not integer(x, 1, monitor.width) or not integer(y, 1, monitor.height) then return end
-        if y == 2 then
-            if x <= 3 then monitor.launcher = not monitor.launcher; return end
-            local list = windowsFor(id)
-            local active
-            for _, win in ipairs(list) do if not win.minimized and not win.doesNotFit then active = win.id end end
-            for _, box in ipairs(monitor.taskbar or {}) do
-                if x >= box.x1 and x <= box.x2 then
-                    local win = state.windows[box.id]
-                    if active == win.id then win.minimized = true else focus(win) end
-                    monitor.launcher = false
-                    server.save()
+        local placement = monitor.placement
+        if placement then
+            local win = state.windows[placement.windowId]
+            if not win then monitor.placement = nil; return end
+            if y == monitor.height then
+                if x >= 5 and x <= 12 then monitor.placement = nil
+                elseif x <= 4 and placement.preview and placement.valid then
+                    local rect = placement.preview
+                    if not Desktop.fits(rect, server.apps[win.appName], monitor) then
+                        placement.valid, placement.error = false, "Does not fit"; return
+                    end
+                    local ok, err = api.placeWindow(win.id, rect.x, rect.y, rect.width, rect.height)
+                    if ok then monitor.placement = nil else placement.error = tostring(err) end
+                end
+                return
+            end
+            if placement.kind == "move" then
+                placement.preview = {x = math.max(1, math.min(x, monitor.width - win.width + 1)),
+                    y = math.max(1, math.min(y, monitor.height - win.height)), width = win.width, height = win.height}
+            elseif not placement.first then placement.first = {x = x, y = y}
+            else
+                placement.preview = {x = math.min(x, placement.first.x), y = math.min(y, placement.first.y),
+                    width = math.abs(x - placement.first.x) + 1, height = math.abs(y - placement.first.y) + 1}
+            end
+            placement.valid = Desktop.fits(placement.preview, server.apps[win.appName], monitor) and true or false
+            placement.error = placement.preview and not placement.valid and "Does not fit" or nil
+            return
+        end
+        if y == monitor.height then
+            for _, hit in ipairs(monitor.taskbar or {}) do
+                if x >= hit.x1 and x <= hit.x2 then
+                    monitor.layoutMenu = nil
+                    if hit.action == "launcher" then
+                        monitor.launcher = not monitor.launcher; monitor.menuPage = 1
+                    elseif hit.action == "previous" or hit.action == "next" then
+                        local saved = desktopState(id)
+                        saved.scroll = (saved.scroll or 1) + (hit.action == "next" and 1 or -1)
+                        server.save()
+                    elseif hit.action == "window" then
+                        local win = state.windows[hit.id]
+                        local active
+                        for _, other in ipairs(windowsFor(id)) do
+                            if not other.minimized and not other.doesNotFit then active = other.id end
+                        end
+                        if active == win.id then win.minimized = true else focus(win) end
+                        monitor.launcher = false; server.save()
+                    end
                     return
                 end
             end
             return
         end
-        if monitor.launcher then
-            local name = (monitor.launcherApps or {})[y]
-            if name then api.openApp(name, id); monitor.launcher = false end
+        local model = monitor.launcher and monitor or monitor.layoutMenu
+        if model then
+            for _, hit in ipairs(model.menuHits or {}) do
+                if y == hit.y and x >= hit.x1 and x <= hit.x2 then
+                    if hit.action == "previous" then model.menuPage = math.max(1, model.menuPage - 1)
+                    elseif hit.action == "next" then model.menuPage = math.min(model.menuPages, model.menuPage + 1)
+                    elseif hit.item.enabled ~= false then
+                        if monitor.launcher then
+                            local existing
+                            for _, win in ipairs(windowsFor(id)) do if win.appName == hit.item.value then existing = win end end
+                            if existing then focus(existing); server.save() else api.openApp(hit.item.value, id) end
+                            monitor.launcher = false
+                        else
+                            local win = state.windows[model.windowId]
+                            local mode = hit.item.value
+                            if mode == "custom" or mode == "move" then beginPlacement(monitor, win, mode)
+                            elseif mode == "cancel" then monitor.layoutMenu = nil
+                            else
+                                local ok, err = api.layoutWindow(win.id, mode)
+                                if ok then monitor.layoutMenu = nil else model.error = tostring(err) end
+                            end
+                        end
+                    else model.error = "Does not fit" end
+                    return
+                end
+            end
+            monitor.launcher, monitor.layoutMenu = false, nil
             return
         end
         local list = windowsFor(id)
@@ -723,9 +1059,17 @@ function Server.new(net, storage, config)
             local win = list[index]
             if not win.minimized and not win.doesNotFit and x >= win.x and x < win.x + win.width
                 and y >= win.y and y < win.y + win.height then
-                if y == win.y and x == win.x + win.width - 1 then api.closeWindow(win.id); return end
+                if y == win.y then
+                    local relative = x - win.x
+                    if relative < 3 then api.closeWindow(win.id)
+                    elseif relative < 6 then
+                        focus(win); monitor.layoutMenu = {windowId = win.id, menuPage = 1}; server.save()
+                    elseif relative < 9 then win.minimized = true; server.save()
+                    else focus(win); beginPlacement(monitor, win, "move"); server.save() end
+                    return
+                end
                 focus(win)
-                if x > win.x and x < win.x + win.width - 1 and y > win.y and y < win.y + win.height - 1 then
+                if x > win.x and x < win.x + win.width - 1 and y < win.y + win.height - 1 then
                     local dialog = server.dialogs[win.id]
                     if dialog then
                         local action, address = Picker.touch(dialog, x - win.x, y - win.y)
@@ -852,11 +1196,13 @@ function Server.new(net, storage, config)
                     if ok and validApp(app) then
                         server.apps[name], state.appRegistry[name] = app, true
                         if type(state.appStates[name]) ~= "table" then state.appStates[name] = {} end
-                        appCall(name, "init", state.appStates[name], api, {appName = name})
                         print("Loaded app: " .. name)
                     else print("Cannot load app " .. name .. ": " .. tostring(app)) end
                 end
             end
+        end
+        for _, name in ipairs(sortedKeys(server.apps)) do
+            if isService(server.apps[name]) or hasViews(name) then startApp(name) end
         end
         net.ensureModem()
         print("SmartHome OS computer " .. net.id .. ", network " .. net.config.networkId)
@@ -880,7 +1226,7 @@ function Server.new(net, storage, config)
         local dt = math.max(0, now - server.lastTick)
         server.lastTick = now
         updateClock()
-        for name in pairs(server.apps) do appCall(name, "background", dt, state.appStates[name], api) end
+        for name in pairs(server.running) do appCall(name, "background", dt, state.appStates[name], api) end
         for id, client in pairs(server.ioClients) do
             if client.online and client.ackedRevision ~= client.revision
                 and now - (client.lastSent or -math.huge) >= config.retryInterval then server.syncIO(id, false) end
@@ -1179,18 +1525,21 @@ function Monitor.new(net, config)
                 present[side] = true
                 local device = client.devices[side]
                 local wrapped = peripheral.wrap(side)
-                if wrapped.setBackgroundColor then wrapped.setBackgroundColor(colors.black) end
-                if wrapped.setTextColor then wrapped.setTextColor(colors.white) end
-                wrapped.setTextScale(config.textScale)
+                if not device or device.textScale ~= config.textScale then
+                    if wrapped.setBackgroundColor then wrapped.setBackgroundColor(colors.black) end
+                    if wrapped.setTextColor then wrapped.setTextColor(colors.white) end
+                    wrapped.setTextScale(config.textScale)
+                end
                 local width, height = wrapped.getSize()
                 if not device then
                     device = {id = config.clientId .. ":" .. side, side = side, peripheral = wrapped,
                         width = width, height = height, nonce = 0, lastAnnounce = -math.huge,
-                        lastServer = 0, connected = false}
+                        lastServer = 0, connected = false, textScale = config.textScale}
                     client.devices[side] = device
                     status(device, "Connecting to SmartHome OS...")
                 else
                     device.peripheral = wrapped
+                    device.textScale = config.textScale
                     if width ~= device.width or height ~= device.height then
                         device.width, device.height, device.lastAnnounce = width, height, -math.huge
                         device.cache = {}
@@ -1242,6 +1591,8 @@ function Monitor.new(net, config)
         end
     end
     function client.tick(now)
+        -- CC 1.5 may not emit monitor_resize; polling also discovers late screens.
+        client.scan()
         local available = net.ensureModem()
         for _, device in pairs(client.devices) do
             if device.connected and (not available or now - device.lastServer >= config.timeout) then
@@ -1381,10 +1732,11 @@ end
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v4")
+print("SmartHome installer: bundled-v6")
+local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor [--startup]")
-    print("       inst app NAME PASTE_ID | inst app NAME --file PATH")
+    print(appUsage)
     return
 end
 assert(shell.dir() == "", "Run cd / first")
@@ -1392,12 +1744,28 @@ local files
 if role == "app" then
     local name, source = args[2], args[3]
     assert(type(name) == "string" and name:match("^[%w_-]+$"), "Specify a simple app name without .lua")
-    assert(source and (source == "--file" and args[4] and not args[5]
-        or source:match("^%w+$") and not args[4]), "Usage: inst app NAME PASTE_ID | inst app NAME --file PATH")
+    assert(not source and not args[4]
+        or (source == "--file" or source == "--ref") and args[4] and not args[5]
+        or source and source:match("^%w+$") and not args[4], appUsage)
+    local github = source == nil or source == "--ref"
+    local ref = source == "--ref" and args[4] or "main"
+    assert(not github or ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)
+        and ref:sub(1, 1) ~= "/" and ref:sub(-1) ~= "/", "Invalid GitHub branch or commit")
     assert(fs.exists("main_os.lua") and fs.exists("lib_server.lua"), "Install apps on the central OS computer")
     local path = "apps_" .. name .. ".lua"
     local contents
-    if source == "--file" then
+    if github then
+        assert(http and type(http.get) == "function", "HTTP is disabled; GitHub app downloads need HTTP enabled")
+        local url = "https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/" .. ref .. "/" .. path
+        print("Downloading " .. path .. " from GitHub (" .. ref .. ")")
+        -- http.get may yield on CC 1.5: do not call it inside pcall.
+        local response, downloadError = http.get(url)
+        assert(response, "GitHub app download failed; check the repository file and HTTP access: "
+            .. tostring(downloadError or url))
+        local code = response.getResponseCode and response.getResponseCode() or 200
+        contents = response.readAll(); response.close()
+        assert(code == 200, "GitHub returned HTTP " .. tostring(code) .. " for " .. path)
+    elseif source == "--file" then
         local file = assert(fs.open(args[4], "r"), "Cannot read app source: " .. args[4])
         contents = file.readAll(); file.close()
     else
@@ -1436,6 +1804,7 @@ else
     files = {"lib_storage.lua", "lib_network.lua"}
     if role == "server" then
         files[#files + 1] = "lib_io_picker.lua"
+        files[#files + 1] = "lib_desktop.lua"
         files[#files + 1] = "lib_server.lua"
     elseif role == "io" then files[#files + 1] = "lib_io.lua"
     else files[#files + 1] = "lib_monitor.lua" end

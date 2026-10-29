@@ -127,7 +127,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local id = assert(central.server.api.openApp("coffee", "monitor_13:top"))
         central.server.refreshMonitors(true); bus.pump()
         local before = state.remainingTime
-        bus.queue(display, {"monitor_touch", "top", 6, 2}); bus.pump()
+        bus.queue(display, {"monitor_touch", "top", 6, screen.height}); bus.pump()
         equal(central.server.state.windows[id].minimized, true)
         bus.advance(2)
         equal(state.remainingTime, before - 2)
@@ -166,12 +166,12 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         bus.computer(13, "monitor", {monitors = {top = screen, left = small}}):start()
         equal(central.server.api.getSystem().gameTime, "06:30")
         equal(central.server.api.getSystem().clockSource, "computer")
-        assert(screen.lines[1]:find("06:30", 1, true))
-        assert(small.lines[1]:find("06:30", 1, true), "Small displays must keep the clock visible")
+        assert(screen.lines[screen.height]:find("06:30", 1, true))
+        assert(small.lines[small.height]:find("06:30", 1, true), "Small displays must keep the clock visible")
         worldTime = 23.999
         bus.advance(0.5)
         equal(central.server.api.getSystem().gameTime, "23:59")
-        assert(screen.lines[1]:find("23:59", 1, true))
+        assert(screen.lines[screen.height]:find("23:59", 1, true))
     end
 
     function tests.io_picker_selects_client_side_and_color_and_excludes_modem_side()
@@ -185,6 +185,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             local dialog = assert(central.server.dialogs[id])
             local win = central.server.state.windows[id]
             local Picker = central.env.dofile("lib_io_picker.lua")
+            for attempt = 1, 17 do
             local lines = Picker.render(dialog, win.width - 2, win.height - 2, api.getIOClients())
             for y, line in ipairs(lines) do
                 local x = line:find(label, 1, true)
@@ -195,6 +196,11 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
                         end
                     end
                 end
+            end
+            local nextHit
+            for _, hit in ipairs(dialog.hits) do if hit.action == "next" then nextHit = hit end end
+            if not nextHit then break end
+            bus.queue(display, {"monitor_touch", "top", win.x + nextHit.x1, win.y + nextHit.y}); bus.pump()
             end
             error("Missing IO option: " .. label)
         end
@@ -293,6 +299,8 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local win = central.server.state.windows[first]
         local display = bus.computers[13]
         bus.queue(display, {"monitor_touch", "top", win.x + 1, win.y + win.height - 2}); bus.pump()
+        equal(central.server.views[first].page, "actions")
+        bus.queue(display, {"monitor_touch", "top", win.x + 1, win.y + 4}); bus.pump()
         equal(central.server.views[first].page, "settings")
         equal(central.server.views[second].page, nil)
         local before = state.remainingTime

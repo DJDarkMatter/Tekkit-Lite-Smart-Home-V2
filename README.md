@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all nine runtime source files and **no apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v4`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Apps are installed separately on explicit request; none are enabled by default.
+`install.lua` is a self-contained installer containing all ten runtime source files and **no apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v6`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -39,7 +39,7 @@ For direct file copying instead, preserve these paths:
 | Role | Required files |
 | --- | --- |
 | All roles | `lib_network.lua`, `lib_storage.lua` |
-| Central OS | Also `main_os.lua`, `lib_server.lua`, `lib_io_picker.lua` |
+| Central OS | Also `main_os.lua`, `lib_server.lua`, `lib_io_picker.lua`, `lib_desktop.lua` |
 | IO client | Also `clients_io_client.lua`, `lib_io.lua` |
 | Monitor client | Also `clients_monitor_client.lua`, `lib_monitor.lua` |
 
@@ -50,13 +50,17 @@ For maintainers: edit the normal source files, then run `python3 tools_build_ins
 The same installer has an explicit app mode. On the **central OS computer**, quit to the CraftOS shell, then use one of:
 
 ```text
+inst app APP_NAME
+inst app APP_NAME --ref BRANCH_OR_COMMIT
 inst app APP_NAME PASTE_ID
 inst app APP_NAME --file /path/to/app.lua
 ```
 
-These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. The Pastebin mode uses the built-in `pastebin get` program that already works on this server; the file mode needs no network. Syntax is checked without executing the app during installation. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
+`inst app APP_NAME` fetches the root file `apps_APP_NAME.lua` from the V2 repository's `main` branch, using `https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/main/apps_APP_NAME.lua`. Use `--ref` to select a different branch or commit. Keep the current app file on GitHub; only the installer needs a Pastebin paste. This mode requires working HTTP access to GitHub from the server. The optional Pastebin mode uses the built-in `pastebin get` program; the file mode needs no network.
 
-The first optional app is [coffee](documentation_coffee.md), adapted from the original standalone timer. Upload `apps_coffee.lua` as its own Pastebin paste and run `inst app coffee COFFEE_PASTE_ID` on the OS computer. It starts automatically at every OS boot without a window. Its Settings menu uses the shared client → side → Digital/bundled-colour picker. Install the bundled-v4 OS before installing this app; existing IO and monitor clients need no update.
+These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
+
+The first optional app is [coffee](documentation_coffee.md), adapted from the original standalone timer. Run `inst app coffee` on the OS computer to fetch it from GitHub. It starts automatically at every OS boot without a window. Its Settings menu uses the shared client → side → Digital/bundled-colour picker. Install the current bundled-v6 OS before installing this app; existing IO clients need no update; update monitor clients as well to get resolution polling on older CC versions.
 
 ### Confirm connection and test a wire
 
@@ -117,11 +121,13 @@ reboot
 
 For touch input, use advanced monitors. All attached monitors become independent desktops, e.g. `monitor_13:top` and `monitor_13:left`. A replacement monitor on the same side keeps that desktop's identity. Adjust `textScale` in `configs_monitor.txt` if needed.
 
-The desktop initially has no apps. Finish the console-based IO connection test before installing user-specific apps. The installer never supplies a switchboard or coffee timer. The OS loads an app only when its name is explicitly set to `true` in `enabledApps` in `configs_os.txt`; an old auto-populated app registry does not enable it. An earlier installed example may remain on disk after an update, but is disabled by default. The switchboard test fixture is `tests_fixtures_switchboard.lua` and is not installed.
+The desktop initially has no apps. Finish the console-based IO connection test before installing user-specific apps. Role installation never installs a switchboard or coffee timer; `inst app NAME` is an explicit opt-in. The OS loads an app only when its name is explicitly set to `true` in `enabledApps` in `configs_os.txt`; an old auto-populated app registry does not enable it. An earlier installed example may remain on disk after an update, but is disabled by default. The switchboard test fixture is `tests_fixtures_switchboard.lua` and is not installed.
 
 The taskbar's clock reads Minecraft world time from the OS computer's built-in `os.time()`; no time sensor or extra computer is required. This is the in-game day/night clock, not real-world local time. If that API is unavailable, an online sensor's `gameTime` value remains a fallback. The original `?:??` appeared because the earlier OS waited exclusively for that unimplemented sensor source.
 
-Touch a window's taskbar entry to minimize it; touch again to restore it. Touch its title's `X` to close it. The OS resolves touches from coordinates and stacking order. Clients do not invent window IDs. From the OS console you can also use:
+Every monitor has a bottom taskbar with `[+]`, local window buttons, overflow arrows and a clock when space permits. Title-bar controls are `[X][#][_]` at the top left: close this view, open layouts, and minimize. A normal app stops after its last view closes across all monitors; Coffee is a background service and keeps running. Click title text for move mode. Layouts include maximize/restore, halves, quarters and a custom two-corner rectangle with preview/OK/Cancel. See [desktop controls](documentation_desktop.md).
+
+The OS resolves touches from coordinates and stacking order. Clients do not invent window IDs. From the OS console you can also use:
 
 ```text
 apps
@@ -133,7 +139,7 @@ save
 quit
 ```
 
-Window sizes in these commands include the frame. `move` and `resize` clamp to the monitor and app limits. The taskbar reserves the first two rows. Window layouts and app state restore after restarting; window IDs are recovered without overwriting restored windows.
+Window sizes in these commands include the frame. `move` and `resize` clamp to the monitor and app limits. The taskbar reserves the last row. Layouts and free rectangles adapt to each monitor's resolution. Window layouts and app state restore after restarting; window IDs are recovered without overwriting restored windows.
 
 ## What is implemented
 
@@ -141,14 +147,14 @@ Window sizes in these commands include the frame. `move` and `resize` clamp to t
 - Full desired output snapshots, acknowledgements and periodic resynchronization; late/duplicate commands are idempotent.
 - Bundled/ordinary output mappings and input reporting; the central OS never accesses redstone.
 - Multiple generic monitor desktops; rendering, touch routing, launcher, focus, minimize/restore/close, console positioning/resizing, and app size checks.
-- Single-file apps, shared persistent app state and background ticks independent of windows or network activity.
+- Single-file apps with shared persistent data: ordinary apps run while views exist; declared background services run independently of windows.
 - Checkpoints in `configs_os_state.txt` with temporary/backup recovery. Logical output changes and mappings save before hardware commands. App data and window layouts checkpoint every second while the OS runs, including with older 30-second settings; open/close, focus, minimize, move and resize changes also save immediately.
 - A shared touch IO picker, per-window app view context, built-in Minecraft clock, and optional persistent coffee app with settings and legacy-state import.
 - An app-free role installer and Lua 5.1 integration tests.
 
 ## Still to build from the design
 
-Production measurement/averages, real sensor peripheral adapters, the user's switchboard app, and touch-based window move/resize controls are not implemented. The coffee app is optional and separate from the OS installer. The original coffee/switchboard programs are the root `oldfiles_*.lua` archives; the OS does not load them. Character resolution is measured from the monitor API; physical block dimensions are not guessed from that resolution.
+Production measurement/averages, real sensor peripheral adapters, and the user's switchboard app are not implemented. The coffee app is optional and separate from the OS installer. The original coffee/switchboard programs are the root `oldfiles_*.lua` archives; the OS does not load them. Character resolution is measured from the monitor API; physical block dimensions are not guessed from that resolution.
 
 Periodic checkpoints can lose progress since the last successful checkpoint on a crash (normally up to one second). Important app transitions call `api.save()` or save with the output intent before hardware commands. No program runs while its own computer is unloaded. Network confirmations report that the IO computer applied an output, not that an external machine physically responded. Disconnect detection still uses the configured client timeout; external-machine feedback requires a real input.
 
@@ -160,4 +166,4 @@ From the repository root:
 lua5.1 tests_run.lua
 ```
 
-The tests include installing and booting all three roles with HTTP absent, plus exercising the optional GitHub installer. They run the actual entry points as separate computers with independent disks and event queues, using string-only virtual modems. Every simulated output write enforces a shared 0.5-second per-side cooldown, including unchanged values and cooldowns across program restarts. They cover startup order, two clients sharing a reply channel, dropped commands/handshakes/acks/frames, stale and queued commands, OS and client restarts, safe-off, modem relocation, remapping, zero inputs, monitor touches/layout restoration, corrupt/interrupted checkpoints, failed saves, malformed packets, sensor isolation and background timing. The root `github_workflows_lua.yml` is an optional GitHub Actions template; it is inactive in this strictly flat repository because GitHub requires workflows in `.github/workflows/`. The root build and test commands above work locally.
+The tests include installing and booting all three roles with HTTP absent, plus exercising the optional GitHub installer. App-install tests cover GitHub downloads that yield like CC 1.5 HTTP, optional older response handles without status methods, branch/commit selection, failed/invalid responses, preservation of saved progress, and deferred execution until boot. They run the actual entry points as separate computers with independent disks and event queues, using string-only virtual modems. Every simulated output write enforces a shared 0.5-second per-side cooldown, including unchanged values and cooldowns across program restarts. They cover startup order, two clients sharing a reply channel, dropped commands/handshakes/acks/frames, stale and queued commands, OS and client restarts, safe-off, modem relocation, remapping, zero inputs, monitor touches/layout restoration, corrupt/interrupted checkpoints, failed saves, malformed packets, sensor isolation and background timing. The root `github_workflows_lua.yml` is an optional GitHub Actions template; it is inactive in this strictly flat repository because GitHub requires workflows in `.github/workflows/`. The root build and test commands above work locally.

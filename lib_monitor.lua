@@ -18,18 +18,21 @@ function Monitor.new(net, config)
                 present[side] = true
                 local device = client.devices[side]
                 local wrapped = peripheral.wrap(side)
-                if wrapped.setBackgroundColor then wrapped.setBackgroundColor(colors.black) end
-                if wrapped.setTextColor then wrapped.setTextColor(colors.white) end
-                wrapped.setTextScale(config.textScale)
+                if not device or device.textScale ~= config.textScale then
+                    if wrapped.setBackgroundColor then wrapped.setBackgroundColor(colors.black) end
+                    if wrapped.setTextColor then wrapped.setTextColor(colors.white) end
+                    wrapped.setTextScale(config.textScale)
+                end
                 local width, height = wrapped.getSize()
                 if not device then
                     device = {id = config.clientId .. ":" .. side, side = side, peripheral = wrapped,
                         width = width, height = height, nonce = 0, lastAnnounce = -math.huge,
-                        lastServer = 0, connected = false}
+                        lastServer = 0, connected = false, textScale = config.textScale}
                     client.devices[side] = device
                     status(device, "Connecting to SmartHome OS...")
                 else
                     device.peripheral = wrapped
+                    device.textScale = config.textScale
                     if width ~= device.width or height ~= device.height then
                         device.width, device.height, device.lastAnnounce = width, height, -math.huge
                         device.cache = {}
@@ -81,6 +84,8 @@ function Monitor.new(net, config)
         end
     end
     function client.tick(now)
+        -- CC 1.5 may not emit monitor_resize; polling also discovers late screens.
+        client.scan()
         local available = net.ensureModem()
         for _, device in pairs(client.devices) do
             if device.connected and (not available or now - device.lastServer >= config.timeout) then

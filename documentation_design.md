@@ -55,12 +55,12 @@ Sensor clients forward raw readings to the OS, which converts them to system sta
 ## 4. Monitor Desktops and Window System
 
 Every monitor has its own desktop managed centrally by the OS:
-- OS stores each monitor's dimensions and type
+- OS stores each monitor's dimensions, desktop scroll and window layout metadata
 - OS tracks which windows are open on each monitor and positions/sizes
 
 ### Window Properties
 - Resizable within app-defined min/max limits
-- Closed via X button in window frame (sends event to OS)
+- Top-left controls: close this view, layout menu, minimize. Last-view close stops ordinary apps; background services continue
 - Positioned by OS based on available space
 
 ### App Size Categories
@@ -87,15 +87,15 @@ Monitors are classified by their actual block dimensions (e.g. "5x4", "10x7"). T
 
 Every monitor desktop has a taskbar:
 - Shows list of open windows on that monitor
-- Touch to switch focus, minimize, or close windows
-- Always visible, reserves screen space (bottom or top)
+- Touch to focus/restore or minimize local views; use the top-left window controls to close or arrange them
+- Always visible on the bottom row; arrow controls scroll overflowing window buttons
 - Displays Minecraft time from the OS computer's built-in `os.time()` (sensor fallback if unavailable)
 
 ## 6. Apps
 
 Apps are single files stored on the OS computer.
 
-The OS installer includes no apps and enables none by default. Apps are user-specific, installed separately and explicitly enabled in `configs_os.txt`. An app file's presence or an older saved registry entry must not cause it to run automatically. Explicitly installed/enabled coffee runs at every OS boot without needing an open window.
+The OS installer includes no apps and enables none by default. Apps are user-specific, installed separately and explicitly enabled in `configs_os.txt`. The same installer downloads a requested app from the V2 GitHub repository with `inst app NAME`, so the installer is the only required Pastebin upload. An app file's presence or an older saved registry entry must not cause it to run automatically. Explicitly installed/enabled coffee runs at every OS boot without needing an open window.
 
 ### App Structure
 Each app has two parts:
@@ -176,3 +176,7 @@ No core changes needed for new features.
 ## Implementation Status
 
 This document is the target architecture, not a claim that every feature is implemented. The repaired runtime, installation steps, current limitations and remaining apps are described in [README.md](README.md). The original-code review and explicit design decisions are in [REVIEW.md](documentation_review.md); app hooks and wire messages are in [API.md](documentation_api.md).
+
+## Implemented desktop controls
+
+The [desktop guide](documentation_desktop.md) describes the bottom taskbar, top-left controls, snap presets, two-corner custom sizing, click-to-move, normalized saved layouts and adaptive app views. Coffee is a declared background service; ordinary apps run only while at least one view exists.

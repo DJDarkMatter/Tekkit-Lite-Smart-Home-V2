@@ -4,7 +4,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 PATHS = [
-    "lib_storage.lua", "lib_network.lua", "lib_io_picker.lua", "lib_server.lua", "lib_io.lua", "lib_monitor.lua",
+    "lib_storage.lua", "lib_network.lua", "lib_io_picker.lua", "lib_desktop.lua", "lib_server.lua", "lib_io.lua", "lib_monitor.lua",
     "main_os.lua", "clients_io_client.lua", "clients_monitor_client.lua",
 ]
 
@@ -14,11 +14,12 @@ def lua_string(value):
         equals += "="
     return "[" + equals + "[" + value + "]" + equals + "]"
 
-header = '''-- SmartHome OS installer: bundled-v4
+header = '''-- SmartHome OS installer: bundled-v6
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor [--startup]
--- User apps: inst app NAME PASTE_ID   or   inst app NAME --file PATH
+-- User apps: inst app NAME [--ref BRANCH_OR_COMMIT] (GitHub)
+-- Alternatives: inst app NAME PASTE_ID   or   inst app NAME --file PATH
 -- OS/client installation is offline. Apps are fetched only on request.
 local sources = {
 '''
@@ -27,10 +28,11 @@ runner = r'''}
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v4")
+print("SmartHome installer: bundled-v6")
+local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor [--startup]")
-    print("       inst app NAME PASTE_ID | inst app NAME --file PATH")
+    print(appUsage)
     return
 end
 assert(shell.dir() == "", "Run cd / first")
@@ -38,12 +40,28 @@ local files
 if role == "app" then
     local name, source = args[2], args[3]
     assert(type(name) == "string" and name:match("^[%w_-]+$"), "Specify a simple app name without .lua")
-    assert(source and (source == "--file" and args[4] and not args[5]
-        or source:match("^%w+$") and not args[4]), "Usage: inst app NAME PASTE_ID | inst app NAME --file PATH")
+    assert(not source and not args[4]
+        or (source == "--file" or source == "--ref") and args[4] and not args[5]
+        or source and source:match("^%w+$") and not args[4], appUsage)
+    local github = source == nil or source == "--ref"
+    local ref = source == "--ref" and args[4] or "main"
+    assert(not github or ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)
+        and ref:sub(1, 1) ~= "/" and ref:sub(-1) ~= "/", "Invalid GitHub branch or commit")
     assert(fs.exists("main_os.lua") and fs.exists("lib_server.lua"), "Install apps on the central OS computer")
     local path = "apps_" .. name .. ".lua"
     local contents
-    if source == "--file" then
+    if github then
+        assert(http and type(http.get) == "function", "HTTP is disabled; GitHub app downloads need HTTP enabled")
+        local url = "https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/" .. ref .. "/" .. path
+        print("Downloading " .. path .. " from GitHub (" .. ref .. ")")
+        -- http.get may yield on CC 1.5: do not call it inside pcall.
+        local response, downloadError = http.get(url)
+        assert(response, "GitHub app download failed; check the repository file and HTTP access: "
+            .. tostring(downloadError or url))
+        local code = response.getResponseCode and response.getResponseCode() or 200
+        contents = response.readAll(); response.close()
+        assert(code == 200, "GitHub returned HTTP " .. tostring(code) .. " for " .. path)
+    elseif source == "--file" then
         local file = assert(fs.open(args[4], "r"), "Cannot read app source: " .. args[4])
         contents = file.readAll(); file.close()
     else
@@ -82,6 +100,7 @@ else
     files = {"lib_storage.lua", "lib_network.lua"}
     if role == "server" then
         files[#files + 1] = "lib_io_picker.lua"
+        files[#files + 1] = "lib_desktop.lua"
         files[#files + 1] = "lib_server.lua"
     elseif role == "io" then files[#files + 1] = "lib_io.lua"
     else files[#files + 1] = "lib_monitor.lua" end

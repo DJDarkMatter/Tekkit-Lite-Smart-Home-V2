@@ -2,12 +2,13 @@
 
 ## Single-file apps
 
-The installer contains no apps. A user app is a Lua file returning an app table, stored as `apps_NAME.lua` in the OS computer root. It executes only if `enabledApps[APP_NAME] = true` in `configs_os.txt`; restart the OS after changing this setting. The default is an empty table. The saved legacy `appRegistry` does not enable execution. Enabled apps initialize at OS boot and receive background ticks even when they have no windows. `apps_coffee.lua` is the first optional app.
+The installer contains no apps. A user app is a Lua file returning an app table, stored as `apps_NAME.lua` in the OS computer root. It executes only if `enabledApps[APP_NAME] = true` in `configs_os.txt`; restart the OS after changing this setting. The default is an empty table. The saved legacy `appRegistry` does not enable execution. Enabled app definitions are registered at OS boot. Ordinary apps initialize when first opened (or when saved views restore), run while any view exists, and stop after their last view closes. Apps with `backgroundService = true`, and apps without a render hook, start at boot and continue with zero views. `apps_coffee.lua` is the first optional app.
 
-Explicit installation uses the same installer: `inst app APP_NAME PASTE_ID` or `inst app APP_NAME --file /path/to/app.lua`. It checks syntax, installs the file and enables that one app for the next OS start. It preserves existing settings, startup and saved app state, backing up replaced code/settings. It does not execute the app at install time. Network download uses the built-in Pastebin program; no GitHub connection is needed.
+Explicit installation uses the same installer: `inst app APP_NAME` downloads the root file `apps_APP_NAME.lua` from `DJDarkMatter/Tekkit-Lite-Smart-Home-V2` on GitHub (`main` branch). `inst app APP_NAME --ref BRANCH_OR_COMMIT` selects another ref. Apps therefore need no separate Pastebin upload. Optional alternatives remain `inst app APP_NAME PASTE_ID` or `inst app APP_NAME --file /path/to/app.lua`. The installer checks syntax, installs the file and enables that one app for the next OS start. It preserves existing settings, startup and saved app state, backing up replaced code/settings. It does not execute the app at install time. GitHub mode uses the CC 1.5 `http.get` API; role installation remains offline and app-free.
 
 ```lua
-local app = {minWidth = 18, minHeight = 4, maxWidth = 40, maxHeight = 12}
+local app = {minWidth = 18, minHeight = 4, preferredWidth = 30, preferredHeight = 10}
+-- Set backgroundService = true for always-on automation such as Coffee.
 
 function app.init(state, api)
     -- init runs after restoring state: set defaults, do not erase saved values.
@@ -32,7 +33,7 @@ end
 return app
 ```
 
-Size limits describe **content** character dimensions. The OS adds a one-character frame and reserves two top taskbar rows. A background-only app can omit `render`. App state is shared across the app's windows and background hook and is persisted separately from window geometry. `handleTouch` may optionally return `handled, replacementState`.
+Size limits describe **content** character dimensions. The OS adds a one-character frame and reserves one bottom taskbar row. Preferred sizes set initial content dimensions; optional maximum sizes constrain presets too. Omit maxima for fully responsive applications. A background-only app can omit `render`. `shutdown(state, api, {appName})` is an optional hook called when the last ordinary-app view closes. Closing or minimizing one view never stops work shared by other views. App state is shared across the app's windows and background hook and is persisted separately from window geometry. `handleTouch` may optionally return `handled, replacementState`.
 
 Hooks must return promptly and must not call `sleep`, `read`, `os.pullEvent`, HTTP, or other yielding functions. Lua 5.1 hooks run under `pcall` for fault isolation. Apps are trusted code, not sandboxed plugins.
 
@@ -50,15 +51,16 @@ Hooks must return promptly and must not call `sleep`, `read`, `os.pullEvent`, HT
 | `api.getSystem()` | `{gameTime, clockSource, playerOnline}`; Minecraft time is read locally through `os.time()`, with sensor fallback |
 | `api.getClients()` | Sorted array of `{id, type, online, computerId}` |
 | `api.openApp(name, monitorId, x, y, width, height)` | `windowId, error`; geometry optional, outer dimensions |
-| `api.closeWindow(windowId)` | `ok, error` |
+| `api.closeWindow(windowId)` | `ok, error`; closes only this view and stops a normal app after its last view |
 | `api.placeWindow(windowId, x, y, width, height)` | `ok, error`; nil fields retain the old values |
+| `api.layoutWindow(windowId, mode)` | `ok, error`; maximize, restore, left/right/top/bottom, top_left/top_right/bottom_left/bottom_right |
 | `api.save()` | `ok, error`; checkpoints central state |
 
 Physical sides use computer-relative names. Mappings are independent of apps and persisted centrally. All mapped sides are fully owned by the OS. Input/sensor values are live observations, not restored stale values. Losing a sensor client clears its supplied system indicators.
 
 ## Per-window settings and shared IO selector
 
-`init` receives an optional third argument `{appName}`. `render` and `handleTouch` receive an optional final `context = {appName, windowId, monitorId, view}`. Old apps can ignore these extra arguments. `view` is transient state for this particular window's menus/drafts; app `state` remains shared persistent business data. Closing a window discards its draft menus and leaves the app running. Persist applied settings in `state` and checkpoint them.
+`init` receives an optional third argument `{appName}`. `render` and `handleTouch` receive an optional final `context = {appName, windowId, monitorId, view}`. Old apps can ignore these extra arguments. `view` is transient state for this particular window's menus/drafts; app `state` remains shared persistent business data. Closing a window discards its draft menus. Other views keep the app running; the last close stops an ordinary app, while a background service continues. Persist applied settings in `state` and checkpoint them.
 
 An app can request `api.pickIO(context.windowId, "playerInput", "input", state.playerInput)`. The OS draws a paginated client → side → Digital/colour menu, with an explicit Use/Cancel review. It offers all known IO clients, marks offline ones, and excludes unavailable sides. Selecting Use invokes:
 
@@ -74,7 +76,7 @@ end
 
 The callback should validate/apply the change, roll back its own state on failed save/mapping, and return `true` or `false, error`. For outputs use `api.mapOutput` and a logical output name; apps never write redstone directly. The coffee callback demonstrates committing an OFF binding with its address. A future switchboard can reuse the same picker for each output.
 
-OS checkpoints include all app states and window position/size/order/minimized status at an interval no longer than one second, even when an older config still specifies 30 seconds. Important transitions and applied settings save immediately. This is checkpoint recovery, not an exact transaction with the external Minecraft machine.
+OS checkpoints include all app states and window position/size/order/minimized status, snap/restore metadata and per-monitor taskbar scrolling at an interval no longer than one second, even when an older config still specifies 30 seconds. Important transitions and applied settings save immediately. This is checkpoint recovery, not an exact transaction with the external Minecraft machine.
 
 `dt` is elapsed ComputerCraft `os.clock()` time between OS ticks. It is not reconstructed across program/server downtime. A real coffee app must define its own online/pause/harvest state transitions and explicitly save important counters.
 
@@ -130,3 +132,5 @@ It sets a complete desired state instead of sending toggle commands, so a duplic
 Input updates use `inputData` with `side`, `value` (bundled mask), `digital`, and `serverSession`. Monitor touches use `touch` with `x`, `y` and `serverSession`; the OS decides the window. Frames use `render` with `lines`, `width`, `height`, `monitorId` and `serverSession`.
 
 A future sensor adapter must implement the same announce/welcome/heartbeat process. Once welcomed, send `sensorData` with `varName`, scalar `value`, and `serverSession`. `playerOnline` must be boolean and `gameTime` must be a string; other names remain raw readings under that sensor client. There is no sensor peripheral driver included yet.
+
+The desktop stores normalized free rectangles and named snap zones, and reserves the bottom row for its taskbar. User layout menus and placement are OS overlays, so application hooks need no pointer-drag handling. See [desktop behavior](documentation_desktop.md).
