@@ -401,7 +401,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local display = bus.computer(13, "monitor", {monitors = {top = screen}})
         local work = coroutine.create(function() assert(display.env.loadfile("clients_monitor_client.lua"))("calibrate", "top") end)
         local ok, event = coroutine.resume(work)
-        assert(ok, event); equal(event, "monitor_touch")
+        assert(ok, event); equal(event, nil)
         for _, point in ipairs({{10, 4}, {30, 9}, {20, 13}}) do
             ok, event = coroutine.resume(work, "monitor_touch", "top", point[1] + 1, point[2] + 1)
             assert(ok, event)
@@ -417,6 +417,77 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         -- The native driver reports a point one row/column below the drawn target.
         bus.queue(display, {"monitor_touch", "top", win.x + win.width - 1, win.y + 1}); bus.pump()
         equal(central.server.state.windows[id], nil, "Calibration maps the visible close button back to its exact cell")
+    end
+
+    local function calibration(previous)
+        local bus, screen = newBus(), monitor(40, 18)
+        local display = bus.computer(13, "monitor", {monitors = {top = screen}})
+        if previous then display.disk.files["configs_monitor.txt"] = serialize({clientId = "keep", textScale = 0.5,
+            announceInterval = 5, timeout = 15, touchOffsets = {top = previous, left = {x = 0, y = 2}}}) end
+        local work = coroutine.create(function() assert(display.env.loadfile("clients_monitor_client.lua"))("calibrate", "top") end)
+        local ok, event = coroutine.resume(work); assert(ok, event)
+        local function resume(...)
+            local success, err = coroutine.resume(work, ...); assert(success, err)
+        end
+        local function sample(index, dx, dy)
+            local target = ({{10, 4}, {30, 9}, {20, 13}})[index]
+            resume("monitor_touch", "top", target[1] - dx, target[2] - dy)
+        end
+        return display, screen, work, sample, resume
+    end
+
+    function tests.desktop_calibration_collects_all_samples_and_tolerates_one_cell_tap_variation()
+        local display, screen, work, sample, resume = calibration({x = 0, y = 0})
+        sample(1, -1, -1)
+        resume("monitor_touch", "top", 11, 5) -- Queued repeat of the old first target.
+        assert(screen.lines[1]:find("2/3", 1, true), "Old-target touches must not count for the next target")
+        sample(2, -2, -1)
+        equal(coroutine.status(work), "suspended", "The second differing tap must not terminate calibration")
+        assert(screen.lines[1]:find("3/3", 1, true))
+        sample(3, -1, -2)
+        equal(coroutine.status(work), "dead")
+        local saved = unserialize(display.disk.files["configs_monitor.txt"])
+        equal(saved.touchOffsets.top.x, -1); equal(saved.touchOffsets.top.y, -1)
+        equal(saved.touchOffsets.left.y, 2)
+        assert(screen.lines[1]:find("Calibration saved", 1, true))
+    end
+
+    function tests.desktop_calibration_inconsistent_samples_offer_retry_without_replacing_the_old_offset()
+        local display, screen, work, sample, resume = calibration({x = 2, y = 1})
+        local previous = display.disk.files["configs_monitor.txt"]
+        sample(1, -3, 0); sample(2, 0, 0); sample(3, 3, 0)
+        equal(coroutine.status(work), "suspended")
+        equal(display.disk.files["configs_monitor.txt"], previous)
+        assert(screen.lines[1]:find("needs retry", 1, true)); assert(screen.lines[17]:find("Retry", 1, true))
+        resume("monitor_touch", "top", 4, 17)
+        assert(screen.lines[1]:find("1/3", 1, true))
+        sample(1, 0, -1); sample(2, 0, -1); sample(3, 0, -1)
+        equal(coroutine.status(work), "dead")
+        local saved = unserialize(display.disk.files["configs_monitor.txt"])
+        equal(saved.touchOffsets.top.x, 0); equal(saved.touchOffsets.top.y, -1)
+    end
+
+    function tests.desktop_calibration_rejects_excessive_offsets_and_cancel_keeps_previous_settings()
+        local display, screen, work, sample, resume = calibration({x = 1, y = -1})
+        local previous = display.disk.files["configs_monitor.txt"]
+        sample(1, 4, 0); sample(2, 4, 0); sample(3, 4, 0)
+        equal(coroutine.status(work), "suspended")
+        assert(screen.lines[1]:find("needs retry", 1, true))
+        resume("char", "c")
+        equal(coroutine.status(work), "dead")
+        equal(display.disk.files["configs_monitor.txt"], previous)
+        assert(screen.lines[1]:find("cancelled", 1, true))
+    end
+
+    function tests.desktop_calibration_failed_save_keeps_the_previous_offset_and_reports_failure()
+        local display, screen, work, sample = calibration({x = 1, y = -1})
+        local previous = display.disk.files["configs_monitor.txt"]
+        display.disk.failWrite = true
+        sample(1, -1, 0); sample(2, -1, 0); sample(3, -1, 0)
+        equal(coroutine.status(work), "dead")
+        equal(display.disk.files["configs_monitor.txt"], previous)
+        assert(table.concat(display.log, "\n"):find("Cannot save calibration", 1, true))
+        assert(screen.lines[1]:find("not saved", 1, true))
     end
 
     function tests.desktop_coffee_settings_paging_is_bounded_and_per_window()

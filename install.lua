@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v10
+-- SmartHome OS installer: bundled-v11
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor [--startup]
@@ -77,7 +77,8 @@ local function integer(value, low, high)
         and value >= low and value <= high
 end
 
-function Network.new(config, isServer)
+function Network.new(config, isServer, logger)
+    local log = logger or print
     assert(type(config.networkId) == "string" and #config.networkId > 0,
         "Set networkId in configs_network.txt")
     assert(integer(config.channel, 1, 65532), "Invalid network channel")
@@ -100,7 +101,7 @@ function Network.new(config, isServer)
                     local ok = pcall(modem.open, net.listenChannel)
                     if ok then
                         net.modem, net.side = modem, side
-                        print("Wireless modem: " .. side .. ", channel " .. net.listenChannel)
+                        log("Wireless modem: " .. side .. ", channel " .. net.listenChannel)
                         return true
                     end
                 end
@@ -161,6 +162,125 @@ end
 Network.sides = sides
 Network.integer = integer
 return Network
+]=],
+    ["lib_console.lua"] = [=[-- Local CC 1.5 terminal: log output above an independently edited bottom line.
+-- No read(), term.redirect(), window API, or peripheral drawing is required.
+local Console = {}
+local codes = {enter = 28, numPadEnter = 156, backspace = 14, delete = 211,
+    left = 203, right = 205, home = 199, ["end"] = 207, up = 200, down = 208}
+for name, fallback in pairs(codes) do codes[name] = keys and keys[name] or fallback end
+
+function Console.new(screen)
+    local console = {lines = {}, history = {}, text = "", cursor = 0, offset = 0}
+    local cache, previousWidth, previousHeight = {}, nil, nil
+    local function clean(value)
+        return tostring(value):gsub("\r", ""):gsub("\t", "    "):gsub("[%z\1-\8\11\12\14-\31\127]", " ")
+    end
+    function console.redraw(force)
+        local width, height = screen.getSize()
+        assert(width >= 3 and height >= 2, "Console needs at least 3x2 characters")
+        if width ~= previousWidth or height ~= previousHeight then
+            force, previousWidth, previousHeight = true, width, height
+        end
+        if screen.setCursorBlink then screen.setCursorBlink(false) end
+        local setFG, setBG = screen.setTextColor or screen.setTextColour, screen.setBackgroundColor or screen.setBackgroundColour
+        if setFG then setFG(1) end
+        if setBG then setBG(32768) end
+        local rows = {}
+        for _, line in ipairs(console.lines) do
+            if line == "" then rows[#rows + 1] = "" end
+            for first = 1, #line, width do rows[#rows + 1] = line:sub(first, first + width - 1) end
+        end
+        local function paint(y, line)
+            line = line:sub(1, width)
+            line = line .. string.rep(" ", width - #line)
+            if force or cache[y] ~= line then
+                screen.setCursorPos(1, y); screen.write(line); cache[y] = line
+            end
+        end
+        for y = 1, height - 1 do paint(y, rows[#rows - height + 1 + y] or "") end
+        local available = width - 2
+        if console.cursor < console.offset then console.offset = console.cursor end
+        if console.cursor >= console.offset + available then console.offset = console.cursor - available + 1 end
+        console.offset = math.max(0, math.min(console.offset, math.max(0, #console.text - available + 1)))
+        paint(height, "> " .. console.text:sub(console.offset + 1, console.offset + available))
+        screen.setCursorPos(3 + console.cursor - console.offset, height)
+        if screen.setCursorBlink then screen.setCursorBlink(true) end
+    end
+    function console.log(...)
+        local parts = {}
+        for index = 1, select("#", ...) do parts[index] = clean(select(index, ...)) end
+        for line in (table.concat(parts, " ") .. "\n"):gmatch("(.-)\n") do
+            console.lines[#console.lines + 1] = line
+        end
+        while #console.lines > 200 do table.remove(console.lines, 1) end
+        console.redraw()
+    end
+    function console.clear()
+        console.lines, cache = {}, {}
+        console.redraw(true)
+    end
+    local function changed()
+        console.historyIndex, console.draft = nil, nil
+    end
+    function console.handle(event, value)
+        if event == "char" or event == "paste" then
+            if type(value) ~= "string" then return end
+            value = clean(value):gsub("\n", " "):sub(1, math.max(0, 4096 - #console.text))
+            console.text = console.text:sub(1, console.cursor) .. value .. console.text:sub(console.cursor + 1)
+            console.cursor = console.cursor + #value
+            changed()
+        elseif event == "term_resize" then console.redraw(true); return
+        elseif event == "key" then
+            if value == codes.enter or value == codes.numPadEnter then
+                local command = console.text
+                if command:match("%S") and console.history[#console.history] ~= command then
+                    console.history[#console.history + 1] = command
+                    if #console.history > 50 then table.remove(console.history, 1) end
+                end
+                console.text, console.cursor, console.offset = "", 0, 0
+                changed()
+                console.log("> " .. command)
+                return command
+            elseif value == codes.left then console.cursor = math.max(0, console.cursor - 1)
+            elseif value == codes.right then console.cursor = math.min(#console.text, console.cursor + 1)
+            elseif value == codes.home then console.cursor = 0
+            elseif value == codes["end"] then console.cursor = #console.text
+            elseif value == codes.backspace then
+                if console.cursor > 0 then
+                    console.text = console.text:sub(1, console.cursor - 1) .. console.text:sub(console.cursor + 1)
+                    console.cursor = console.cursor - 1; changed()
+                end
+            elseif value == codes.delete then
+                console.text = console.text:sub(1, console.cursor) .. console.text:sub(console.cursor + 2)
+                changed()
+            elseif value == codes.up then
+                if #console.history > 0 then
+                    if not console.historyIndex then console.draft = console.text end
+                    console.historyIndex = math.max(1, (console.historyIndex or (#console.history + 1)) - 1)
+                    console.text = console.history[console.historyIndex]; console.cursor = #console.text
+                end
+            elseif value == codes.down then
+                if console.historyIndex then
+                    console.historyIndex = console.historyIndex + 1
+                    if console.historyIndex > #console.history then console.text = console.draft or ""; changed()
+                    else console.text = console.history[console.historyIndex] end
+                    console.cursor = #console.text
+                end
+            else return end
+        else return end
+        console.redraw()
+    end
+    function console.finish()
+        local width, height = screen.getSize()
+        screen.setCursorPos(1, height); screen.write(string.rep(" ", width))
+        screen.setCursorPos(1, height)
+        if screen.setCursorBlink then screen.setCursorBlink(false) end
+    end
+    console.redraw(true)
+    return console
+end
+return Console
 ]=],
     ["lib_gui.lua"] = [=[-- CC 1.5 colour surfaces. Uses write/setTextColor/setBackgroundColor, never blit.
 local Gui = {}
@@ -843,7 +963,8 @@ local function validApp(app)
         and (not app.maxHeight or app.maxHeight >= (app.minHeight or 2))
 end
 
-function Server.new(net, storage, config)
+function Server.new(net, storage, config, logger)
+    local log = logger or print
     local loaded, source = storage.load(config.saveFile, validState)
     local state = loaded or {}
     for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
@@ -861,7 +982,7 @@ function Server.new(net, storage, config)
         lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}}
     local api, errors = {}, {}
     server.api = api
-    api.ui = Gui
+    api.ui, api.log = Gui, log
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
         local monitor = server.monitors[id]
@@ -886,15 +1007,15 @@ function Server.new(net, storage, config)
     state.desktopVersion = 2
     state.bootCounter = (tonumber(state.bootCounter) or 0) + 1
     server.session = tostring(net.id) .. ":" .. state.bootCounter
-    if source and source ~= config.saveFile then print("Recovered state from " .. source) end
-    if not loaded and fs.exists(config.saveFile) then print("Unreadable OS state; starting with defaults") end
+    if source and source ~= config.saveFile then log("Recovered state from " .. source) end
+    if not loaded and fs.exists(config.saveFile) then log("Unreadable OS state; starting with defaults") end
 
     function server.save()
         local saved = {}
         for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides",
             "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance"}) do saved[name] = state[name] end
         local ok, err = storage.save(config.saveFile, saved)
-        if not ok then print("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
+        if not ok then log("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
         return ok, err
     end
     api.save = server.save
@@ -925,7 +1046,7 @@ function Server.new(net, storage, config)
         local ok, a, b = pcall(app[hook], ...)
         if not ok then
             local key = name .. "." .. hook
-            if errors[key] ~= a then print("App " .. key .. " failed: " .. tostring(a)); errors[key] = a end
+            if errors[key] ~= a then log("App " .. key .. " failed: " .. tostring(a)); errors[key] = a end
         end
         return ok, a, b
     end
@@ -1002,7 +1123,7 @@ function Server.new(net, storage, config)
         local snapshot = outputSnapshot(clientId)
         for side in pairs(snapshot) do
             if not client.capabilities[side] then
-                print("IO " .. clientId .. ": mapped side " .. side .. " is unavailable")
+                log("IO " .. clientId .. ": mapped side " .. side .. " is unavailable")
                 snapshot[side] = nil
             end
         end
@@ -1609,7 +1730,7 @@ function Server.new(net, storage, config)
             for _, otherGroup in pairs(groups) do
                 local other = otherGroup[id]
                 if other and (otherGroup ~= group or (other.online and other.computerId ~= message.sender)) then
-                    print("Duplicate clientId rejected: " .. id .. " (computer " .. message.sender .. ")")
+                    log("Duplicate clientId rejected: " .. id .. " (computer " .. message.sender .. ")")
                     return
                 end
             end
@@ -1637,7 +1758,7 @@ function Server.new(net, storage, config)
                 end
             end
             net.toClient(client, {type = "welcome", clientId = id, nonce = message.nonce, serverSession = server.session})
-            if reconnect then print(message.clientType .. " connected: " .. id .. " (computer " .. message.sender .. ")") end
+            if reconnect then log(message.clientType .. " connected: " .. id .. " (computer " .. message.sender .. ")") end
             if message.clientType == "io" then
                 client.ackedRevision = -1
                 server.syncIO(id, false)
@@ -1703,8 +1824,8 @@ function Server.new(net, storage, config)
                     if ok and validApp(app) then
                         server.apps[name], state.appRegistry[name] = app, true
                         if type(state.appStates[name]) ~= "table" then state.appStates[name] = {} end
-                        print("Loaded app: " .. name)
-                    else print("Cannot load app " .. name .. ": " .. tostring(app)) end
+                        log("Loaded app: " .. name)
+                    else log("Cannot load app " .. name .. ": " .. tostring(app)) end
                 end
             end
         end
@@ -1713,8 +1834,8 @@ function Server.new(net, storage, config)
         end
         for _, name in ipairs(sortedKeys(server.systemApps)) do if hasViews(name) then startApp(name) end end
         net.ensureModem()
-        print("SmartHome OS computer " .. net.id .. ", network " .. net.config.networkId)
-        if not net.modem then print("Attach a wireless modem; waiting...") end
+        log("SmartHome OS computer " .. net.id .. ", network " .. net.config.networkId)
+        if not net.modem then log("Attach a wireless modem; waiting...") end
     end
 
     function server.tick(now)
@@ -1723,7 +1844,7 @@ function Server.new(net, storage, config)
             for id, client in pairs(group) do
                 if client.online and now - client.lastSeen >= config.clientTimeout then
                     client.online = false
-                    print("Client offline: " .. id)
+                    log("Client offline: " .. id)
                     if client.values then
                         if client.values.playerOnline ~= nil then server.playerOnline = false end
                         if client.values.gameTime ~= nil then server.gameTime = "?:??" end
@@ -1755,9 +1876,10 @@ function Server.new(net, storage, config)
             "set <name> <on|off> | toggle <name>",
             "open <app> <monitor> | close <windowId>",
             "move <id> <x> <y> | resize <id> <width> <height>",
-            "save | quit (saves and exits)",
+            "clear | save | quit (saves and exits)",
         } end
-        if cmd == "clients" then
+        if cmd == "clear" then return {}, false, "clear"
+        elseif cmd == "clients" then
             local lines = {}
             for _, item in ipairs(api.getClients()) do
                 lines[#lines + 1] = item.id .. " " .. item.type .. " " .. (item.online and "ONLINE" or "offline")
@@ -2147,25 +2269,78 @@ function Monitor.new(net, config)
         assert(w >= 12 and h >= 8, "Calibration needs at least 12x8 characters")
         local targets = {{math.floor(w / 4), math.max(3, math.floor(h / 4))},
             {math.floor(3 * w / 4), math.floor(h / 2)}, {math.floor(w / 2), math.min(h - 1, math.floor(3 * h / 4))}}
-        local dx, dy
-        for index, target in ipairs(targets) do
-            local surface = Gui.new(w, h, 1, 2048)
-            surface.write(1, 1, "Tap white + " .. index .. "/3")
-            surface.fill(target[1] - 1, target[2] - 1, 3, 3, 1, 128)
-            surface.write(target[1], target[2], "+", 32768, 1)
+        local function draw(surface)
             local paint = {}
             for row = 1, h do Gui.drawRow(device.peripheral, row, surface.lines[row], surface.foreground[row], surface.background[row], device.colour, paint) end
+        end
+        local function touch()
             while true do
-                local _, touched, x, y = os.pullEvent("monitor_touch")
-                if touched == side and math.abs(x - target[1]) <= 3 and math.abs(y - target[2]) <= 3 then
-                    local tx, ty = target[1] - x, target[2] - y
-                    if dx ~= nil and (tx ~= dx or ty ~= dy) then return nil, "Samples disagree; tap the centre of each + and retry" end
-                    dx, dy = tx, ty
-                    break
+                local event, touched, x, y = os.pullEvent()
+                if event == "monitor_touch" and touched == side and type(x) == "number" and type(y) == "number"
+                    and x == math.floor(x) and y == math.floor(y) and x >= 1 and x <= w and y >= 1 and y <= h then return x, y end
+                if event == "char" and type(touched) == "string" and touched:lower() == "r" then return "retry" end
+                if (event == "char" and type(touched) == "string" and (touched:lower() == "c" or touched:lower() == "q"))
+                    or (event == "key" and touched == 1) then return "cancel" end
+            end
+        end
+        while true do
+            local xs, ys, restart = {}, {}, false
+            for index, target in ipairs(targets) do
+                local surface = Gui.new(w, h, 1, 2048)
+                surface.write(1, 1, "Tap white + " .. index .. "/3")
+                surface.fill(target[1] - 1, target[2] - 1, 3, 3, 1, 128)
+                surface.write(target[1], target[2], "+", 32768, 1)
+                draw(surface)
+                local x, y
+                while true do
+                    x, y = touch()
+                    if x == "cancel" then return nil, "Calibration cancelled; previous offset kept" end
+                    if x == "retry" then restart = true; break end
+                    if math.abs(target[1] - x) <= 4 and math.abs(target[2] - y) <= 4 then break end
+                    -- A queued repeat of the previous target is not a sample
+                    -- of this target. Keep it visible and explain what to tap.
+                    surface.write(1, h, "Tap centre of white +")
+                    draw(surface)
+                end
+                if restart then break end
+                xs[index], ys[index] = target[1] - x, target[2] - y
+                print("Sample " .. index .. ": expected " .. target[1] .. "," .. target[2]
+                    .. "; received " .. x .. "," .. y .. "; offset " .. xs[index] .. "," .. ys[index])
+            end
+            if not restart then
+                -- A tap can round to an adjacent native cell. Use the median
+                -- only when every sample lies within one cell of it on each axis.
+                table.sort(xs); table.sort(ys)
+                local dx, dy = xs[2], ys[2]
+                local consistent = math.abs(dx) <= 3 and math.abs(dy) <= 3
+                for index = 1, 3 do
+                    consistent = consistent and math.abs(xs[index] - dx) <= 1 and math.abs(ys[index] - dy) <= 1
+                        and math.abs(xs[index]) <= 3 and math.abs(ys[index]) <= 3
+                end
+                if consistent then return {x = dx, y = dy} end
+                local surface = Gui.new(w, h, 1, 32768)
+                surface.write(1, 1, "Calibration needs retry", 1, 16384)
+                surface.write(1, 2, "Taps differ too much")
+                surface.write(1, 3, "Old offset kept")
+                surface.write(1, 4, "R: retry  C: cancel")
+                local half = math.floor(w / 2)
+                surface.fill(1, h - 2, half, 3, 1, 8192)
+                surface.fill(half + 1, h - 2, w - half, 3, 1, 16384)
+                surface.write(1, h - 1, "Retry"); surface.write(half + 1, h - 1, "Cancel")
+                draw(surface)
+                print("Samples differ too much. Tap Retry/Cancel, or press R/C on this computer. Previous offset is unchanged.")
+                while true do
+                    local x, y = touch()
+                    if x == "cancel" or (type(x) == "number" and y >= h - 2 and x > half) then
+                        return nil, "Calibration cancelled; previous offset kept"
+                    end
+                    if x == "retry" or (type(x) == "number" and y >= h - 2 and x <= half) then break end
                 end
             end
         end
-        return {x = dx, y = dy}
+    end
+    function client.showStatus(side, text)
+        status(assert(client.devices[side], "No monitor on that side"), text)
     end
     return client
 end
@@ -2175,6 +2350,7 @@ return Monitor
 local storage = dofile("lib_storage.lua")
 local Network = dofile("lib_network.lua")
 local Server = dofile("lib_server.lua")
+local Console = dofile("lib_console.lua")
 local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
 local config = storage.config("configs_os.txt", {
     saveFile = "configs_os_state.txt", tickInterval = 0.5,
@@ -2184,13 +2360,14 @@ assert(type(config.enabledApps) == "table", "Invalid enabledApps setting")
 for _, name in ipairs({"tickInterval", "saveInterval", "clientTimeout", "retryInterval"}) do
     assert(type(config[name]) == "number" and config[name] > 0, "Invalid OS setting: " .. name)
 end
-local net = Network.new(networkConfig, true)
-local server = Server.new(net, storage, config)
+local console = Console.new(term)
+local net = Network.new(networkConfig, true, console.log)
+local server = Server.new(net, storage, config, console.log)
 server.start()
-print("Type help for commands")
+console.log("Type help for commands; clear clears this console")
 
--- parallel gives the console and network independent event queues. read() cannot
--- discard modem/timer events needed by the server, and there is no sleep in it.
+-- The bottom-row editor owns its cursor independently of asynchronous logs.
+-- Network/timer events continue while commands are being edited.
 parallel.waitForAny(function()
     local timer = os.startTimer(config.tickInterval)
     while true do
@@ -2207,10 +2384,13 @@ parallel.waitForAny(function()
     end
 end, function()
     while true do
-        write("> ")
-        local lines, quit = server.command(read())
-        for _, line in ipairs(lines) do print(line) end
-        if quit then return end
+        local line = console.handle(os.pullEvent())
+        if line ~= nil then
+            local lines, quit, action = server.command(line)
+            if action == "clear" then console.clear() end
+            for _, output in ipairs(lines) do console.log(output) end
+            if quit then console.finish(); return end
+        end
     end
 end)
 ]=],
@@ -2277,15 +2457,21 @@ local client = Monitor.new(net, config)
 print("Monitor client: " .. config.clientId)
 client.scan()
 if args[1] then
-    assert(args[1] == "calibrate" and not args[3], "Usage: clients_monitor_client calibrate [side]")
+    assert(args[1] == "calibrate" and not args[3], "Usage: clients_monitor_client.lua calibrate [side]")
     local side = args[2] or next(client.devices)
     assert(side, "Attach a monitor first")
     print("Calibrating " .. side .. ": tap the centre of each white +")
     local offset, err = client.calibrate(side)
-    assert(offset, err)
-    config.touchOffsets[side] = offset
-    assert(storage.save("configs_monitor.txt", config))
-    print("Saved touch offset: x=" .. offset.x .. " y=" .. offset.y)
+    local saved = false
+    if offset then
+        local previous = config.touchOffsets[side]
+        config.touchOffsets[side] = offset
+        local ok, saveError = storage.save("configs_monitor.txt", config)
+        if ok then saved, err = true, "Saved touch offset: x=" .. offset.x .. " y=" .. offset.y
+        else config.touchOffsets[side], err = previous, "Cannot save calibration: " .. tostring(saveError) end
+    end
+    print(err)
+    client.showStatus(side, saved and "Calibration saved; reboot" or offset and "Calibration not saved; reboot" or "Calibration cancelled; reboot")
     print("Reboot to return to the monitor client")
     return
 end
@@ -2338,7 +2524,7 @@ end)
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v10")
+print("SmartHome installer: bundled-v11")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor [--startup]")
@@ -2484,6 +2670,7 @@ else
     files = {"lib_storage.lua", "lib_network.lua"}
     if role ~= "io" then files[#files + 1] = "lib_gui.lua" end
     if role == "server" then
+        files[#files + 1] = "lib_console.lua"
         files[#files + 1] = "lib_settings.lua"
         files[#files + 1] = "lib_io_picker.lua"
         files[#files + 1] = "lib_desktop.lua"

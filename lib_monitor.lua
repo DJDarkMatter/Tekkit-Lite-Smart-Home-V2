@@ -132,25 +132,78 @@ function Monitor.new(net, config)
         assert(w >= 12 and h >= 8, "Calibration needs at least 12x8 characters")
         local targets = {{math.floor(w / 4), math.max(3, math.floor(h / 4))},
             {math.floor(3 * w / 4), math.floor(h / 2)}, {math.floor(w / 2), math.min(h - 1, math.floor(3 * h / 4))}}
-        local dx, dy
-        for index, target in ipairs(targets) do
-            local surface = Gui.new(w, h, 1, 2048)
-            surface.write(1, 1, "Tap white + " .. index .. "/3")
-            surface.fill(target[1] - 1, target[2] - 1, 3, 3, 1, 128)
-            surface.write(target[1], target[2], "+", 32768, 1)
+        local function draw(surface)
             local paint = {}
             for row = 1, h do Gui.drawRow(device.peripheral, row, surface.lines[row], surface.foreground[row], surface.background[row], device.colour, paint) end
+        end
+        local function touch()
             while true do
-                local _, touched, x, y = os.pullEvent("monitor_touch")
-                if touched == side and math.abs(x - target[1]) <= 3 and math.abs(y - target[2]) <= 3 then
-                    local tx, ty = target[1] - x, target[2] - y
-                    if dx ~= nil and (tx ~= dx or ty ~= dy) then return nil, "Samples disagree; tap the centre of each + and retry" end
-                    dx, dy = tx, ty
-                    break
+                local event, touched, x, y = os.pullEvent()
+                if event == "monitor_touch" and touched == side and type(x) == "number" and type(y) == "number"
+                    and x == math.floor(x) and y == math.floor(y) and x >= 1 and x <= w and y >= 1 and y <= h then return x, y end
+                if event == "char" and type(touched) == "string" and touched:lower() == "r" then return "retry" end
+                if (event == "char" and type(touched) == "string" and (touched:lower() == "c" or touched:lower() == "q"))
+                    or (event == "key" and touched == 1) then return "cancel" end
+            end
+        end
+        while true do
+            local xs, ys, restart = {}, {}, false
+            for index, target in ipairs(targets) do
+                local surface = Gui.new(w, h, 1, 2048)
+                surface.write(1, 1, "Tap white + " .. index .. "/3")
+                surface.fill(target[1] - 1, target[2] - 1, 3, 3, 1, 128)
+                surface.write(target[1], target[2], "+", 32768, 1)
+                draw(surface)
+                local x, y
+                while true do
+                    x, y = touch()
+                    if x == "cancel" then return nil, "Calibration cancelled; previous offset kept" end
+                    if x == "retry" then restart = true; break end
+                    if math.abs(target[1] - x) <= 4 and math.abs(target[2] - y) <= 4 then break end
+                    -- A queued repeat of the previous target is not a sample
+                    -- of this target. Keep it visible and explain what to tap.
+                    surface.write(1, h, "Tap centre of white +")
+                    draw(surface)
+                end
+                if restart then break end
+                xs[index], ys[index] = target[1] - x, target[2] - y
+                print("Sample " .. index .. ": expected " .. target[1] .. "," .. target[2]
+                    .. "; received " .. x .. "," .. y .. "; offset " .. xs[index] .. "," .. ys[index])
+            end
+            if not restart then
+                -- A tap can round to an adjacent native cell. Use the median
+                -- only when every sample lies within one cell of it on each axis.
+                table.sort(xs); table.sort(ys)
+                local dx, dy = xs[2], ys[2]
+                local consistent = math.abs(dx) <= 3 and math.abs(dy) <= 3
+                for index = 1, 3 do
+                    consistent = consistent and math.abs(xs[index] - dx) <= 1 and math.abs(ys[index] - dy) <= 1
+                        and math.abs(xs[index]) <= 3 and math.abs(ys[index]) <= 3
+                end
+                if consistent then return {x = dx, y = dy} end
+                local surface = Gui.new(w, h, 1, 32768)
+                surface.write(1, 1, "Calibration needs retry", 1, 16384)
+                surface.write(1, 2, "Taps differ too much")
+                surface.write(1, 3, "Old offset kept")
+                surface.write(1, 4, "R: retry  C: cancel")
+                local half = math.floor(w / 2)
+                surface.fill(1, h - 2, half, 3, 1, 8192)
+                surface.fill(half + 1, h - 2, w - half, 3, 1, 16384)
+                surface.write(1, h - 1, "Retry"); surface.write(half + 1, h - 1, "Cancel")
+                draw(surface)
+                print("Samples differ too much. Tap Retry/Cancel, or press R/C on this computer. Previous offset is unchanged.")
+                while true do
+                    local x, y = touch()
+                    if x == "cancel" or (type(x) == "number" and y >= h - 2 and x > half) then
+                        return nil, "Calibration cancelled; previous offset kept"
+                    end
+                    if x == "retry" or (type(x) == "number" and y >= h - 2 and x <= half) then break end
                 end
             end
         end
-        return {x = dx, y = dy}
+    end
+    function client.showStatus(side, text)
+        status(assert(client.devices[side], "No monitor on that side"), text)
     end
     return client
 end

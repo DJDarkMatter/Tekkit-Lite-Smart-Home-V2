@@ -2,7 +2,7 @@
 
 The main OS owns all window positions, taskbars, menus and hit testing. Monitor clients relay touches and render addressed colour frames. Each monitor has an independent desktop and a taskbar on its bottom row. Advanced monitors show filled panels, coloured title bars/buttons and wire swatches through CC 1.5's character-cell foreground/background API. Standard monitors receive a monochrome fallback.
 
-For this bundled-v10 UI, update the `server` role and Coffee using the same installer paste. Existing bundled-v8 monitor bridges remain compatible. A successful OS role install extracts embedded files and does not test GitHub connectivity; app installation makes a separate GitHub request, using the confirmed working API route first.
+Bundled-v11 updates the `server` role for its bottom-row console and the `monitor` role for calibration. Coffee and resizing are unchanged from bundled-v10; there is no need to reinstall Coffee. Existing bundled-v8 monitor bridges remain compatible with the display frames. Role installation extracts embedded files without GitHub requests; optional app installation uses the confirmed working API route first.
 
 ## Desktop appearance and OS settings
 
@@ -71,7 +71,9 @@ The renderer and hit tester use the same title-button rectangles. App content st
 
 Each new frame has an increasing ID. A monitor discards older frames; an input revision prevents an old/duplicate tap from advancing a page twice or activating a control on a changed screen. Stale touches request a fresh frame so a lost reply does not leave the UI waiting for the next announcement. The monitor buffers input/modem events during yielding peripheral operations, retaining the revision visible when each touch arrived.
 
-For a physical/native coordinate offset, stop the bridge with Ctrl+T and run `clients_monitor_client calibrate [side]`. With one monitor, omit the side. Tap the centre of each of three white `+` targets and reboot. All three must agree on the same offset (at most three cells); otherwise nothing is saved. Offsets are per monitor side in `configs_monitor.txt` under `touchOffsets`, and are applied before forwarding coordinates. Repeat after a text-scale change if necessary. Calibration does not alter app state or window positions.
+For a physical/native coordinate offset, stop the bridge with Ctrl+T, run `cd /`, then `clients_monitor_client.lua calibrate [side]`. Include `.lua`; with one monitor, omit the side. Tap the centre of all three white `+` targets and reboot after the success message. Bundled-v11 collects every sample before comparing them. A median offset is accepted only when every sample is within one cell of that median on each axis, and all measured corrections are within three cells. This tolerates adjacent-cell tap rounding without silently accepting larger disagreements.
+
+If samples differ too much, Retry and Cancel appear on the monitor; the old offset remains unchanged. You can also press R/C on the computer, including to restart/cancel during sampling. Taps far from the current target do not advance it, and show an instruction on the monitor. The computer prints each expected/received coordinate and correction. Save failures are reported without discarding the previous offset. Offsets are per monitor side in `configs_monitor.txt` under `touchOffsets`, and are applied before forwarding coordinates. Repeat after a text-scale change if necessary. Calibration does not alter app state or window positions.
 
 ## Persistence and app lifecycle
 

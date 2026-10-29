@@ -58,7 +58,8 @@ local function validApp(app)
         and (not app.maxHeight or app.maxHeight >= (app.minHeight or 2))
 end
 
-function Server.new(net, storage, config)
+function Server.new(net, storage, config, logger)
+    local log = logger or print
     local loaded, source = storage.load(config.saveFile, validState)
     local state = loaded or {}
     for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
@@ -76,7 +77,7 @@ function Server.new(net, storage, config)
         lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}}
     local api, errors = {}, {}
     server.api = api
-    api.ui = Gui
+    api.ui, api.log = Gui, log
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
         local monitor = server.monitors[id]
@@ -101,15 +102,15 @@ function Server.new(net, storage, config)
     state.desktopVersion = 2
     state.bootCounter = (tonumber(state.bootCounter) or 0) + 1
     server.session = tostring(net.id) .. ":" .. state.bootCounter
-    if source and source ~= config.saveFile then print("Recovered state from " .. source) end
-    if not loaded and fs.exists(config.saveFile) then print("Unreadable OS state; starting with defaults") end
+    if source and source ~= config.saveFile then log("Recovered state from " .. source) end
+    if not loaded and fs.exists(config.saveFile) then log("Unreadable OS state; starting with defaults") end
 
     function server.save()
         local saved = {}
         for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides",
             "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance"}) do saved[name] = state[name] end
         local ok, err = storage.save(config.saveFile, saved)
-        if not ok then print("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
+        if not ok then log("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
         return ok, err
     end
     api.save = server.save
@@ -140,7 +141,7 @@ function Server.new(net, storage, config)
         local ok, a, b = pcall(app[hook], ...)
         if not ok then
             local key = name .. "." .. hook
-            if errors[key] ~= a then print("App " .. key .. " failed: " .. tostring(a)); errors[key] = a end
+            if errors[key] ~= a then log("App " .. key .. " failed: " .. tostring(a)); errors[key] = a end
         end
         return ok, a, b
     end
@@ -217,7 +218,7 @@ function Server.new(net, storage, config)
         local snapshot = outputSnapshot(clientId)
         for side in pairs(snapshot) do
             if not client.capabilities[side] then
-                print("IO " .. clientId .. ": mapped side " .. side .. " is unavailable")
+                log("IO " .. clientId .. ": mapped side " .. side .. " is unavailable")
                 snapshot[side] = nil
             end
         end
@@ -824,7 +825,7 @@ function Server.new(net, storage, config)
             for _, otherGroup in pairs(groups) do
                 local other = otherGroup[id]
                 if other and (otherGroup ~= group or (other.online and other.computerId ~= message.sender)) then
-                    print("Duplicate clientId rejected: " .. id .. " (computer " .. message.sender .. ")")
+                    log("Duplicate clientId rejected: " .. id .. " (computer " .. message.sender .. ")")
                     return
                 end
             end
@@ -852,7 +853,7 @@ function Server.new(net, storage, config)
                 end
             end
             net.toClient(client, {type = "welcome", clientId = id, nonce = message.nonce, serverSession = server.session})
-            if reconnect then print(message.clientType .. " connected: " .. id .. " (computer " .. message.sender .. ")") end
+            if reconnect then log(message.clientType .. " connected: " .. id .. " (computer " .. message.sender .. ")") end
             if message.clientType == "io" then
                 client.ackedRevision = -1
                 server.syncIO(id, false)
@@ -918,8 +919,8 @@ function Server.new(net, storage, config)
                     if ok and validApp(app) then
                         server.apps[name], state.appRegistry[name] = app, true
                         if type(state.appStates[name]) ~= "table" then state.appStates[name] = {} end
-                        print("Loaded app: " .. name)
-                    else print("Cannot load app " .. name .. ": " .. tostring(app)) end
+                        log("Loaded app: " .. name)
+                    else log("Cannot load app " .. name .. ": " .. tostring(app)) end
                 end
             end
         end
@@ -928,8 +929,8 @@ function Server.new(net, storage, config)
         end
         for _, name in ipairs(sortedKeys(server.systemApps)) do if hasViews(name) then startApp(name) end end
         net.ensureModem()
-        print("SmartHome OS computer " .. net.id .. ", network " .. net.config.networkId)
-        if not net.modem then print("Attach a wireless modem; waiting...") end
+        log("SmartHome OS computer " .. net.id .. ", network " .. net.config.networkId)
+        if not net.modem then log("Attach a wireless modem; waiting...") end
     end
 
     function server.tick(now)
@@ -938,7 +939,7 @@ function Server.new(net, storage, config)
             for id, client in pairs(group) do
                 if client.online and now - client.lastSeen >= config.clientTimeout then
                     client.online = false
-                    print("Client offline: " .. id)
+                    log("Client offline: " .. id)
                     if client.values then
                         if client.values.playerOnline ~= nil then server.playerOnline = false end
                         if client.values.gameTime ~= nil then server.gameTime = "?:??" end
@@ -970,9 +971,10 @@ function Server.new(net, storage, config)
             "set <name> <on|off> | toggle <name>",
             "open <app> <monitor> | close <windowId>",
             "move <id> <x> <y> | resize <id> <width> <height>",
-            "save | quit (saves and exits)",
+            "clear | save | quit (saves and exits)",
         } end
-        if cmd == "clients" then
+        if cmd == "clear" then return {}, false, "clear"
+        elseif cmd == "clients" then
             local lines = {}
             for _, item in ipairs(api.getClients()) do
                 lines[#lines + 1] = item.id .. " " .. item.type .. " " .. (item.online and "ONLINE" or "offline")

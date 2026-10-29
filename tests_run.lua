@@ -33,6 +33,7 @@ local function combine(a, b)
     end
     return result
 end
+local monitor
 local function newBus()
     local bus = {now = 0, computers = {}, events = {}, timers = {}, wire = {}}
     function bus.queue(comp, event)
@@ -98,6 +99,8 @@ local function newBus()
             comp.log[#comp.log + 1] = table.concat(parts, " ")
         end
         env.write = function() end
+        comp.terminal = options.terminal or monitor(51, 19)
+        env.term = comp.terminal
         env.textutils = {serialize = serialize, unserialize = unserialize}
         env.colors = {combine = combine}
         local colorNames = {"white", "orange", "magenta", "lightBlue", "yellow", "lime", "pink", "gray",
@@ -252,11 +255,16 @@ local function newBus()
         end
         env.dofile = function(path)
             local value = assert(env.loadfile(path))()
-            if path == "lib_server.lua" or path == "lib_io.lua" or path == "lib_monitor.lua" then
+            if path == "lib_server.lua" or path == "lib_io.lua" or path == "lib_monitor.lua" or path == "lib_console.lua" then
                 local constructor = value.new
                 value.new = function(...)
                     local object = constructor(...)
-                    if path == "lib_server.lua" then comp.server = object else comp.client = object end
+                    if path == "lib_server.lua" then comp.server = object
+                    elseif path == "lib_console.lua" then
+                        comp.console = object
+                        local log = object.log
+                        object.log = function(...) env.print(...); return log(...) end
+                    else comp.client = object end
                     return object
                 end
             end
@@ -284,7 +292,7 @@ local function newBus()
     end
     return bus
 end
-local function monitor(width, height)
+monitor = function(width, height)
     local screen = {width = width, height = height, lines = {}, fg = {}, bg = {}, x = 1, y = 1,
         foreground = 1, background = 32768, colour = true, writes = 0}
     function screen.setTextScale(scale) screen.scale = scale end
@@ -298,6 +306,8 @@ local function monitor(width, height)
         screen.background = colour
     end
     function screen.getSize() return screen.width, screen.height end
+    function screen.getCursorPos() return screen.x, screen.y end
+    function screen.setCursorBlink(value) screen.blink = value end
     function screen.clear() screen.lines, screen.fg, screen.bg = {}, {}, {} end
     function screen.setCursorPos(x, y)
         assert(x >= 1 and y >= 1 and x == math.floor(x) and y == math.floor(y), "Invalid monitor cursor")
@@ -859,7 +869,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v10", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v11", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -1291,6 +1301,7 @@ end
 assert(hostLoadfile("tests_coffee.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_desktop.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_appearance.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
+assert(hostLoadfile("tests_console.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 local names, failures = {}, {}
 for name in pairs(tests) do names[#names + 1] = name end
 table.sort(names)

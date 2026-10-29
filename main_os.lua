@@ -2,6 +2,7 @@
 local storage = dofile("lib_storage.lua")
 local Network = dofile("lib_network.lua")
 local Server = dofile("lib_server.lua")
+local Console = dofile("lib_console.lua")
 local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
 local config = storage.config("configs_os.txt", {
     saveFile = "configs_os_state.txt", tickInterval = 0.5,
@@ -11,13 +12,14 @@ assert(type(config.enabledApps) == "table", "Invalid enabledApps setting")
 for _, name in ipairs({"tickInterval", "saveInterval", "clientTimeout", "retryInterval"}) do
     assert(type(config[name]) == "number" and config[name] > 0, "Invalid OS setting: " .. name)
 end
-local net = Network.new(networkConfig, true)
-local server = Server.new(net, storage, config)
+local console = Console.new(term)
+local net = Network.new(networkConfig, true, console.log)
+local server = Server.new(net, storage, config, console.log)
 server.start()
-print("Type help for commands")
+console.log("Type help for commands; clear clears this console")
 
--- parallel gives the console and network independent event queues. read() cannot
--- discard modem/timer events needed by the server, and there is no sleep in it.
+-- The bottom-row editor owns its cursor independently of asynchronous logs.
+-- Network/timer events continue while commands are being edited.
 parallel.waitForAny(function()
     local timer = os.startTimer(config.tickInterval)
     while true do
@@ -34,9 +36,12 @@ parallel.waitForAny(function()
     end
 end, function()
     while true do
-        write("> ")
-        local lines, quit = server.command(read())
-        for _, line in ipairs(lines) do print(line) end
-        if quit then return end
+        local line = console.handle(os.pullEvent())
+        if line ~= nil then
+            local lines, quit, action = server.command(line)
+            if action == "clear" then console.clear() end
+            for _, output in ipairs(lines) do console.log(output) end
+            if quit then console.finish(); return end
+        end
     end
 end)

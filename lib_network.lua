@@ -8,7 +8,8 @@ local function integer(value, low, high)
         and value >= low and value <= high
 end
 
-function Network.new(config, isServer)
+function Network.new(config, isServer, logger)
+    local log = logger or print
     assert(type(config.networkId) == "string" and #config.networkId > 0,
         "Set networkId in configs_network.txt")
     assert(integer(config.channel, 1, 65532), "Invalid network channel")
@@ -31,7 +32,7 @@ function Network.new(config, isServer)
                     local ok = pcall(modem.open, net.listenChannel)
                     if ok then
                         net.modem, net.side = modem, side
-                        print("Wireless modem: " .. side .. ", channel " .. net.listenChannel)
+                        log("Wireless modem: " .. side .. ", channel " .. net.listenChannel)
                         return true
                     end
                 end

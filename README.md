@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twelve runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v10`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all thirteen runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v11`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -39,7 +39,7 @@ For direct file copying instead, preserve these paths:
 | Role | Required files |
 | --- | --- |
 | All roles | `lib_network.lua`, `lib_storage.lua` |
-| Central OS | Also `main_os.lua`, `lib_server.lua`, `lib_io_picker.lua`, `lib_desktop.lua`, `lib_settings.lua` |
+| Central OS | Also `main_os.lua`, `lib_server.lua`, `lib_console.lua`, `lib_io_picker.lua`, `lib_desktop.lua`, `lib_settings.lua` |
 | IO client | Also `clients_io_client.lua`, `lib_io.lua` |
 | Monitor client | Also `clients_monitor_client.lua`, `lib_monitor.lua` |
 
@@ -64,7 +64,7 @@ The installer decodes the API's base64 content using Lua 5.1, checks the filenam
 
 These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
 
-The first optional app is [Coffee](documentation_coffee.md), adapted from the original standalone timer. Run `inst app coffee` on the OS computer to fetch it from GitHub. It starts automatically at every OS boot without a window. Use Menu → Settings for its IO, durations and UI colour. Install the current bundled-v10 OS and keep the new Coffee file on GitHub before downloading the app. Existing bundled-v8 monitor clients understand these frames; this update does not require reinstalling them or the IO clients.
+The first optional app is [Coffee](documentation_coffee.md), adapted from the original standalone timer. Run `inst app coffee` on the OS computer to fetch it from GitHub. It starts automatically at every OS boot without a window. Use Menu → Settings for its IO, durations and UI colour. Install the current bundled-v11 OS and keep the current Coffee file on GitHub before downloading the app. Coffee and window resizing are unchanged from bundled-v10. Existing bundled-v8 monitor clients understand these frames; install the bundled-v11 monitor role for its improved calibration flow. IO clients do not need this update.
 
 ### Confirm connection and test a wire
 
@@ -86,6 +86,8 @@ set test off
 Connect a bundled cable on the IO computer's **left** side, and observe its white channel. `outputs` should show `confirmed` after the IO client acknowledges each state. `inputs io_11` displays bundled masks and ordinary redstone, including zero/false readings. For ordinary redstone, use `map lamp io_11 front digital`.
 
 The OS owns the complete output mask of every mapped cable side: unmapped colours on that side are OFF. Do not drive the same side with a second program. Mapping a logical output to a new side/client clears its previous wires and retains its desired state. A logical output is independent of the IO computer's identity and physical wire address.
+
+The OS console keeps its command prompt on the bottom row and displays messages above it. Connection/status messages preserve your current draft and insertion cursor. Left/Right, Home/End, Backspace/Delete and Up/Down command history are supported. Long input scrolls horizontally. Type `clear` to clear the console messages; apps, outputs, monitor windows and saved state keep running. `quit` saves and returns to CraftOS. App code should use `api.log(...)` for messages instead of writing to the local terminal directly.
 
 To configure autorun during installation, use `install server --startup`, `install io --startup`, or `install monitor --startup`. If you downloaded the installer as `inst`, use `inst` instead of `install`. An existing boot script is backed up as `startup.pre_update` before replacement. Autorun runs when the ComputerCraft computer boots; the program does not execute while its chunk is unloaded. A Lua program error without a reboot does not rerun `startup` automatically.
 
@@ -135,7 +137,7 @@ Coffee's Pause/Resume, Harvest now and Menu controls remain available at every s
 
 Advanced monitors now draw a coloured desktop, filled title bars/panels/buttons and wire-colour swatches. Drawing uses CC 1.5 foreground/background colours on character cells; it needs no `blit` or pixel API. Incoming modem/touch events are buffered while peripheral drawing waits. Frame ordering prevents a delayed frame from restoring an older page; touches retain the revision of the screen seen when they arrived, so duplicate/stale taps cannot apply an action twice. Clock-only repaints do not invalidate otherwise-current taps.
 
-If physical touches still appear offset, stop the monitor client with Ctrl+T and run `clients_monitor_client calibrate` (or add its side, such as `top`, if several monitors are attached). Tap the centre of each of three white `+` targets, then `reboot`. Calibration saves a measured per-side offset in `configs_monitor.txt`; inconsistent samples are rejected. Repeat calibration after changing text scale if needed. The OS does not apply a guessed global row offset.
+If physical touches still appear offset, stop the monitor client with Ctrl+T, run `cd /`, then `clients_monitor_client.lua calibrate` (or add its side, such as `right`, if several monitors are attached). Include `.lua`: the target CraftOS does not resolve the shorter name. Tap the centre of all three white `+` targets, then `reboot`. Bundled-v11 uses the median correction when each sample is within one cell of it and every correction stays within three cells. Larger disagreements show Retry/Cancel on the monitor; R/C on the computer also work, without replacing the previous offset. Sample coordinates are printed on the computer for diagnosis. Calibration saves per-side offsets in `configs_monitor.txt`. Repeat after changing text scale if needed.
 
 The OS resolves touches from coordinates and stacking order. Clients do not invent window IDs. From the OS console you can also use:
 

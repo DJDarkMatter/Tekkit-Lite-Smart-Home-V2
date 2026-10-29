@@ -23,15 +23,21 @@ local client = Monitor.new(net, config)
 print("Monitor client: " .. config.clientId)
 client.scan()
 if args[1] then
-    assert(args[1] == "calibrate" and not args[3], "Usage: clients_monitor_client calibrate [side]")
+    assert(args[1] == "calibrate" and not args[3], "Usage: clients_monitor_client.lua calibrate [side]")
     local side = args[2] or next(client.devices)
     assert(side, "Attach a monitor first")
     print("Calibrating " .. side .. ": tap the centre of each white +")
     local offset, err = client.calibrate(side)
-    assert(offset, err)
-    config.touchOffsets[side] = offset
-    assert(storage.save("configs_monitor.txt", config))
-    print("Saved touch offset: x=" .. offset.x .. " y=" .. offset.y)
+    local saved = false
+    if offset then
+        local previous = config.touchOffsets[side]
+        config.touchOffsets[side] = offset
+        local ok, saveError = storage.save("configs_monitor.txt", config)
+        if ok then saved, err = true, "Saved touch offset: x=" .. offset.x .. " y=" .. offset.y
+        else config.touchOffsets[side], err = previous, "Cannot save calibration: " .. tostring(saveError) end
+    end
+    print(err)
+    client.showStatus(side, saved and "Calibration saved; reboot" or offset and "Calibration not saved; reboot" or "Calibration cancelled; reboot")
     print("Reboot to return to the monitor client")
     return
 end

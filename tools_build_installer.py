@@ -4,7 +4,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 PATHS = [
-    "lib_storage.lua", "lib_network.lua", "lib_gui.lua", "lib_settings.lua", "lib_io_picker.lua", "lib_desktop.lua", "lib_server.lua", "lib_io.lua", "lib_monitor.lua",
+    "lib_storage.lua", "lib_network.lua", "lib_console.lua", "lib_gui.lua", "lib_settings.lua", "lib_io_picker.lua", "lib_desktop.lua", "lib_server.lua", "lib_io.lua", "lib_monitor.lua",
     "main_os.lua", "clients_io_client.lua", "clients_monitor_client.lua",
 ]
 
@@ -14,7 +14,7 @@ def lua_string(value):
         equals += "="
     return "[" + equals + "[" + value + "]" + equals + "]"
 
-header = '''-- SmartHome OS installer: bundled-v10
+header = '''-- SmartHome OS installer: bundled-v11
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor [--startup]
@@ -28,7 +28,7 @@ runner = r'''}
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v10")
+print("SmartHome installer: bundled-v11")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor [--startup]")
@@ -174,6 +174,7 @@ else
     files = {"lib_storage.lua", "lib_network.lua"}
     if role ~= "io" then files[#files + 1] = "lib_gui.lua" end
     if role == "server" then
+        files[#files + 1] = "lib_console.lua"
         files[#files + 1] = "lib_settings.lua"
         files[#files + 1] = "lib_io_picker.lua"
         files[#files + 1] = "lib_desktop.lua"
