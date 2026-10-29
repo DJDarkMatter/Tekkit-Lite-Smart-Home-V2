@@ -859,7 +859,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v9", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v10", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -927,6 +927,21 @@ function tests.app_installer_fetches_only_the_requested_app_and_defers_execution
     bus.advance(2.5)
     equal(comp.server.state.appStates.test_app.elapsed, 102.5, "An explicitly enabled service runs without windows")
 end
+local function githubFile(name, contents)
+    local alphabet, encoded = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", {}
+    for index = 1, #contents, 3 do
+        local a, b, c = contents:byte(index, index + 2)
+        local value = a * 65536 + (b or 0) * 256 + (c or 0)
+        for shift = 18, 0, -6 do
+            local digit = math.floor(value / 2 ^ shift) % 64
+            encoded[#encoded + 1] = alphabet:sub(digit + 1, digit + 1)
+        end
+        if not b then encoded[#encoded - 1] = "=" end
+        if not c then encoded[#encoded] = "=" end
+    end
+    return '{"type":"file","name":"' .. name .. '","encoding":"base64","size":' .. #contents
+        .. ',"content":"' .. table.concat(encoded) .. '\\n"}'
+end
 function tests.app_installer_github_default_downloads_one_app_without_running_or_resetting_it()
     local bus = newBus()
     local comp = bus.computer(10, "server")
@@ -942,10 +957,10 @@ function tests.app_installer_github_default_downloads_one_app_without_running_or
     local app = '_G.githubAppExecuted=true; return {background=function(dt,s) s.elapsed=(s.elapsed or 0)+dt end}'
     local downloads, closed = 0, false
     comp.env.http = {get = function(url)
-        equal(url, "https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/main/apps_test_app.lua")
+        equal(url, "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/apps_test_app.lua?ref=main")
         downloads = downloads + 1
         coroutine.yield("http_success") -- CC 1.5 cannot yield through pcall.
-        return {readAll = function() return app end, close = function() closed = true end}
+        return {readAll = function() return githubFile("apps_test_app.lua", app) end, close = function() closed = true end}
     end}
     local thread = coroutine.create(function() install("app", "test_app") end)
     local ok, event = coroutine.resume(thread)
@@ -980,9 +995,9 @@ function tests.app_installer_github_can_select_a_branch_or_commit()
         install("server")
         local closed = false
         comp.env.http = {get = function(url)
-            equal(url, "https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/" .. ref .. "/apps_coffee.lua")
+            equal(url, "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/apps_coffee.lua?ref=" .. ref)
             return {getResponseCode = function() return 200 end,
-                readAll = function() return "return {}" end, close = function() closed = true end}
+                readAll = function() return githubFile("apps_coffee.lua", "return {}") end, close = function() closed = true end}
         end}
         install("app", "coffee", "--ref", ref)
         equal(closed, true)
@@ -1032,7 +1047,7 @@ function tests.app_installer_github_failures_preserve_existing_code_settings_and
     end
 end
 
-function tests.app_installer_github_api_fallback_handles_raw_failure_native_errors_and_yields()
+function tests.app_installer_github_raw_fallback_handles_api_failure_native_errors_and_yields()
     for _, failure in ipairs({"nil", "native_error", "html", "error_handle"}) do
         local comp = newBus().computer(10, "server")
         comp.env.shell = {dir = function() return "" end}
@@ -1048,16 +1063,16 @@ function tests.app_installer_github_api_fallback_handles_raw_failure_native_erro
         comp.env.http = {get = function(url)
             requests[#requests + 1] = url
             if #requests == 1 then
+                equal(url, "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/apps_coffee.lua?ref=main")
                 coroutine.yield("http_failure")
                 if failure == "nil" then return nil end -- Original screenshot: no error reason.
                 if failure == "native_error" then error("Access denied") end
                 if failure == "html" then return response(200, "<!DOCTYPE html>") end
                 return nil, "Forbidden", response(403, "{}")
             end
-            equal(url, "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/apps_coffee.lua?ref=main")
+            equal(url, "https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/main/apps_coffee.lua")
             coroutine.yield("http_success")
-            return response(200, '{"type":"file","name":"apps_coffee.lua","encoding":"base64",'
-                .. '"size":10,"content":"cmV0dXJuIHt9Cg==\\n"}')
+            return response(200, "return {}\n")
         end}
         local work = coroutine.create(function() install("app", "coffee") end)
         local ok, event = coroutine.resume(work)
@@ -1071,7 +1086,7 @@ function tests.app_installer_github_api_fallback_handles_raw_failure_native_erro
         equal(comp.disk.files["apps_coffee.lua"], "return {}\n")
         equal(comp.disk.files["configs_os_state.txt"], saved)
         equal(unserialize(comp.disk.files["configs_os.txt"]).enabledApps.coffee, true)
-        assert(table.concat(comp.log, "\n"):find("Downloaded via GitHub API", 1, true))
+        assert(table.concat(comp.log, "\n"):find("Downloaded via GitHub raw", 1, true))
     end
 end
 

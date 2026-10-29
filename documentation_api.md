@@ -6,7 +6,7 @@ The installer contains no apps. A user app is a Lua file returning an app table,
 
 Explicit installation uses the same installer: `inst app APP_NAME` downloads the root file `apps_APP_NAME.lua` from `DJDarkMatter/Tekkit-Lite-Smart-Home-V2` on GitHub (`main` branch). `inst app APP_NAME --ref BRANCH_OR_COMMIT` selects another ref. Apps therefore need no separate Pastebin upload. Optional alternatives remain `inst app APP_NAME PASTE_ID` or `inst app APP_NAME --file /path/to/app.lua`. The installer checks syntax, installs the file and enables that one app for the next OS start. It preserves existing settings, startup and saved app state, backing up replaced code/settings. It does not execute the app at install time. GitHub mode uses the CC 1.5 `http.get` API; role installation remains offline and app-free.
 
-Bundled-v7 tries the raw file first, then the GitHub contents API if needed. The API response is decoded from base64 without `textutils.unserializeJSON`; it must describe the requested filename with a matching decoded size and valid Lua. Request exceptions are caught through a child coroutine so CC 1.5 HTTP can still yield; response handles are closed and termination aborts without retrying. Failures print separate raw/API reasons before any app/settings replacement. Server network restrictions and Java TLS failures require server-side investigation.
+Bundled-v10 tries GitHub's contents API first (confirmed working on the target server), then the raw file if needed. The API response is decoded from base64 without `textutils.unserializeJSON`; it must describe the requested filename with a matching decoded size and valid Lua. Request exceptions are caught through a child coroutine so CC 1.5 HTTP can still yield; response handles are closed and termination aborts without retrying. Failures print separate raw/API reasons before any app/settings replacement. Server network restrictions and Java TLS failures require server-side investigation.
 
 ```lua
 local app = {minWidth = 18, minHeight = 4, preferredWidth = 30, preferredHeight = 10}
@@ -61,7 +61,7 @@ Hooks must return promptly and must not call `sleep`, `read`, `os.pullEvent`, HT
 | `api.openApp(name, monitorId, x, y, width, height)` | `windowId, error`; geometry optional, outer dimensions |
 | `api.closeWindow(windowId)` | `ok, error`; closes only this view and stops a normal app after its last view |
 | `api.placeWindow(windowId, x, y, width, height)` | `ok, error`; nil fields retain the old values |
-| `api.layoutWindow(windowId, mode)` | `ok, error`; maximize, restore, left/right/top/bottom, top_left/top_right/bottom_left/bottom_right |
+| `api.layoutWindow(windowId, mode)` | `ok, error`; maximize, restore, left/right/top/bottom, top_left/top_right/bottom_left/bottom_right, or `grid_CxR_X_Y` for 1–3 columns/rows and a 1-based column/row position (e.g. `grid_3x3_2_3`) |
 | `api.getAppColour(appName)` | Saved app accent, default blue; shared by all its views |
 | `api.setAppColour(appName, colour)` | `ok, error`; validates/saves or rolls back on failure |
 | `api.pickColour(windowId)` | Opens the shared palette for this window's app; selection saves automatically |
@@ -152,6 +152,6 @@ Optional per-side `touchOffsets` in `configs_monitor.txt` are measured with `cli
 
 A future sensor adapter must implement the same announce/welcome/heartbeat process. Once welcomed, send `sensorData` with `varName`, scalar `value`, and `serverSession`. `playerOnline` must be boolean and `gameTime` must be a string; other names remain raw readings under that sensor client. There is no sensor peripheral driver included yet.
 
-The desktop stores normalized free rectangles and named snap zones, and reserves the bottom row for its taskbar. User layout menus and placement are OS overlays, so application hooks need no pointer-drag handling. See [desktop behavior](documentation_desktop.md).
+The desktop stores normalized free rectangles and named snap zones, and reserves the bottom row for its taskbar. Its two-step flyout first chooses a grid, then a pane; choosing the grid alone does not change saved geometry. Resize and Move remain first-level actions. Each pane is partitioned from shared integer boundaries, including thirds. User layout menus and placement are OS overlays, so application hooks need no pointer-drag handling. See [desktop behavior](documentation_desktop.md).
 
 Built-in OS settings lives in `lib_settings.lua` and a private system-app registry, with saved window identifier `@settings`. It is always offered by Start and requires no `enabledApps` entry or app download. User-app registration/consent remains separate. The saved state's `appearance` table holds `backgroundColour` and `appColours`; neither is business state in `appStates`. Cosmetic changes checkpoint immediately and roll back on save failure. A future screensaver can extend desktop appearance; only solid background colour is implemented now.

@@ -226,7 +226,11 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(state.outputAddress.side, "front")
         equal(state.outputAddress.color, nil)
         local win = central.server.state.windows[id]
-        bus.queue(display, {"monitor_touch", "top", win.x + 1, win.y + win.height - 3}); bus.pump()
+        local content = app.render(win.width - 2, win.height - 2, state, api, {view = central.server.views[id] or {}})
+        local force
+        for _, hit in ipairs(content.hits) do if hit.action == "force" then force = hit end end
+        assert(force)
+        bus.queue(display, {"monitor_touch", "top", win.x + force.x1, win.y + force.y}); bus.pump()
         equal(state.forced, true)
         bus.advance(1)
         equal(bridge.digital.front, true)
@@ -300,7 +304,11 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local display = bus.computers[13]
         bus.queue(display, {"monitor_touch", "top", win.x + 1, win.y + win.height - 2}); bus.pump()
         equal(central.server.views[first].page, "menu")
-        bus.queue(display, {"monitor_touch", "top", win.x + 1, win.y + 2}); bus.pump()
+        local content = app.render(win.width - 2, win.height - 2, state, central.server.api, {view = central.server.views[first]})
+        local settings
+        for _, hit in ipairs(content.hits) do if hit.action == "settings" then settings = hit end end
+        assert(settings)
+        bus.queue(display, {"monitor_touch", "top", win.x + settings.x1, win.y + settings.y}); bus.pump()
         equal(central.server.views[first].page, "settings")
         equal(central.server.views[second].page, nil)
         local before = state.remainingTime

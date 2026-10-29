@@ -1,5 +1,6 @@
 -- System settings, snap diagrams, move nudges and responsive app navigation.
 return function(tests, newBus, monitor, serialize, unserialize, equal)
+    local Desktop = dofile("lib_desktop.lua")
     local file = assert(io.open("apps_coffee.lua", "r"))
     local coffee = file:read("*a"); file:close()
     local function setup(withCoffee, width, height)
@@ -106,13 +107,29 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.api.getOSSettings().backgroundColour, previous)
     end
 
-    function tests.appearance_snap_flyout_has_clickable_diagrams_and_places_the_selected_pane()
+    function tests.appearance_snap_flyout_chooses_grid_before_position_and_keeps_resize_move_on_root()
         local t = setup(true, 81, 25)
         local id = t.open("coffee", "top", 3, 4, 32, 12)
         local function choose(mode)
             local win = t.window(id)
             t.touch("top", win.x + win.width - 5, win.y)
             local model = t.central.server.monitors["monitor_13:top"].layoutMenu
+            if Desktop.gridForMode(mode) then
+                local choice
+                for _, hit in ipairs(model.menuHits) do
+                    if hit.item and hit.item.value == "choose_" .. Desktop.gridForMode(mode) then choice = hit end
+                end
+                assert(choice)
+                local previous = serialize(t.window(id))
+                local root = {}
+                for _, hit in ipairs(model.menuHits) do if hit.item then root[hit.item.value] = true end end
+                assert(root.custom and root.move and root.restore, "Resize/Move/Restore must stay at the first level")
+                t.touch("top", choice.x2, choice.y2 or choice.y)
+                equal(serialize(t.window(id)), previous, "Picking a grid alone must not change geometry")
+                for _, hit in ipairs(model.menuHits) do
+                    assert(not hit.item or (hit.item.value ~= "custom" and hit.item.value ~= "move"), "Position screen contains only panes and navigation")
+                end
+            end
             local selected
             for _, hit in ipairs(model.menuHits) do if hit.item and hit.item.value == mode then selected = hit end end
             assert(selected)
@@ -158,6 +175,140 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.window(id).x, 21); equal(t.window(id).y, 10)
         t.reboot()
         equal(t.window(id).x, 21); equal(t.window(id).y, 10)
+    end
+
+    function tests.appearance_three_by_three_partitions_odd_desktops_and_restores_after_resize_and_reboot()
+        local t = setup(true, 83, 26)
+        local id = t.open("coffee", "top", 3, 4, 32, 12)
+        local function chooseGrid()
+            local win = t.window(id)
+            t.touch("top", win.x + win.width - 5, win.y)
+            local model = t.central.server.monitors["monitor_13:top"].layoutMenu
+            for _, hit in ipairs(model.menuHits) do
+                if hit.item and hit.item.value == "choose_3x3" then t.touch("top", hit.x1, hit.y); return model end
+            end
+            error("3x3 grid missing")
+        end
+        local covered = {}
+        for row = 1, 3 do for column = 1, 3 do
+            local model = chooseGrid()
+            local mode = Desktop.gridMode(3, 3, column, row)
+            local hit
+            for _, item in ipairs(model.menuHits) do if item.item and item.item.value == mode then hit = item end end
+            assert(hit and hit.item.enabled)
+            t.touch("top", hit.x2, hit.y2 or hit.y)
+            local win, zone = t.window(id), Desktop.zone(mode, {width = 83, height = 26})
+            equal(win.x, zone.x); equal(win.y, zone.y); equal(win.width, zone.width); equal(win.height, zone.height)
+            for y = win.y, win.y + win.height - 1 do for x = win.x, win.x + win.width - 1 do
+                local key = x .. ":" .. y
+                assert(not covered[key], "Grid panes overlap"); covered[key] = true
+            end end
+        end end
+        local count = 0
+        for _ in pairs(covered) do count = count + 1 end
+        equal(count, 83 * 25, "3x3 panes must cover the workspace exactly, excluding the taskbar")
+        local model = chooseGrid()
+        for _, hit in ipairs(model.menuHits) do if hit.item and hit.item.value == "back" then t.touch("top", hit.x1, hit.y); break end end
+        equal(model.grid, nil)
+        for _, hit in ipairs(model.menuHits) do if hit.item and hit.item.value == "cancel" then t.touch("top", hit.x1, hit.y); break end end
+        t.top.width, t.top.height = 86, 29
+        t.bus.advance(1)
+        local zone = Desktop.zone("grid_3x3_3_3", {width = 86, height = 29})
+        equal(t.window(id).x, zone.x); equal(t.window(id).height, zone.height)
+        t.reboot()
+        equal(t.window(id).layout, "grid_3x3_3_3")
+        equal(t.window(id).x, zone.x); equal(t.window(id).width, zone.width)
+        assert(t.api.layoutWindow(id, "restore")); equal(t.window(id).layout, "grid_3x3_2_3")
+    end
+
+    function tests.appearance_layout_picker_bounds_and_hit_regions_fit_small_and_large_monitors()
+        local app = {minWidth = 8, minHeight = 2}
+        local grids = {false, "1x1", "2x1", "1x2", "2x2", "3x1", "1x3", "3x2", "2x3", "3x3"}
+        for _, width in ipairs({10, 15, 25, 27, 40, 43, 81}) do
+            for _, height in ipairs({6, 9, 10, 11, 18, 25}) do
+                for _, grid in ipairs(grids) do
+                    local monitor = {width = width, height = height}
+                    local win = {x = 1, y = 1, width = width, height = height - 1, layout = "normal"}
+                    local _, _, _, _, pages = Desktop.layoutPicker(win, app, monitor, 1, nil, grid)
+                    for page = 1, pages do
+                        local rect, lines, hits = Desktop.layoutPicker(win, app, monitor, page, nil, grid)
+                        assert(rect.x >= 1 and rect.y >= 1 and rect.x + rect.width - 1 <= width and rect.y + rect.height - 1 < height)
+                        equal(#lines, rect.height)
+                        for _, line in ipairs(lines) do equal(#line, rect.width) end
+                        for _, style in ipairs(lines.styles or {}) do
+                            assert(style.x >= 1 and style.y >= 1 and style.width >= 1 and style.height >= 1
+                                and style.x + style.width - 1 <= rect.width and style.y + style.height - 1 <= rect.height)
+                        end
+                        for index, hit in ipairs(hits) do
+                            assert(hit.x1 >= rect.x and hit.x2 < rect.x + rect.width and (hit.y1 or hit.y) >= rect.y and (hit.y2 or hit.y) < rect.y + rect.height)
+                            for other = index + 1, #hits do
+                                local h = hits[other]
+                                assert(hit.x2 < h.x1 or h.x2 < hit.x1 or (hit.y2 or hit.y) < (h.y1 or h.y) or (h.y2 or h.y) < (hit.y1 or hit.y), "Layout hit regions overlap")
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    function tests.appearance_thirds_disable_only_the_positions_too_small_for_coffee()
+        local t = setup(true, 41, 25) -- Thirds are 13,14,14 columns; Coffee needs 14 including its frame.
+        local id = t.open("coffee")
+        local win = t.window(id)
+        t.touch("top", win.x + win.width - 5, win.y)
+        local model = t.central.server.monitors["monitor_13:top"].layoutMenu
+        for _, hit in ipairs(model.menuHits) do
+            if hit.item and hit.item.value == "choose_3x3" then
+                assert(hit.item.enabled); t.touch("top", hit.x1, hit.y); break
+            end
+        end
+        equal(model.grid, "3x3")
+        local disabled, enabled
+        for _, hit in ipairs(model.menuHits) do
+            if hit.item and hit.item.value == "grid_3x3_1_1" then disabled = hit end
+            if hit.item and hit.item.value == "grid_3x3_3_3" then enabled = hit end
+        end
+        assert(disabled.item.enabled == false and enabled.item.enabled)
+        local previous = serialize(win)
+        t.touch("top", disabled.x1, disabled.y)
+        equal(serialize(win), previous); equal(model.error, "Does not fit")
+        t.touch("top", enabled.x2, enabled.y2)
+        equal(t.window(id).layout, "grid_3x3_3_3")
+        equal(t.window(id).x, 28); equal(t.window(id).width, 14); equal(t.window(id).height, 8)
+    end
+
+    function tests.appearance_large_clock_swaps_colours_keeps_original_size_and_clears_previous_digits()
+        local t = setup(true)
+        local id = t.open("coffee", "top", 1, 1, 64, 23)
+        local state = t.central.server.state.appStates.coffee
+        state.remainingTime = 5025 -- 01:23:45, with different shapes across all six digits.
+        t.paint()
+        local function pixels(row)
+            local result = ""
+            for x = 6, 58, 2 do result = result .. (t.top.bg[row][x] == 1 and "1" or "0") end
+            return result
+        end
+        equal(pixels(3), table.concat({"111", "010", "0", "111", "111", "0", "101", "111"}, "0"))
+        -- Same two-cell pixels and full-width clock band as before, with white
+        -- strokes on blue instead of blue strokes on white.
+        equal(t.top.bg[3][3], 2048); equal(t.top.bg[3][62], 2048)
+        equal(t.top.bg[3][6], 1); equal(t.top.bg[4][7], 1)
+        local before = pixels(7)
+        state.remainingTime = 0; t.paint()
+        assert(pixels(7) ~= before, "Changed digits must repaint even though their text cells are spaces")
+        local app = t.central.server.apps.coffee
+        local function textTime()
+            return table.concat(app.render(30, 10, state, t.api, {view = {}}), "\n"):match("(%d+:%d+:%d+)")
+        end
+        equal(textTime(), "00:00:00")
+        state.phase, state.harvestRemaining = "harvest", 59; t.paint()
+        equal(textTime(), "00:00:59")
+        equal(state.remainingTime, 0, "Rendering must not change saved countdown progress")
+        state.phase, state.remainingTime = "countdown", 604800; t.paint()
+        equal(textTime(), "168:00:00")
+        assert(t.api.placeWindow(id, 1, 1, 30, 12)); t.paint()
+        assert(table.concat(t.top.lines, "\n"):find("168:00:00", 1, true), "Small windows still show an ordinary text clock")
     end
 
     function tests.appearance_all_palette_colours_keep_titles_and_coffee_text_readable()

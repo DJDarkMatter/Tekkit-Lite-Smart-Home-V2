@@ -46,13 +46,17 @@ function Gui.content(width, height)
 end
 function Gui.menu(width, height, title, items, page, back, accent)
     local ui = Gui.content(width, height)
+    ui.style(1, 1, width, height, 1, 32768)
     local slots = #items <= height - 2 and height - 2 or height - 3
     local pages = math.max(1, math.ceil(#items / slots))
     page = math.max(1, math.min(page or 1, pages))
     ui.heading(title .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), accent)
+    local gap = pages == 1 and height >= #items * 2 + 2 and 2 or 1
+    local first = height >= #items * gap + 3 and pages == 1 and 3 or 2
+    local inset = width >= 18 and math.max(2, math.floor((width - 32) / 2)) or 0
     for row = 1, slots do
         local item = items[(page - 1) * slots + row]
-        if item then ui.button(row + 1, item.label, item.action, nil, nil, item.enabled) end
+        if item then ui.button(first + (row - 1) * gap, item.label, item.action, 1 + inset, width - inset, item.enabled) end
     end
     if pages > 1 then
         local half = math.floor(width / 2)

@@ -1,5 +1,5 @@
 -- Optional SmartHome OS app. Install explicitly; all logic runs on the OS.
-local app = {title = "Coffee", minWidth = 12, minHeight = 6, preferredWidth = 30, preferredHeight = 10, backgroundService = true}
+local app = {title = "Coffee", minWidth = 12, minHeight = 6, preferredWidth = 38, preferredHeight = 12, backgroundService = true}
 local sinceSave, saveError, notice, runtimeStatus = 0, nil, nil, "Starting"
 local ready, noticeUntil = false, 0
 local steps = {1, 10, 60, 600, 3600}
@@ -184,15 +184,16 @@ local digits = {
 local function largeClock(ui, width, height, value, accent, contrast)
     local total = -1
     for index = 1, #value do total = total + #digits[value:sub(index, index)][1] + 1 end
+    -- Preserve the original font, size and scaling; only reverse its colours.
     local scale = height >= 20 and width >= total * 2 and 2 or 1
     local x = 1 + math.floor((width - total * scale) / 2)
-    ui.style(1, 2, width, 5 * scale, nil, contrast)
+    ui.style(1, 2, width, 5 * scale, nil, accent)
     for index = 1, #value do
         local pattern = digits[value:sub(index, index)]
         for row, pixels in ipairs(pattern) do
             for column = 1, #pixels do
                 if pixels:sub(column, column) == "1" then
-                    ui.style(x + (column - 1) * scale, 2 + (row - 1) * scale, scale, scale, nil, accent)
+                    ui.style(x + (column - 1) * scale, 2 + (row - 1) * scale, scale, scale, nil, contrast)
                 end
             end
         end
@@ -203,6 +204,7 @@ end
 local function build(width, height, state, api, context)
     local view = context.view
     local ui = api.ui.content(width, height)
+    ui.style(1, 1, width, height, 1, 32768)
     local accent = api.getAppColour(context.appName or "coffee")
     local page = view.page or "main"
     local half = math.floor(width / 2)
@@ -219,7 +221,8 @@ local function build(width, height, state, api, context)
             title, back = "Settings", "menu"
             items = {{label = width >= 16 and "Player input" or "Player IO", action = "input"},
                 {label = width >= 16 and "Harvest output" or "Harvest IO", action = "output"},
-                {label = "Countdown", action = "countdown"}, {label = "Harvest time", action = "harvest"},
+                {label = width >= 28 and "Countdown  " .. clock(state.config.countdown) or "Countdown", action = "countdown"},
+                {label = width >= 28 and "Harvest time  " .. clock(state.config.harvest) or "Harvest time", action = "harvest"},
                 {label = "UI colour", action = "colour"}}
         else
             title, back = "Maintenance", "menu"
@@ -252,19 +255,17 @@ local function build(width, height, state, api, context)
         button(height - 1, "Confirm", page == "reset" and "confirmReset" or "confirmImport", nil, nil, true, 16384)
         button(height, "Cancel", "maintenance")
     else
-        local large = width >= 32 and height >= 14
         local inline = width >= 36 and height >= 8
-        local statusRow, infoRow = 3, 4
         local limit = height - (inline and 1 or 3)
         local remaining = state.phase == "harvest" and state.harvestRemaining or state.remainingTime
+        local value = clock(remaining)
         ui.heading(state.phase == "harvest" and "Harvesting" or "Next harvest", accent)
-        if large then
-            statusRow = 2 + largeClock(ui, width, height, clock(remaining), accent, api.ui.contrast(accent))
-            infoRow = statusRow + 1
-        else
-            ui.text(2, clock(remaining), true)
-            ui.style(1, 2, width, 1, api.ui.contrast(accent) == 1 and accent or 32768, 1)
-        end
+        local large = width >= 32 and height >= 14
+        local timeRow = height >= 10 and 3 or 2
+        local statusRow = large and 2 + largeClock(ui, width, height, value, accent, api.ui.contrast(accent))
+            or height >= 10 and 5 or 3
+        local infoRow = statusRow + (height >= 10 and 2 or 1)
+        if not large then ui.text(timeRow, value, true) end
         local status = saveError and "Save failed" or notice or runtimeStatus
         if width < 20 then
             local compact = {["Set harvest IO"] = "Set output", ["Set online output first"] = "Need output",
@@ -272,34 +273,36 @@ local function build(width, height, state, api, context)
             status = compact[status] or status
         end
         ui.text(statusRow, status, true)
+        ui.style(1, statusRow, width, 1, 1, saveError and 16384 or 128)
         local player = api.readInput(state.playerInput)
-        local details = {"Player: " .. (player == nil and "?" or player and (width < 16 and "on" or "online")
-            or (width < 16 and "off" or "away"))}
-        if width >= 36 then details[#details + 1] = "Harvests: " .. state.tripHarvests .. " trip / " .. state.totalHarvests .. " total"
-        elseif width >= 24 then details[#details + 1] = "Trip: " .. state.tripHarvests .. "  Total: " .. state.totalHarvests
-        else details[#details + 1] = "Total: " .. state.totalHarvests end
-        local available = limit - infoRow + 1
-        if width >= 24 and available - #details >= 2 then
-            details[#details + 1] = "Countdown: " .. clock(state.config.countdown)
-            details[#details + 1] = "Harvest: " .. clock(state.config.harvest)
-        end
-        if width >= 30 and available - #details >= 2 then
-            for _, item in ipairs({{"Input", state.playerInput}, {"Output", state.outputAddress}}) do
-                local address = item[2]
-                details[#details + 1] = address and item[1] .. ": " .. address.clientId .. "/" .. address.side
-                    .. "/" .. (address.color and api.ui.colourName(address.color) or "Digital") or item[1] .. ": not set"
+        local presence = player == nil and "Unknown" or player and "Online" or "Away"
+        if width >= 30 and infoRow + 1 <= limit then
+            local cardWidth = math.floor((width - 3) / 2)
+            local function card(x, title, text)
+                text = text:sub(1, cardWidth)
+                local function put(y, label)
+                    local left = x + math.floor((cardWidth - #label) / 2)
+                    local line = ui.lines[y]
+                    ui.lines[y] = line:sub(1, left - 1) .. label .. line:sub(left + #label)
+                end
+                put(infoRow, title); put(infoRow + 1, text)
+                ui.style(x, infoRow, cardWidth, 1, 256, 32768)
             end
+            card(2, "PLAYER", presence)
+            card(width - cardWidth, "TRIP / TOTAL", state.tripHarvests .. " / " .. state.totalHarvests)
+        else
+            if infoRow <= limit then ui.text(infoRow, "Player: " .. (width < 16 and (player == nil and "?" or player and "on" or "off") or presence), true) end
+            if infoRow + 1 <= limit then ui.text(infoRow + 1, "Total: " .. state.totalHarvests, true) end
         end
-        for index, line in ipairs(details) do if infoRow + index - 1 <= limit then ui.text(infoRow + index - 1, line) end end
         if inline then
-            local third = math.floor(width / 3)
+            local third = math.floor((width - 2) / 3)
             button(height, state.paused and "Resume" or "Pause", "pause", 1, third, true, accent)
-            button(height, state.phase == "harvest" and "Active" or "Harvest now", "force", third + 1, 2 * third, state.phase ~= "harvest", 2)
-            button(height, "Menu", "menu", 2 * third + 1, width)
+            button(height, state.phase == "harvest" and "Active" or "Harvest now", "force", third + 2, 2 * third + 1, state.phase ~= "harvest", 128)
+            button(height, "Menu", "menu", 2 * third + 3, width)
         else
             button(height - 2, state.paused and "Resume" or "Pause", "pause", nil, nil, true, accent)
             button(height - 1, state.phase == "harvest" and (width >= 16 and "Harvest active" or "Active") or "Harvest now",
-                "force", nil, nil, state.phase ~= "harvest", 2)
+                "force", nil, nil, state.phase ~= "harvest", 128)
             button(height, "Menu", "menu")
         end
     end

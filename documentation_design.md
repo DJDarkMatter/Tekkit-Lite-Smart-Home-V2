@@ -60,7 +60,7 @@ Every monitor has its own desktop managed centrally by the OS:
 
 ### Window Properties
 - Resizable within app-defined min/max limits
-- Top-left controls: close this view, layout menu, minimize. Last-view close stops ordinary apps; background services continue
+- Top-right controls: minimize, layout menu, close this view; title at the far left. Last-view close stops ordinary apps; background services continue
 - Positioned by OS based on available space
 
 ### App Size Categories
@@ -181,4 +181,4 @@ This document is the target architecture, not a claim that every feature is impl
 
 ## Implemented desktop controls
 
-The [desktop guide](documentation_desktop.md) describes the coloured bottom taskbar, left title and top-right controls, graphical snap cards, two-corner custom sizing, coarse placement followed by one-cell move nudges, normalized saved layouts and adaptive app views. Boundary arrows disappear; previews commit only on OK. The OS composes foreground/background colour surfaces per monitor; clients only paint and relay input. Ordered frames, buffered events and input revisions prevent stale screens/touches from reversing UI actions. Optional measured touch calibration stays on each monitor computer. Coffee is a declared background service; ordinary apps run only while at least one view exists.
+The [desktop guide](documentation_desktop.md) describes the coloured bottom taskbar, left title and top-right controls, two-step graphical grid/position selection through 3×3, two-corner custom sizing, coarse placement followed by one-cell move nudges, normalized saved layouts and adaptive app views. Resize and Move stay on the layout menu's first level. Boundary arrows disappear; previews commit only on OK. The OS composes foreground/background colour surfaces per monitor; clients only paint and relay input. Ordered frames, buffered events and input revisions prevent stale screens/touches from reversing UI actions. Optional measured touch calibration stays on each monitor computer. Coffee is a declared background service; ordinary apps run only while at least one view exists.

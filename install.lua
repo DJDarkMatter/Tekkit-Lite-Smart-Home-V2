@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v9
+-- SmartHome OS installer: bundled-v10
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor [--startup]
@@ -210,13 +210,17 @@ function Gui.content(width, height)
 end
 function Gui.menu(width, height, title, items, page, back, accent)
     local ui = Gui.content(width, height)
+    ui.style(1, 1, width, height, 1, 32768)
     local slots = #items <= height - 2 and height - 2 or height - 3
     local pages = math.max(1, math.ceil(#items / slots))
     page = math.max(1, math.min(page or 1, pages))
     ui.heading(title .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), accent)
+    local gap = pages == 1 and height >= #items * 2 + 2 and 2 or 1
+    local first = height >= #items * gap + 3 and pages == 1 and 3 or 2
+    local inset = width >= 18 and math.max(2, math.floor((width - 32) / 2)) or 0
     for row = 1, slots do
         local item = items[(page - 1) * slots + row]
-        if item then ui.button(row + 1, item.label, item.action, nil, nil, item.enabled) end
+        if item then ui.button(first + (row - 1) * gap, item.label, item.action, 1 + inset, width - inset, item.enabled) end
     end
     if pages > 1 then
         local half = math.floor(width / 2)
@@ -529,33 +533,65 @@ function Desktop.free(rect, relative, app, monitor)
         y = clamp(math.floor(y), 1, area.height - height + 1), width = width, height = height}
 end
 
+local grids = {{1, 1}, {2, 1}, {1, 2}, {2, 2}, {3, 1}, {1, 3}, {3, 2}, {2, 3}, {3, 3}}
+local legacyGrids = {maximize = {1, 1, 1, 1}, left = {2, 1, 1, 1}, right = {2, 1, 2, 1},
+    top = {1, 2, 1, 1}, bottom = {1, 2, 1, 2}, top_left = {2, 2, 1, 1}, top_right = {2, 2, 2, 1},
+    bottom_left = {2, 2, 1, 2}, bottom_right = {2, 2, 2, 2}}
+function Desktop.gridMode(columns, rows, column, row)
+    for mode, grid in pairs(legacyGrids) do
+        if grid[1] == columns and grid[2] == rows and grid[3] == column and grid[4] == row then return mode end
+    end
+    return "grid_" .. columns .. "x" .. rows .. "_" .. column .. "_" .. row
+end
+function Desktop.gridForMode(mode)
+    local grid = legacyGrids[mode]
+    if grid then return grid[1] .. "x" .. grid[2] end
+    if type(mode) == "string" then return mode:match("^grid_([1-3]x[1-3])_[1-3]_[1-3]$") end
+end
+local function gridSize(name)
+    if type(name) ~= "string" then return end
+    local columns, rows = name:match("^([1-3])x([1-3])$")
+    return tonumber(columns), tonumber(rows)
+end
 function Desktop.zone(mode, monitor)
     local area = Desktop.area(monitor)
-    local left, top = math.floor(area.width / 2), math.floor(area.height / 2)
-    local zones = {
-        maximize = {1, 1, area.width, area.height},
-        left = {1, 1, left, area.height}, right = {left + 1, 1, area.width - left, area.height},
-        top = {1, 1, area.width, top}, bottom = {1, top + 1, area.width, area.height - top},
-        top_left = {1, 1, left, top}, top_right = {left + 1, 1, area.width - left, top},
-        bottom_left = {1, top + 1, left, area.height - top},
-        bottom_right = {left + 1, top + 1, area.width - left, area.height - top},
-    }
-    local z = zones[mode]
-    if z then return {x = z[1], y = z[2], width = z[3], height = z[4]} end
+    local grid = legacyGrids[mode]
+    local columns, rows, column, row
+    if grid then columns, rows, column, row = unpack(grid)
+    elseif type(mode) == "string" then
+        columns, rows, column, row = mode:match("^grid_([1-3])x([1-3])_([1-3])_([1-3])$")
+        columns, rows, column, row = tonumber(columns), tonumber(rows), tonumber(column), tonumber(row)
+    end
+    if not columns or column > columns or row > rows then return end
+    local left, top = math.floor((column - 1) * area.width / columns), math.floor((row - 1) * area.height / rows)
+    return {x = left + 1, y = top + 1, width = math.floor(column * area.width / columns) - left,
+        height = math.floor(row * area.height / rows) - top}
 end
 
-function Desktop.layoutOptions(win, app, monitor)
-    local options = {{label = "Maximize", value = "maximize"}, {label = "Restore", value = "restore"},
-        {label = "Left half", value = "left"}, {label = "Right half", value = "right"},
-        {label = "Top half", value = "top"}, {label = "Bottom half", value = "bottom"},
-        {label = "Top-left qtr", value = "top_left"}, {label = "Top-right qtr", value = "top_right"},
-        {label = "Bottom-left", value = "bottom_left"}, {label = "Bottom-right", value = "bottom_right"},
-        {label = "Custom area", value = "custom"}, {label = "Move", value = "move"}, {label = "Cancel", value = "cancel"}}
-    for _, item in ipairs(options) do
-        if item.value == "restore" then item.enabled = win.layout ~= nil and win.layout ~= "normal"
-        elseif item.value == "custom" or item.value == "move" or item.value == "cancel" then item.enabled = true
-        else item.enabled = Desktop.fits(Desktop.zone(item.value, monitor), app, monitor) end
+function Desktop.layoutOptions(win, app, monitor, selectedGrid)
+    local options = {}
+    local columns, rows = gridSize(selectedGrid)
+    if columns then
+        for row = 1, rows do for column = 1, columns do
+            local mode = Desktop.gridMode(columns, rows, column, row)
+            options[#options + 1] = {label = "Position " .. ((row - 1) * columns + column), value = mode,
+                enabled = Desktop.fits(Desktop.zone(mode, monitor), app, monitor)}
+        end end
+        options[#options + 1] = {label = "Back", value = "back", enabled = true}
+    else
+        for _, grid in ipairs(grids) do
+            local enabled = false
+            for row = 1, grid[2] do for column = 1, grid[1] do
+                enabled = enabled or Desktop.fits(Desktop.zone(Desktop.gridMode(grid[1], grid[2], column, row), monitor), app, monitor)
+            end end
+            local name = grid[1] .. "x" .. grid[2]
+            options[#options + 1] = {label = name, value = "choose_" .. name, enabled = enabled}
+        end
+        options[#options + 1] = {label = "Restore", value = "restore", enabled = win.layout ~= nil and win.layout ~= "normal"}
+        options[#options + 1] = {label = "Resize", value = "custom", enabled = true}
+        options[#options + 1] = {label = "Move", value = "move", enabled = true}
     end
+    options[#options + 1] = {label = "Cancel", value = "cancel", enabled = true}
     return options
 end
 
@@ -572,47 +608,71 @@ function Desktop.moveArrows(rect, monitor)
     return hits
 end
 
--- Windows-style snap cards: click the actual pane of a miniature desktop.
-function Desktop.layoutPicker(win, app, monitor, page, title)
-    local area, options = Desktop.area(monitor), Desktop.layoutOptions(win, app, monitor)
-    if area.height < 8 then
-        return Desktop.menu(monitor, title or "Layout", options, page, {x = win.x, y = win.y + 1})
+-- First choose a grid; only the second screen places the window in a pane.
+function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
+    local area, options = Desktop.area(monitor), Desktop.layoutOptions(win, app, monitor, selectedGrid)
+    local gridColumns, gridRows = gridSize(selectedGrid)
+    if (area.height < 10 and not gridColumns) or (gridColumns and area.height < gridRows * 2 + 3) then
+        return Desktop.menu(monitor, title or (gridColumns and selectedGrid .. " position" or "Layout"), options, page,
+            {x = win.x, y = win.y + 1})
     end
-    local width = math.min(33, area.width)
-    local columns = width >= 25 and 2 or 1
-    local height = math.min(area.height, 3 + math.ceil(4 / columns) * 4)
-    local rows = math.max(1, math.floor((height - 3) / 4))
-    local paged = rows * columns < 4
-    if paged then rows = math.max(1, math.floor((height - 4) / 4)) end
-    local perPage, pages = rows * columns, math.ceil(4 / (rows * columns))
+    local width = math.min(gridColumns and 35 or 43, area.width)
+    local columns = width >= 40 and 3 or width >= 27 and 2 or 1
+    local height = math.min(area.height, gridColumns and math.max(9, gridRows * 3 + 4) or 3 + math.ceil(#grids / columns) * 6)
+    local rows = math.max(1, math.floor((height - 3) / 6))
+    if rows * columns < #grids then rows = math.max(1, math.floor((height - 4) / 6)) end
+    local perPage, pages = rows * columns, gridColumns and 1 or math.ceil(#grids / (rows * columns))
     page = clamp(page or 1, 1, pages)
     local rect = {x = clamp(win.x + win.width - width, 1, area.width - width + 1),
         y = clamp(win.y + 1, 1, area.height - height + 1), width = width, height = height}
     local ui, byMode = Gui.content(width, height), {}
+    ui.style(1, 1, width, height, 1, 32768)
     for _, item in ipairs(options) do byMode[item.value] = item end
-    ui.heading((title or "Layout") .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), 128)
-    local cards = {"Full", "Columns", "Rows", "Grid"}
-    local cardWidth = math.floor((width - columns - 1) / columns)
-    local function zone(x, y, w, h, mode)
-        local item = byMode[mode]
-        ui.style(x, y, w, h, nil, item.enabled and (win.layout == mode and 2048 or 8) or 256)
+    ui.heading((title or (gridColumns and selectedGrid .. " - position" or "Layout"))
+        .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), 128)
+    local function hit(x, y, w, h, item)
         ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + w - 1, y = y, y1 = y, y2 = y + h - 1, action = "item", item = item}
     end
-    for slot = 1, perPage do
-        local index = (page - 1) * perPage + slot
-        if cards[index] then
-            local x, y = 2 + (slot - 1) % columns * (cardWidth + 1), 2 + math.floor((slot - 1) / columns) * 4
-            local line = ui.lines[y]
-            local label = cards[index]:sub(1, cardWidth)
-            ui.lines[y] = line:sub(1, x - 1) .. label .. line:sub(x + #label)
-            local half = math.floor((cardWidth - 1) / 2)
-            if index == 1 then zone(x, y + 1, cardWidth, 3, "maximize")
-            elseif index == 2 then
-                zone(x, y + 1, half, 3, "left"); zone(x + half + 1, y + 1, cardWidth - half - 1, 3, "right")
-            elseif index == 3 then zone(x, y + 1, cardWidth, 1, "top"); zone(x, y + 3, cardWidth, 1, "bottom")
-            else
-                zone(x, y + 1, half, 1, "top_left"); zone(x + half + 1, y + 1, cardWidth - half - 1, 1, "top_right")
-                zone(x, y + 3, half, 1, "bottom_left"); zone(x + half + 1, y + 3, cardWidth - half - 1, 1, "bottom_right")
+    local function pane(x, y, w, h, mode, label)
+        local item = byMode[mode]
+        local bg = item.enabled and (win.layout == mode and 2048 or 8) or 128
+        ui.style(x, y, w, h, Gui.contrast(bg), bg)
+        local textY = y + math.floor((h - 1) / 2)
+        local textX = x + math.floor((w - #label) / 2)
+        local line = ui.lines[textY]
+        ui.lines[textY] = line:sub(1, textX - 1) .. label .. line:sub(textX + #label)
+        hit(x, y, w, h, item)
+    end
+    if gridColumns then
+        local diagramWidth, diagramHeight = width - 2, height - 4
+        local usableWidth, usableHeight = diagramWidth - gridColumns + 1, diagramHeight - gridRows + 1
+        for row = 1, gridRows do for column = 1, gridColumns do
+            local x = 2 + math.floor((column - 1) * usableWidth / gridColumns) + column - 1
+            local y = 3 + math.floor((row - 1) * usableHeight / gridRows) + row - 1
+            local w = math.floor(column * usableWidth / gridColumns) - math.floor((column - 1) * usableWidth / gridColumns)
+            local h = math.floor(row * usableHeight / gridRows) - math.floor((row - 1) * usableHeight / gridRows)
+            pane(x, y, w, h, Desktop.gridMode(gridColumns, gridRows, column, row), tostring((row - 1) * gridColumns + column))
+        end end
+    else
+        local cardWidth = math.floor((width - columns - 1) / columns)
+        for slot = 1, perPage do
+            local grid = grids[(page - 1) * perPage + slot]
+            if grid then
+                local x, y = 2 + (slot - 1) % columns * (cardWidth + 1), 2 + math.floor((slot - 1) / columns) * 6
+                local name = grid[1] .. "x" .. grid[2]
+                local item = byMode["choose_" .. name]
+                local labelX = x + math.floor((cardWidth - #name) / 2)
+                local line = ui.lines[y]
+                ui.lines[y] = line:sub(1, labelX - 1) .. name .. line:sub(labelX + #name)
+                local usableWidth, usableHeight = cardWidth - grid[1] + 1, 6 - grid[2]
+                for row = 1, grid[2] do for column = 1, grid[1] do
+                    local px = x + math.floor((column - 1) * usableWidth / grid[1]) + column - 1
+                    local py = y + 1 + math.floor((row - 1) * usableHeight / grid[2]) + row - 1
+                    local pw = math.floor(column * usableWidth / grid[1]) - math.floor((column - 1) * usableWidth / grid[1])
+                    local ph = math.floor(row * usableHeight / grid[2]) - math.floor((row - 1) * usableHeight / grid[2])
+                    ui.style(px, py, pw, ph, nil, item.enabled and 8 or 128)
+                end end
+                hit(x, y, cardWidth, 6, item)
             end
         end
     end
@@ -625,9 +685,13 @@ function Desktop.layoutPicker(win, app, monitor, page, title)
         ui.button(y, label, "item", x1, x2, byMode[mode].enabled)
         ui.hits[#ui.hits].item = byMode[mode]
     end
-    action(height - 1, 1, half, "restore", "Restore")
-    action(height - 1, half + 1, width, "custom", "Custom")
-    action(height, 1, half, "move", "Move")
+    if gridColumns then
+        action(height, 1, half, "back", "Back")
+    else
+        action(height - 1, 1, half, "restore", "Restore")
+        action(height - 1, half + 1, width, "custom", "Resize")
+        action(height, 1, half, "move", "Move")
+    end
     action(height, half + 1, width, "cancel", "Cancel")
     for _, hit in ipairs(ui.hits) do
         hit.x1, hit.x2, hit.y = hit.x1 + rect.x - 1, hit.x2 + rect.x - 1, hit.y + rect.y - 1
@@ -1301,7 +1365,7 @@ function Server.new(net, storage, config)
             local win = monitor.layoutMenu and state.windows[monitor.layoutMenu.windowId]
             local anchor = win and {x = win.x + win.width - 26, y = win.y + 1}
             local rect, content, hits, page, pages
-            if win then rect, content, hits, page, pages = Desktop.layoutPicker(win, definition(win.appName), monitor, model.menuPage, model.error)
+            if win then rect, content, hits, page, pages = Desktop.layoutPicker(win, definition(win.appName), monitor, model.menuPage, model.error, model.grid)
             else rect, content, hits, page, pages = Desktop.menu(monitor, title, items, model.menuPage, anchor) end
             model.menuPage, model.menuPages, model.menuHits = page, pages, hits
             surface.fill(rect.x, rect.y, rect.width, rect.height, 32768, 1)
@@ -1456,7 +1520,12 @@ function Server.new(net, storage, config)
                         else
                             local win = state.windows[model.windowId]
                             local mode = hit.item.value
-                            if mode == "custom" or mode == "move" then beginPlacement(monitor, win, mode)
+                            local grid = mode:match("^choose_([1-3]x[1-3])$")
+                            if grid then
+                                model.grid, model.rootPage, model.menuPage, model.error = grid, model.menuPage, 1, nil
+                            elseif mode == "back" then
+                                model.grid, model.menuPage, model.error = nil, model.rootPage or 1, nil
+                            elseif mode == "custom" or mode == "move" then beginPlacement(monitor, win, mode)
                             elseif mode == "cancel" then monitor.layoutMenu = nil
                             else
                                 local ok, err = api.layoutWindow(win.id, mode)
@@ -2269,7 +2338,7 @@ end)
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v9")
+print("SmartHome installer: bundled-v10")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor [--startup]")
@@ -2357,22 +2426,24 @@ if role == "app" then
             return decoded
         end
         local rawError, apiError, body
-        contents, rawError = download(url)
-        if contents then contents, rawError = checkLua(contents) end
-        if not contents then
-            print("Raw download failed; trying GitHub API")
-            local apiUrl = "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/"
-                .. path .. "?ref=" .. ref
-            body, apiError = download(apiUrl)
-            if body then contents, apiError = apiSource(body) end
-            if contents then contents, apiError = checkLua(contents) end
+        local apiUrl = "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/"
+            .. path .. "?ref=" .. ref
+        body, apiError = download(apiUrl)
+        if body then contents, apiError = apiSource(body) end
+        if contents then contents, apiError = checkLua(contents) end
+        if contents then
+            print("Downloaded via GitHub API")
+        else
+            print("GitHub API failed; trying raw download")
+            contents, rawError = download(url)
+            if contents then contents, rawError = checkLua(contents) end
             if not contents then
                 print("Raw: " .. tostring(rawError))
                 print("API: " .. tostring(apiError))
                 print("No response from both? Ask the server admin to check GitHub HTTPS access and the Java/server log.")
                 error("GitHub app download failed; installed files were not changed", 0)
             end
-            print("Downloaded via GitHub API")
+            print("Downloaded via GitHub raw")
         end
     elseif source == "--file" then
         local file = assert(fs.open(args[4], "r"), "Cannot read app source: " .. args[4])

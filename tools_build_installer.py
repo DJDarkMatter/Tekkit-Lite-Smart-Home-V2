@@ -14,7 +14,7 @@ def lua_string(value):
         equals += "="
     return "[" + equals + "[" + value + "]" + equals + "]"
 
-header = '''-- SmartHome OS installer: bundled-v9
+header = '''-- SmartHome OS installer: bundled-v10
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor [--startup]
@@ -28,7 +28,7 @@ runner = r'''}
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v9")
+print("SmartHome installer: bundled-v10")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor [--startup]")
@@ -116,22 +116,24 @@ if role == "app" then
             return decoded
         end
         local rawError, apiError, body
-        contents, rawError = download(url)
-        if contents then contents, rawError = checkLua(contents) end
-        if not contents then
-            print("Raw download failed; trying GitHub API")
-            local apiUrl = "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/"
-                .. path .. "?ref=" .. ref
-            body, apiError = download(apiUrl)
-            if body then contents, apiError = apiSource(body) end
-            if contents then contents, apiError = checkLua(contents) end
+        local apiUrl = "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/"
+            .. path .. "?ref=" .. ref
+        body, apiError = download(apiUrl)
+        if body then contents, apiError = apiSource(body) end
+        if contents then contents, apiError = checkLua(contents) end
+        if contents then
+            print("Downloaded via GitHub API")
+        else
+            print("GitHub API failed; trying raw download")
+            contents, rawError = download(url)
+            if contents then contents, rawError = checkLua(contents) end
             if not contents then
                 print("Raw: " .. tostring(rawError))
                 print("API: " .. tostring(apiError))
                 print("No response from both? Ask the server admin to check GitHub HTTPS access and the Java/server log.")
                 error("GitHub app download failed; installed files were not changed", 0)
             end
-            print("Downloaded via GitHub API")
+            print("Downloaded via GitHub raw")
         end
     elseif source == "--file" then
         local file = assert(fs.open(args[4], "r"), "Cannot read app source: " .. args[4])

@@ -2,7 +2,7 @@
 
 The main OS owns all window positions, taskbars, menus and hit testing. Monitor clients relay touches and render addressed colour frames. Each monitor has an independent desktop and a taskbar on its bottom row. Advanced monitors show filled panels, coloured title bars/buttons and wire swatches through CC 1.5's character-cell foreground/background API. Standard monitors receive a monochrome fallback.
 
-For this bundled-v9 UI, update the `server` role and Coffee using the same installer paste. Existing bundled-v8 monitor bridges remain compatible. A successful OS role install extracts embedded files and does not test GitHub connectivity; app installation makes a separate GitHub request.
+For this bundled-v10 UI, update the `server` role and Coffee using the same installer paste. Existing bundled-v8 monitor bridges remain compatible. A successful OS role install extracts embedded files and does not test GitHub connectivity; app installation makes a separate GitHub request, using the confirmed working API route first.
 
 ## Desktop appearance and OS settings
 
@@ -25,22 +25,22 @@ The title begins at the far left. The buttons are at the far right: `-`, `+`, `X
 | Control | Behavior |
 | --- | --- |
 | `-` | Minimize this view. Restore it through its taskbar button. |
-| `+` | Open graphical layout cards beside the controls; Restore, Custom, Move and Cancel appear below. |
+| `+` | Open graphical grid choices, then select a position. Restore, Resize, Move and Cancel stay on the first screen. |
 | Red `X` | Close only this view. Ordinary apps stop when their last view closes, across all monitors. Background services such as Coffee keep running with zero views. |
 
 The launcher focuses an existing view on this monitor if one is already open. Other monitors' views are unaffected. Closing a switchboard-like UI retains existing logical output states; an app's optional shutdown hook can define additional behavior.
 
 ## Layout presets
 
-Presets divide this monitor's usable character area, excluding its taskbar. The flyout groups miniature desktops as **Full**, **Columns**, **Rows** and **Grid**. Click the actual pane to choose full screen, a half or a quarter. Odd dimensions are divided without gaps, with the extra row/column in the bottom/right half.
+Presets divide this monitor's usable character area, excluding its taskbar. First choose a graphical **1×1**, **2×1**, **1×2**, **2×2**, **3×1**, **1×3**, **3×2**, **2×3** or **3×3** grid (columns × rows). This opens a separate diagram with numbered panes; tap the position you want. Choosing the grid alone never moves/resizes the window. Back returns to the grid choices; Cancel dismisses the flyout.
 
-Incompatible panes are gray; selecting them does not alter the window. Narrow screens paginate cards. Below eight usable rows, a compact text list is retained so small generic apps still have layout controls. App minimum/maximum content sizes are respected. Apps that support full maximization should use preferred sizes rather than a restrictive maximum. Coffee has a preferred initial size and can fill larger screens.
+Incompatible panes are gray; selecting them does not alter the window. Grids with no compatible position are disabled. Narrow/short screens paginate cards; very short screens use a compact text list. Odd dimensions are partitioned using shared boundaries, so panes cover the usable area without gaps or overlap. App minimum/maximum content sizes are respected, including for every 3×3 pane. Coffee has a preferred initial size and can fill larger screens.
 
 Restore returns to the previous layout/free rectangle. Repeating the current preset does not overwrite the restore target.
 
 ## Custom size and position
 
-1. Open the title-bar `+` and select `Custom`.
+1. Open the title-bar `+` and select `Resize` on its first screen.
 2. Click one corner of the desired window, then its opposite corner.
 3. Inspect the outline and size. Click `[OK]` on the bottom row to apply, or `[Cancel]` to keep the old layout.
 
@@ -56,10 +56,10 @@ Apps receive their current content width/height and render the appropriate layou
 | --- | --- |
 | Every supported size, starting at 12×6 content | Phase heading, remaining time, status, Pause/Resume, Harvest now and Menu. |
 | Width at least 36, height at least 8 | Places the three main controls in a single bottom row; narrower windows use three rows. |
-| Width at least 32, height at least 14 | Uses a graphical clock; doubles its scale when height is at least 20 and the full time fits at double width. |
-| Remaining information area | Adds presence and counts. Configured durations appear together at width 24+; input/output summaries appear together at width 30+, only when each whole group fits. |
+| Width at least 32, height at least 14 | Keeps the original graphical clock font, dimensions and scaling, with its two colours swapped: light digits on the app accent (white on blue by default). Doubles scale at height 20+ when the complete time fits at double width. |
+| Remaining information area | Shows player presence and harvest counts, side by side when space permits. Wiring and configured durations stay in Settings. |
 
-Menu has exactly three destinations: **Settings**, **Stats**, **Maintenance**. Settings has player input, harvest output, countdown, harvest time and UI colour. Stats owns the trip reset. Maintenance owns timer reset and legacy import, with confirmation. Each submenu's Back/Cancel returns to its parent. Pagination is shown only when needed; changing width/height never resets progress or applies an unsaved duration draft.
+Coffee uses a dark content panel with a distinct accent header and spaced controls. Menu has exactly three destinations: **Settings**, **Stats**, **Maintenance**. Settings has player input, harvest output, countdown, harvest time and UI colour; wide settings menus show configured durations in their labels. Stats owns the trip reset. Maintenance owns timer reset and legacy import, with confirmation. Each submenu's Back/Cancel returns to its parent. Pagination is shown only when needed; changing width/height never resets progress or applies an unsaved duration draft.
 
 All views of Coffee share one timer. Resizing, hiding, moving, closing or reopening a view does not reset it. Each view has independent temporary menus/settings drafts.
 

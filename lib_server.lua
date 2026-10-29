@@ -580,7 +580,7 @@ function Server.new(net, storage, config)
             local win = monitor.layoutMenu and state.windows[monitor.layoutMenu.windowId]
             local anchor = win and {x = win.x + win.width - 26, y = win.y + 1}
             local rect, content, hits, page, pages
-            if win then rect, content, hits, page, pages = Desktop.layoutPicker(win, definition(win.appName), monitor, model.menuPage, model.error)
+            if win then rect, content, hits, page, pages = Desktop.layoutPicker(win, definition(win.appName), monitor, model.menuPage, model.error, model.grid)
             else rect, content, hits, page, pages = Desktop.menu(monitor, title, items, model.menuPage, anchor) end
             model.menuPage, model.menuPages, model.menuHits = page, pages, hits
             surface.fill(rect.x, rect.y, rect.width, rect.height, 32768, 1)
@@ -735,7 +735,12 @@ function Server.new(net, storage, config)
                         else
                             local win = state.windows[model.windowId]
                             local mode = hit.item.value
-                            if mode == "custom" or mode == "move" then beginPlacement(monitor, win, mode)
+                            local grid = mode:match("^choose_([1-3]x[1-3])$")
+                            if grid then
+                                model.grid, model.rootPage, model.menuPage, model.error = grid, model.menuPage, 1, nil
+                            elseif mode == "back" then
+                                model.grid, model.menuPage, model.error = nil, model.rootPage or 1, nil
+                            elseif mode == "custom" or mode == "move" then beginPlacement(monitor, win, mode)
                             elseif mode == "cancel" then monitor.layoutMenu = nil
                             else
                                 local ok, err = api.layoutWindow(win.id, mode)

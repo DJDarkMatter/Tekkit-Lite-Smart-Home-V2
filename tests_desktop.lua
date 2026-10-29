@@ -1,5 +1,6 @@
 -- Real server/monitor integration checks for the bottom taskbar and touch layouts.
 return function(tests, newBus, monitor, serialize, unserialize, equal)
+    local Desktop = dofile("lib_desktop.lua")
     local paneSource = [[return {minWidth=8,minHeight=2,preferredWidth=20,preferredHeight=8,
         init=function(s) s.starts=(s.starts or 0)+1; s.ticks=s.ticks or 0; s.touches=s.touches or 0 end,
         background=function(dt,s) s.ticks=s.ticks+dt end,
@@ -41,15 +42,23 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             local win = test.window(id)
             local side = win.monitorId:match(":([^:]+)$")
             test.paint(); test.touch(side, win.x + win.width - 5, win.y)
+            local grid = Desktop.gridForMode(mode)
             for _ = 1, 10 do
                 local model = assert(test.model(side).layoutMenu)
+                local chosen
                 for _, hit in ipairs(model.menuHits) do
                     if hit.action == "item" and hit.item.value == mode then test.touch(side, hit.x1, hit.y); return end
+                    if not model.grid and grid and hit.item and hit.item.value == "choose_" .. grid then chosen = hit end
                 end
-                local nextHit
-                for _, hit in ipairs(model.menuHits) do if hit.action == "next" then nextHit = hit end end
-                assert(nextHit, "Layout choice missing: " .. mode)
-                test.touch(side, nextHit.x1, nextHit.y)
+                if chosen then
+                    test.touch(side, chosen.x1, chosen.y)
+                    if chosen.item.enabled == false then return end
+                else
+                    local nextHit
+                    for _, hit in ipairs(model.menuHits) do if hit.action == "next" then nextHit = hit end end
+                    assert(nextHit, "Layout choice missing: " .. mode)
+                    test.touch(side, nextHit.x1, nextHit.y)
+                end
             end
             error("Layout pagination did not reach " .. mode)
         end
@@ -243,7 +252,8 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         assert(table.concat(t.left.lines, "\n"):find("Pause", 1, true))
         assert(not table.concat(t.left.lines, "\n"):find("Countdown:", 1, true))
         t.layout(big, "maximize")
-        assert(table.concat(t.top.lines, "\n"):find("Countdown:", 1, true))
+        assert(table.concat(t.top.lines, "\n"):find("TRIP / TOTAL", 1, true))
+        assert(not table.concat(t.top.lines, "\n"):find("Input:", 1, true), "Wiring belongs in Settings")
         assert(table.concat(t.top.lines, "\n"):find("Pause", 1, true))
         assert(t.api.closeWindow(small)); assert(t.api.closeWindow(big))
         t.bus.advance(2)
@@ -259,10 +269,15 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.top.bg[win.y][win.x + win.width - 2], 16384, "Close is red at the far right")
         equal(t.top.lines[win.y]:sub(win.x, win.x + 5), "Coffee")
         equal(t.top.bg[win.y + 1][win.x + 1], 2048, "App heading is a filled panel")
-        local buttonY = win.y + win.height - 4
+        local content = t.central.server.apps.coffee.render(win.width - 2, win.height - 2, t.central.server.state.appStates.coffee, t.api,
+            {view = t.central.server.views[id] or {}})
+        local pause
+        for _, hit in ipairs(content.hits) do if hit.action == "pause" then pause = hit end end
+        assert(pause)
+        local buttonY = win.y + pause.y
         assert(t.top.lines[buttonY]:find("Pause", 1, true))
         equal(t.top.bg[buttonY][win.x + 1], 2048)
-        t.touch("top", win.x + win.width - 2, buttonY) -- The padded button edge is clickable.
+        t.touch("top", win.x + pause.x2, buttonY) -- The padded button edge is clickable.
         equal(t.central.server.state.appStates.coffee.paused, true)
         assert(t.top.lines[buttonY]:find("Resume", 1, true))
         local pane = t.open("pane", "left")
