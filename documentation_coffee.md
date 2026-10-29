@@ -15,11 +15,11 @@ inst app coffee
 reboot
 ```
 
-The installer banner must say `bundled-v7`. `inst app coffee` downloads only `apps_coffee.lua` from GitHub and enables it in `configs_os.txt`; rerunning the command updates code while preserving saved timer/settings state. The current Coffee file declares `backgroundService = true` and requires the bundled-v5 app API or newer. Every OS boot starts its background service without opening a window. Its saved state schema and the network protocol are unchanged, so existing IO and monitor clients remain compatible. To migrate their files into the root too, run the new installer there with their role and `--startup`. The central computer must stay loaded for any code to run.
+The installer banner must say `bundled-v8`. `inst app coffee` downloads only `apps_coffee.lua` from GitHub and enables it in `configs_os.txt`; rerunning the command updates code while preserving saved timer/settings state. Coffee declares `backgroundService = true`; every OS boot starts its background service without opening a window. Install the bundled-v8 `server` and `monitor` roles for the new coloured UI and touch protocol. Coffee's state schema and IO protocol are unchanged. The central computer must stay loaded for any code to run.
 
 The installer first uses `raw.githubusercontent.com`, then tries GitHub's contents API at `api.github.com` if the raw route fails. It validates the API's base64 file and checks Lua syntax before replacing installed code/settings. Check that GitHub has the latest app file before testing. You can optionally select a known branch/commit with `inst app coffee --ref REF`; Pastebin-ID and `--file PATH` modes remain available for other app sources.
 
-If installation fails, record the separate `Raw:` and `API:` lines. A no-response failure does not mean that the path is wrong: old CC often supplies no error reason, and the server may have an HTTPS/network problem. At least one GitHub endpoint must be reachable over HTTPS from the server. If neither responds, ask the server admin to inspect GitHub access and Java/SSL errors in the server log. The installer cannot repair server HTTP policy or Java TLS. Updating just the downloaded `inst` is enough to retry app installation; an existing bundled-v5/v6 OS does not need another role install for this download change.
+If installation fails, record the separate `Raw:` and `API:` lines. A no-response failure does not mean that the path is wrong: old CC often supplies no error reason, and the server may have an HTTPS/network problem. At least one GitHub endpoint must be reachable over HTTPS from the server. If neither responds, ask the server admin to inspect GitHub access and Java/SSL errors in the server log. The installer cannot repair server HTTP policy or Java TLS. OS/client role installation extracts embedded files; app installation makes a separate GitHub request.
 
 ## Configure wiring by touch
 
@@ -28,7 +28,7 @@ On an advanced monitor, touch bottom-left `[+]`, then `coffee`. Choose `Settings
 1. **Player IO:** select the IO computer, the physical side carrying the presence signal, and `Digital` for ordinary redstone or the bundled wire colour. Review and touch `Use`.
 2. **Harvest IO:** select the output client, side and Digital/colour the same way.
 
-The modem side is excluded. `+` beside an IO client means online; `-` means offline. Lists have `Prev`/`Next` buttons on small windows. The app does not assume the original left input/right output; select your actual wiring.
+The modem side is excluded. `+` beside an IO client means online; `-` means offline. Lists show a page count, disabled Prev/Next controls at the ends, and coloured swatches for bundled wires. The app does not assume the original left input/right output; select your actual wiring.
 
 After both bindings are configured, an online player signal starts the countdown. With no valid input/output or with a disconnected client, it waits for configuration/reconnection. Selecting a wire already owned by another logical output is rejected. Rewiring an active harvest switches its old output OFF and pauses the app; use `Resume` to run on the new output.
 
@@ -44,7 +44,7 @@ The picker belongs to the OS and can be used by future switchboard/other apps as
 - **Reset:** explicitly starts a fresh countdown using the configured duration, stopping an active harvest if necessary. It asks for confirmation.
 - **Stats:** completed harvest total and resettable trip counter. Closing/minimizing a window never stops or duplicates the background service.
 
-The smallest supported content area is 12×6 characters (14×9 including the bottom taskbar and window frame). Compact windows show the overview and a Menu button; larger windows expose controls, counts, durations and wiring details. The top-left `[#]` button opens snap/maximize/custom layout options. See [desktop controls](documentation_desktop.md). Multiple windows use independent settings pages/drafts while sharing one timer and applied configuration.
+The smallest supported content area is 12×6 characters (14×9 including the bottom taskbar and window frame). Compact windows show the overview and a Menu button; larger windows expose controls, counts, durations and wiring details. The top-right `+` button opens snap/maximize/custom layout options. See [desktop controls](documentation_desktop.md), including optional physical-touch calibration. Multiple windows use independent settings pages/drafts while sharing one timer and applied configuration.
 
 ## Restarts and saves
 

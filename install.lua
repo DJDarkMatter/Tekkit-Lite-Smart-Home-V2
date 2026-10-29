@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v7
+-- SmartHome OS installer: bundled-v8
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor [--startup]
@@ -162,6 +162,93 @@ Network.sides = sides
 Network.integer = integer
 return Network
 ]=],
+    ["lib_gui.lua"] = [=[-- CC 1.5 colour surfaces. Uses write/setTextColor/setBackgroundColor, never blit.
+local Gui = {}
+local digits = "0123456789abcdef"
+function Gui.code(colour, fallback)
+    for index = 0, 15 do if colour == 2 ^ index then return digits:sub(index + 1, index + 1) end end
+    return fallback
+end
+function Gui.pack(row)
+    local runs, x = {}, 1
+    while x <= #row do
+        local last = x
+        while last < #row and last - x < 254 and row:sub(last + 1, last + 1) == row:sub(x, x) do last = last + 1 end
+        runs[#runs + 1] = string.format("%02x", last - x + 1) .. row:sub(x, x)
+        x = last + 1
+    end
+    return table.concat(runs)
+end
+function Gui.unpack(encoded, width)
+    if type(encoded) ~= "string" or #encoded % 3 ~= 0 then return nil end
+    local parts, length = {}, 0
+    for x = 1, #encoded, 3 do
+        local count, colour = tonumber(encoded:sub(x, x + 1), 16), encoded:sub(x + 2, x + 2)
+        if not count or count < 1 or not colour:match("^[0-9a-f]$") then return nil end
+        length = length + count
+        if length > width then return nil end
+        parts[#parts + 1] = string.rep(colour, count)
+    end
+    if length ~= width then return nil end
+    return table.concat(parts)
+end
+function Gui.new(width, height, foreground, background)
+    local surface = {lines = {}, foreground = {}, background = {}}
+    for y = 1, height do
+        surface.lines[y] = string.rep(" ", width)
+        surface.foreground[y] = string.rep(Gui.code(foreground, "0"), width)
+        surface.background[y] = string.rep(Gui.code(background, "f"), width)
+    end
+    local function replace(row, x, value) return row:sub(1, x - 1) .. value .. row:sub(x + #value) end
+    function surface.style(x, y, w, h, fg, bg)
+        local first, last = math.max(1, x), math.min(width, x + w - 1)
+        if last < first then return end
+        for row = math.max(1, y), math.min(height, y + h - 1) do
+            local f, b = Gui.code(fg), Gui.code(bg)
+            if f then surface.foreground[row] = replace(surface.foreground[row], first, string.rep(f, last - first + 1)) end
+            if b then surface.background[row] = replace(surface.background[row], first, string.rep(b, last - first + 1)) end
+        end
+    end
+    function surface.write(x, y, value, fg, bg, limit)
+        if y < 1 or y > height then return end
+        local text = tostring(value or ""):sub(1, limit or width)
+        local first, last = math.max(1, x), math.min(width, x + #text - 1)
+        if last < first then return end
+        text = text:sub(first - x + 1, last - x + 1)
+        surface.lines[y] = replace(surface.lines[y], first, text)
+        surface.style(first, y, #text, 1, fg, bg)
+    end
+    function surface.fill(x, y, w, h, fg, bg)
+        for row = math.max(1, y), math.min(height, y + h - 1) do surface.write(x, row, string.rep(" ", w), fg, bg) end
+    end
+    function surface.frame()
+        local fg, bg = {}, {}
+        for y = 1, height do fg[y], bg[y] = Gui.pack(surface.foreground[y]), Gui.pack(surface.background[y]) end
+        return surface.lines, fg, bg
+    end
+    return surface
+end
+function Gui.drawRow(screen, y, text, fg, bg, colour, paint)
+    local setFG, setBG = screen.setTextColor or screen.setTextColour, screen.setBackgroundColor or screen.setBackgroundColour
+    paint = paint or {}
+    local x = 1
+    screen.setCursorPos(1, y)
+    while x <= #text do
+        local last, f, b = x, fg:sub(x, x), bg:sub(x, x)
+        while last < #text and fg:sub(last + 1, last + 1) == f and bg:sub(last + 1, last + 1) == b do last = last + 1 end
+        local foreground, background = 2 ^ tonumber(f, 16), 2 ^ tonumber(b, 16)
+        if not colour then
+            background = (b == "0" or b == "8") and 1 or 32768
+            foreground = background == 1 and 32768 or 1
+        end
+        if setFG and paint.fg ~= foreground then setFG(foreground); paint.fg = foreground end
+        if setBG and paint.bg ~= background then setBG(background); paint.bg = background end
+        screen.write(text:sub(x, last))
+        x = last + 1
+    end
+end
+return Gui
+]=],
     ["lib_io_picker.lua"] = [=[-- Reusable, server-rendered IO selector. No peripheral or network calls here.
 local Picker = {}
 local sideNames = {"top", "bottom", "left", "right", "front", "back"}
@@ -193,7 +280,7 @@ local function choices(dialog, clients)
         for _, side in ipairs(available or sideNames) do list[#list + 1] = {label = side, value = side} end
     elseif dialog.stage == 3 then
         list[1] = {label = "Digital", value = false}
-        for i, name in ipairs(colorNames) do list[#list + 1] = {label = name, value = 2 ^ (i - 1)} end
+        for i, name in ipairs(colorNames) do list[#list + 1] = {label = name, value = 2 ^ (i - 1), colour = 2 ^ (i - 1)} end
     end
     return list
 end
@@ -205,14 +292,19 @@ local function colorName(value)
 end
 
 function Picker.render(dialog, width, height, clients)
-    local lines, hits = {}, {}
+    local lines, hits = {styles = {}}, {}
     local half = math.floor(width / 2)
     local function text(row, value) lines[row] = tostring(value):sub(1, width) end
-    local function button(row, x1, x2, label, action, value)
+    local function button(row, x1, x2, label, action, value, enabled)
         local line = lines[row] or string.rep(" ", width)
         label = label:sub(1, x2 - x1 + 1)
-        lines[row] = line:sub(1, x1 - 1) .. label .. line:sub(x1 + #label)
-        hits[#hits + 1] = {y = row, x1 = x1, x2 = x2, action = action, value = value}
+        local padding = math.floor((x2 - x1 + 1 - #label) / 2)
+        label = string.rep(" ", padding) .. label .. string.rep(" ", x2 - x1 + 1 - padding - #label)
+        lines[row] = line:sub(1, x1 - 1) .. label .. line:sub(x2 + 1)
+        hits[#hits + 1] = {y = row, x1 = x1, x2 = x2, action = action, value = value, enabled = enabled}
+        lines.styles[#lines.styles + 1] = {x = x1, y = row, width = x2 - x1 + 1, height = 1,
+            fg = enabled == false and 128 or action == "cancel" and 1 or 32768,
+            bg = action == "cancel" and 16384 or action == "use" and 32 or action == "select" and (row % 2 == 0 and 1 or 256) or 256}
     end
     for row = 1, height do lines[row] = string.rep(" ", width) end
     if dialog.stage == 4 then
@@ -226,27 +318,32 @@ function Picker.render(dialog, width, height, clients)
         button(height, half + 1, width, "Cancel", "cancel")
     else
         local titles = {"Select IO", "Select side", "Select wire"}
-        text(1, titles[dialog.stage])
         local list, slots = choices(dialog, clients), math.max(1, height - 3)
         local pages = math.max(1, math.ceil(#list / slots))
-        dialog.page = math.min(dialog.page, pages)
+        dialog.page = math.max(1, math.min(dialog.page, pages))
+        text(1, titles[dialog.stage] .. " " .. dialog.page .. "/" .. pages)
         for row = 1, slots do
             local item = list[(dialog.page - 1) * slots + row]
-            if item then button(row + 1, 1, width, item.label, "select", item.value) end
+            if item then
+                button(row + 1, 1, width, (item.colour and "  " or "") .. item.label, "select", item.value)
+                if item.colour then lines.styles[#lines.styles + 1] = {x = 1, y = row + 1, width = 2, height = 1, bg = item.colour} end
+            end
         end
         if #list == 0 then text(2, "No IO clients") end
-        button(height - 1, 1, half, "< Prev", "prev")
-        button(height - 1, half + 1, width, "Next >", "next", pages)
+        button(height - 1, 1, half, "< Prev", "prev", nil, dialog.page > 1)
+        button(height - 1, half + 1, width, "Next >", "next", pages, dialog.page < pages)
         button(height, 1, half, "Back", "back")
         button(height, half + 1, width, "Cancel", "cancel")
     end
     dialog.hits = hits
+    lines.styles[#lines.styles + 1] = {x = 1, y = 1, width = width, height = 1, fg = 1, bg = 2048}
     return lines
 end
 
 function Picker.touch(dialog, x, y)
     for _, hit in ipairs(dialog.hits or {}) do
         if hit.y == y and x >= hit.x1 and x <= hit.x2 then
+            if hit.enabled == false then return end
             dialog.error = nil
             if hit.action == "cancel" then return "cancel"
             elseif hit.action == "use" then return "selected", dialog.chosen
@@ -274,6 +371,13 @@ local function clamp(value, low, high) return math.max(low, math.min(value, high
 
 function Desktop.area(monitor)
     return {x = 1, y = 1, width = monitor.width, height = monitor.height - 1}
+end
+
+function Desktop.controls(win)
+    local x = win.x + win.width - 9
+    return {{x1 = x, x2 = x + 2, action = "minimize", label = " - "},
+        {x1 = x + 3, x2 = x + 5, action = "layout", label = " + "},
+        {x1 = x + 6, x2 = x + 8, action = "close", label = " X "}}
 end
 
 function Desktop.bounds(app, monitor)
@@ -362,8 +466,8 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
     local labels, needed = {}, 0
     for _, win in ipairs(windows) do
         local marker = win.minimized and "_" or win.id == active and "*" or ""
-        local label = "[" .. marker .. win.appName .. "]"
-        if #label > 14 then label = label:sub(1, 13) .. "]" end
+        local label = " " .. marker .. win.appName .. " "
+        if #label > 14 then label = label:sub(1, 13) .. " " end
         labels[#labels + 1] = label
         needed = needed + #labels[#labels] + 1
     end
@@ -382,7 +486,7 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
         if available < 3 then break end
         local label = labels[index]
         local limit = math.min(14, available)
-        if #label > limit then label = label:sub(1, limit - 1) .. "]" end
+        if #label > limit then label = label:sub(1, limit - 1) .. " " end
         put(x, label, last); hit(x, x + #label - 1, "window", windows[index].id)
         x, finalVisible = x + #label + 1, index
     end
@@ -393,32 +497,33 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
 end
 
 -- Shared paginated popup geometry for the launcher and window layout menus.
-function Desktop.menu(monitor, title, items, page)
+function Desktop.menu(monitor, title, items, page, anchor)
     local area = Desktop.area(monitor)
     local width = math.min(area.width, 26)
     local height = math.min(area.height, math.max(4, #items + 3))
     local slots = math.max(1, height - 3)
     local pages = math.max(1, math.ceil(#items / slots))
     page = clamp(page or 1, 1, pages)
-    local rect = {x = 1, y = area.height - height + 1, width = width, height = height}
+    local rect = {x = clamp(anchor and anchor.x or 1, 1, area.width - width + 1),
+        y = clamp(anchor and anchor.y or area.height - height + 1, 1, area.height - height + 1), width = width, height = height}
     local lines, hits = {}, {}
-    for y = 1, height do lines[y] = "|" .. string.rep(" ", math.max(0, width - 2)) .. "|" end
-    lines[1] = ("+" .. title .. string.rep("-", width)):sub(1, width - 1) .. "+"
-    lines[height] = "+" .. string.rep("-", math.max(0, width - 2)) .. "+"
+    for y = 1, height do lines[y] = string.rep(" ", width) end
+    lines[1] = (" " .. title .. string.rep(" ", width)):sub(1, width)
+    lines[height] = (" " .. page .. "/" .. pages .. string.rep(" ", width)):sub(1, width)
     for row = 1, slots do
         local item = items[(page - 1) * slots + row]
         if item then
             local label = (item.enabled == false and "-" or " ") .. item.label
-            lines[row + 1] = "|" .. label:sub(1, width - 2) .. string.rep(" ", math.max(0, width - 2 - #label)) .. "|"
+            lines[row + 1] = " " .. label:sub(1, width - 2) .. string.rep(" ", math.max(0, width - 2 - #label)) .. " "
             hits[#hits + 1] = {x1 = rect.x + 1, x2 = rect.x + width - 2, y = rect.y + row,
                 action = "item", item = item}
         end
     end
-    if #items == 0 then lines[2] = "|" .. ("No apps"):sub(1, width - 2) .. string.rep(" ", math.max(0, width - 9)) .. "|" end
+    if #items == 0 then lines[2] = (" No apps" .. string.rep(" ", width)):sub(1, width) end
     if pages > 1 then
         local half = math.floor((width - 2) / 2)
-        lines[height - 1] = "|" .. ("< Prev" .. string.rep(" ", width)):sub(1, half)
-            .. ("Next >" .. string.rep(" ", width)):sub(1, width - 2 - half) .. "|"
+        lines[height - 1] = " " .. ("< Prev" .. string.rep(" ", width)):sub(1, half)
+            .. ("Next >" .. string.rep(" ", width)):sub(1, width - 2 - half) .. " "
         hits[#hits + 1] = {x1 = rect.x + 1, x2 = rect.x + half, y = rect.y + height - 2, action = "previous"}
         hits[#hits + 1] = {x1 = rect.x + half + 1, x2 = rect.x + width - 2, y = rect.y + height - 2, action = "next"}
     end
@@ -431,6 +536,7 @@ return Desktop
 local Server = {}
 local Picker = dofile("lib_io_picker.lua")
 local Desktop = dofile("lib_desktop.lua")
+local Gui = dofile("lib_gui.lua")
 local sideSet = {top = true, bottom = true, left = true, right = true, front = true, back = true}
 local function integer(value, low, high)
     return type(value) == "number" and value == math.floor(value) and value >= low and value <= high
@@ -494,6 +600,10 @@ function Server.new(net, storage, config)
         gameTime = "?:??", playerOnline = false, lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}}
     local api, errors = {}, {}
     server.api = api
+    local function invalidateInput(id)
+        local monitor = server.monitors[id]
+        if monitor then monitor.inputRevision = (monitor.inputRevision or 0) + 1 end
+    end
     state.nextWindowId = 1
     local legacyDesktop = (tonumber(state.desktopVersion) or 1) < 2
     for id, win in pairs(state.windows) do
@@ -706,6 +816,7 @@ function Server.new(net, storage, config)
         local app = server.apps[win.appName]
         if not app or not app.handleIOSelection then return false, "App has no IO selection handler" end
         server.dialogs[windowId] = Picker.new(key, direction, current)
+        invalidateInput(win.monitorId)
         return true
     end
     function api.getSensor(clientId, name)
@@ -741,6 +852,7 @@ function Server.new(net, storage, config)
         local order = 0
         for _, other in pairs(state.windows) do order = math.max(order, other.order) end
         win.order, win.minimized = order + 1, false
+        invalidateInput(win.monitorId)
         local monitor, visible = server.monitors[win.monitorId], false
         for _, hit in ipairs(monitor and monitor.taskbar or {}) do
             if hit.action == "window" and hit.id == win.id then visible = true end
@@ -830,6 +942,7 @@ function Server.new(net, storage, config)
             if monitor.placement and monitor.placement.windowId == id then monitor.placement = nil end
         end
         stopApp(win.appName)
+        invalidateInput(win.monitorId)
         return true
     end
     function api.placeWindow(id, x, y, width, height)
@@ -881,24 +994,24 @@ function Server.new(net, storage, config)
     end
 
     local function renderMonitor(id, monitor)
-        local lines = {}
-        for y = 1, monitor.height do lines[y] = string.rep(" ", monitor.width) end
+        local surface = Gui.new(monitor.width, monitor.height, 1, 2048)
         local function write(x, y, text, limit)
-            if y < 1 or y > monitor.height or x < 1 or x > monitor.width then return end
-            text = tostring(text or ""):sub(1, math.min(limit or monitor.width, monitor.width - x + 1))
-            lines[y] = lines[y]:sub(1, x - 1) .. text .. lines[y]:sub(x + #text)
+            surface.write(x, y, text, nil, nil, limit)
         end
         write(1, 1, "SmartHome OS")
         local active
         for _, win in ipairs(windowsFor(id)) do
+            if fit(win, monitor) and not win.minimized and server.running[win.appName] then active = win.id end
+        end
+        for _, win in ipairs(windowsFor(id)) do
             if fit(win, monitor) and not win.minimized and server.running[win.appName] then
-                active = win.id
-                local title = ("[X][#][_] " .. win.appName):sub(1, win.width)
-                write(win.x, win.y, title .. string.rep("-", win.width - #title), win.width)
-                for y = win.y + 1, win.y + win.height - 2 do
-                    write(win.x, y, "|" .. string.rep(" ", win.width - 2) .. "|")
+                surface.fill(win.x, win.y, win.width, win.height, 32768, 128)
+                surface.fill(win.x + 1, win.y + 1, win.width - 2, win.height - 2, 32768, 256)
+                surface.fill(win.x, win.y, win.width, 1, 1, active == win.id and 2048 or 128)
+                write(win.x, win.y, win.appName, win.width - 9)
+                for _, control in ipairs(Desktop.controls(win)) do
+                    surface.write(control.x1, win.y, control.label, 1, control.action == "close" and 16384 or 128)
                 end
-                write(win.x, win.y + win.height - 1, "+" .. string.rep("-", win.width - 2) .. "+")
                 local ok, content
                 if server.dialogs[win.id] then
                     ok, content = true, Picker.render(server.dialogs[win.id], win.width - 2, win.height - 2, api.getIOClients())
@@ -908,11 +1021,26 @@ function Server.new(net, storage, config)
                 end
                 if not ok or type(content) ~= "table" then content = {"App render failed"} end
                 for y = 1, win.height - 2 do write(win.x + 1, win.y + y, content[y] or "", win.width - 2) end
+                for _, style in ipairs(type(content.styles) == "table" and content.styles or {}) do
+                    if type(style) == "table" and integer(style.x, 1, win.width - 2)
+                        and integer(style.y, 1, win.height - 2) and integer(style.width, 1, 512)
+                        and integer(style.height or 1, 1, 512) then
+                        surface.style(win.x + style.x, win.y + style.y,
+                            math.min(style.width, win.width - 1 - style.x), math.min(style.height or 1, win.height - 1 - style.y),
+                            style.fg, style.bg)
+                    end
+                end
             end
         end
         local taskbar
         taskbar, monitor.taskbar = Desktop.taskbar(windowsFor(id, true), monitor, server.gameTime, desktopState(id), active)
         write(1, monitor.height, taskbar)
+        surface.style(1, monitor.height, monitor.width, 1, 1, 128)
+        for _, hit in ipairs(monitor.taskbar) do
+            surface.style(hit.x1, monitor.height, hit.x2 - hit.x1 + 1, 1, 1,
+                (hit.action == "launcher" or hit.id == active) and 2048 or 256)
+            if hit.action ~= "launcher" and hit.id ~= active then surface.style(hit.x1, monitor.height, hit.x2 - hit.x1 + 1, 1, 32768, nil) end
+        end
         if monitor.launcher or monitor.layoutMenu then
             local items, title, model
             if monitor.launcher then
@@ -930,19 +1058,27 @@ function Server.new(net, storage, config)
                 local win = state.windows[model.windowId]
                 items = win and Desktop.layoutOptions(win, server.apps[win.appName], monitor) or {}
             end
-            local rect, content, hits, page, pages = Desktop.menu(monitor, title, items, model.menuPage)
+            local win = monitor.layoutMenu and state.windows[monitor.layoutMenu.windowId]
+            local anchor = win and {x = win.x + win.width - 26, y = win.y + 1}
+            local rect, content, hits, page, pages = Desktop.menu(monitor, title, items, model.menuPage, anchor)
             model.menuPage, model.menuPages, model.menuHits = page, pages, hits
+            surface.fill(rect.x, rect.y, rect.width, rect.height, 32768, 1)
             for row = 1, rect.height do write(rect.x, rect.y + row - 1, content[row], rect.width) end
+            surface.style(rect.x, rect.y, rect.width, 1, 1, 2048)
+            for _, hit in ipairs(hits) do
+                surface.style(hit.x1, hit.y, hit.x2 - hit.x1 + 1, 1,
+                    hit.item and hit.item.enabled == false and 128 or 32768, hit.action == "item" and 256 or 128)
+            end
         end
         local placement = monitor.placement
         if placement then
             local rect = placement.preview
             if rect then
-                local mark = placement.error and "!" or "#"
-                write(rect.x, rect.y, string.rep(mark, rect.width), rect.width)
-                if rect.height > 1 then write(rect.x, rect.y + rect.height - 1, string.rep(mark, rect.width), rect.width) end
+                local border = placement.error and 16384 or 32
+                surface.fill(rect.x, rect.y, rect.width, 1, 1, border)
+                if rect.height > 1 then surface.fill(rect.x, rect.y + rect.height - 1, rect.width, 1, 1, border) end
                 for y = rect.y + 1, rect.y + rect.height - 2 do
-                    write(rect.x, y, mark); write(rect.x + rect.width - 1, y, mark)
+                    surface.fill(rect.x, y, 1, 1, 1, border); surface.fill(rect.x + rect.width - 1, y, 1, 1, 1, border)
                 end
             end
             if placement.first then write(placement.first.x, placement.first.y, "+") end
@@ -951,18 +1087,25 @@ function Server.new(net, storage, config)
             if rect and not placement.error then hint = "OK: " .. rect.width .. "x" .. rect.height end
             write(1, 1, hint .. string.rep(" ", monitor.width))
             write(1, monitor.height, "[OK][Cancel]" .. string.rep(" ", math.max(0, monitor.width - 12)))
+            surface.style(1, 1, monitor.width, 1, 1, 2048)
+            surface.style(1, monitor.height, 4, 1, 1, 8192)
+            surface.style(5, monitor.height, 8, 1, 1, 16384)
         end
-        return lines
+        return surface.frame()
     end
 
     function server.refreshMonitors(force)
         for id, monitor in pairs(server.monitors) do
             if monitor.online then
-                local lines = renderMonitor(id, monitor)
-                local signature = table.concat(lines, "\n")
+                local lines, foreground, background = renderMonitor(id, monitor)
+                local signature = table.concat(lines, "\n") .. table.concat(foreground, "\n")
+                    .. table.concat(background, "\n") .. tostring(monitor.inputRevision or 0)
                 if force or signature ~= monitor.lastRender then
+                    monitor.frameId = (monitor.frameId or 0) + 1
                     if net.toClient(monitor, {type = "render", clientId = id, monitorId = id,
-                        serverSession = server.session, lines = lines, width = monitor.width, height = monitor.height}) then
+                        serverSession = server.session, lines = lines, width = monitor.width, height = monitor.height,
+                        colourFormat = "rle1", foreground = foreground, background = background,
+                        frameId = monitor.frameId, inputRevision = monitor.inputRevision or 0}) then
                         monitor.lastRender = signature
                     end
                 end
@@ -1060,12 +1203,16 @@ function Server.new(net, storage, config)
             if not win.minimized and not win.doesNotFit and x >= win.x and x < win.x + win.width
                 and y >= win.y and y < win.y + win.height then
                 if y == win.y then
-                    local relative = x - win.x
-                    if relative < 3 then api.closeWindow(win.id)
-                    elseif relative < 6 then
-                        focus(win); monitor.layoutMenu = {windowId = win.id, menuPage = 1}; server.save()
-                    elseif relative < 9 then win.minimized = true; server.save()
-                    else focus(win); beginPlacement(monitor, win, "move"); server.save() end
+                    for _, control in ipairs(Desktop.controls(win)) do
+                        if x >= control.x1 and x <= control.x2 then
+                            if control.action == "close" then api.closeWindow(win.id)
+                            elseif control.action == "layout" then
+                                focus(win); monitor.layoutMenu = {windowId = win.id, menuPage = 1}; server.save()
+                            else win.minimized = true; server.save() end
+                            return
+                        end
+                    end
+                    focus(win); beginPlacement(monitor, win, "move"); server.save()
                     return
                 end
                 focus(win)
@@ -1122,7 +1269,9 @@ function Server.new(net, storage, config)
             if reconnect then client.inputs, client.values = {}, {} end
             group[id] = client
             if message.clientType == "monitor" then
+                if reconnect or client.width ~= message.width or client.height ~= message.height then invalidateInput(id) end
                 client.width, client.height = message.width, message.height
+                client.touchProtocol = message.touchProtocol == 1
                 client.lastRender = nil -- Periodic full repaint also recovers a lost frame.
             elseif message.clientType == "io" then
                 client.capabilities = {}
@@ -1167,13 +1316,18 @@ function Server.new(net, storage, config)
             client.values[message.varName], client.lastSeen = value, now
             if message.varName == "gameTime" then updateClock() end
         elseif message.type == "touch" then
-            if registered(server.monitors, message, replyChannel) then
-                touch(id, message.x, message.y)
+            local client = registered(server.monitors, message, replyChannel)
+            if client then
+                if not client.touchProtocol or message.inputRevision == (client.inputRevision or 0) then
+                    invalidateInput(id)
+                    touch(id, message.x, message.y)
+                else client.lastRender = nil end -- Recover a lost reply without applying an old tap twice.
                 server.refreshMonitors(false)
             end
         elseif message.type == "resize" then
             local client = registered(server.monitors, message, replyChannel)
             if client and integer(message.width, 1, 256) and integer(message.height, 2, 128) then
+                invalidateInput(id)
                 client.width, client.height = message.width, message.height
                 client.lastRender, client.lastSeen = nil, now
                 server.refreshMonitors(false)
@@ -1507,12 +1661,15 @@ return IO
 ]=],
     ["lib_monitor.lua"] = [=[-- A display/input bridge only. All app code and hit testing stay on the OS.
 local Monitor = {}
+local Gui = dofile("lib_gui.lua")
 local sides = {"top", "bottom", "left", "right", "front", "back"}
 
 function Monitor.new(net, config)
     assert(type(config.clientId) == "string" and #config.clientId > 0, "Invalid monitor clientId")
-    local client = {devices = {}}
+    local client = {devices = {}, config = config}
     local function status(device, text)
+        if device.peripheral.setBackgroundColor then device.peripheral.setBackgroundColor(32768) end
+        if device.peripheral.setTextColor then device.peripheral.setTextColor(1) end
         device.peripheral.clear()
         device.peripheral.setCursorPos(1, 1)
         device.peripheral.write(text:sub(1, device.width))
@@ -1534,15 +1691,20 @@ function Monitor.new(net, config)
                 if not device then
                     device = {id = config.clientId .. ":" .. side, side = side, peripheral = wrapped,
                         width = width, height = height, nonce = 0, lastAnnounce = -math.huge,
-                        lastServer = 0, connected = false, textScale = config.textScale}
+                        lastServer = 0, connected = false, textScale = config.textScale,
+                        colour = (wrapped.isColor or wrapped.isColour) and (wrapped.isColor or wrapped.isColour)() or false}
                     client.devices[side] = device
                     status(device, "Connecting to SmartHome OS...")
                 else
+                    local oldColour = device.colour
                     device.peripheral = wrapped
                     device.textScale = config.textScale
+                    device.colour = (wrapped.isColor or wrapped.isColour) and (wrapped.isColor or wrapped.isColour)() or false
+                    if oldColour ~= device.colour then device.cache = {} end
                     if width ~= device.width or height ~= device.height then
                         device.width, device.height, device.lastAnnounce = width, height, -math.huge
                         device.cache = {}
+                        device.inputRevision, device.hasFrame = nil, false
                     end
                 end
             end
@@ -1561,33 +1723,50 @@ function Monitor.new(net, config)
                     if changed then
                         print("Monitor " .. device.side .. " connected to OS " .. message.sender)
                         device.cache = {}
+                        device.frameId, device.inputRevision, device.hasFrame = nil, nil, false
                     end
                 elseif message.type == "render" and device.connected
                     and message.sender == device.serverId and message.serverSession == device.serverSession
                     and message.width == device.width and message.height == device.height
                     and type(message.lines) == "table" then
+                    if message.frameId and (type(message.frameId) ~= "number" or message.frameId < 1 or message.frameId ~= math.floor(message.frameId)
+                        or (device.frameId and message.frameId <= device.frameId)) then return end
+                    local foreground, background = {}, {}
+                    local paint = {}
+                    for y = 1, device.height do
+                        if message.colourFormat == "rle1" then
+                            foreground[y] = Gui.unpack(type(message.foreground) == "table" and message.foreground[y], device.width)
+                            background[y] = Gui.unpack(type(message.background) == "table" and message.background[y], device.width)
+                            if not foreground[y] or not background[y] then return end
+                        else foreground[y], background[y] = string.rep("0", device.width), string.rep("f", device.width) end
+                    end
                     for y = 1, device.height do
                         local line = message.lines[y]
                         if type(line) ~= "string" then line = "" end
                         line = line:sub(1, device.width)
                         line = line .. string.rep(" ", device.width - #line)
-                        if device.cache[y] ~= line then
-                            device.peripheral.setCursorPos(1, y)
-                            device.peripheral.write(line)
-                            device.cache[y] = line
+                        local signature = line .. foreground[y] .. background[y]
+                        if device.cache[y] ~= signature then
+                            Gui.drawRow(device.peripheral, y, line, foreground[y], background[y], device.colour, paint)
+                            device.cache[y] = signature
                         end
                     end
                     device.lastServer = now
+                    device.frameId, device.inputRevision = message.frameId, message.inputRevision
+                    device.hasFrame = true
                 end
                 return
             end
         end
     end
-    function client.touch(side, x, y)
+    function client.touch(side, x, y, revision)
         local device = client.devices[side]
-        if device and device.connected then
+        if device and device.connected and device.hasFrame then
+            local offset = type(config.touchOffsets) == "table" and config.touchOffsets[side] or nil
+            x, y = x + (offset and offset.x or 0), y + (offset and offset.y or 0)
             net.send(net.config.channel, device.serverId, {type = "touch", clientId = device.id,
-                monitorId = device.id, x = x, y = y, serverSession = device.serverSession})
+                monitorId = device.id, x = x, y = y, serverSession = device.serverSession,
+                inputRevision = revision == nil and device.inputRevision or revision})
         end
     end
     function client.tick(now)
@@ -1602,10 +1781,37 @@ function Monitor.new(net, config)
             if available and now - device.lastAnnounce >= config.announceInterval then
                 device.nonce = device.nonce + 1
                 net.toServer({type = "announce", clientType = "monitor", clientId = device.id,
-                    nonce = device.nonce, width = device.width, height = device.height})
+                    nonce = device.nonce, width = device.width, height = device.height, touchProtocol = 1})
                 device.lastAnnounce = now
             end
         end
+    end
+    function client.calibrate(side)
+        local device = assert(client.devices[side], "No monitor on that side")
+        local w, h = device.width, device.height
+        device.cache = {}
+        assert(w >= 12 and h >= 8, "Calibration needs at least 12x8 characters")
+        local targets = {{math.floor(w / 4), math.max(3, math.floor(h / 4))},
+            {math.floor(3 * w / 4), math.floor(h / 2)}, {math.floor(w / 2), math.min(h - 1, math.floor(3 * h / 4))}}
+        local dx, dy
+        for index, target in ipairs(targets) do
+            local surface = Gui.new(w, h, 1, 2048)
+            surface.write(1, 1, "Tap white + " .. index .. "/3")
+            surface.fill(target[1] - 1, target[2] - 1, 3, 3, 1, 128)
+            surface.write(target[1], target[2], "+", 32768, 1)
+            local paint = {}
+            for row = 1, h do Gui.drawRow(device.peripheral, row, surface.lines[row], surface.foreground[row], surface.background[row], device.colour, paint) end
+            while true do
+                local _, touched, x, y = os.pullEvent("monitor_touch")
+                if touched == side and math.abs(x - target[1]) <= 3 and math.abs(y - target[2]) <= 3 then
+                    local tx, ty = target[1] - x, target[2] - y
+                    if dx ~= nil and (tx ~= dx or ty ~= dy) then return nil, "Samples disagree; tap the centre of each + and retry" end
+                    dx, dy = tx, ty
+                    break
+                end
+            end
+        end
+        return {x = dx, y = dy}
     end
     return client
 end
@@ -1695,44 +1901,90 @@ end
     ["clients_monitor_client.lua"] = [=[local storage = dofile("lib_storage.lua")
 local Network = dofile("lib_network.lua")
 local Monitor = dofile("lib_monitor.lua")
+local args = {...}
 local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
 local config = storage.config("configs_monitor.txt", {
     clientId = "monitor_" .. os.getComputerID(), textScale = 0.5,
     announceInterval = 5, timeout = 15,
+    touchOffsets = {},
 })
 assert(type(config.textScale) == "number" and config.textScale >= 0.5 and config.textScale <= 5
     and config.textScale * 2 == math.floor(config.textScale * 2), "Invalid textScale")
 assert(type(config.announceInterval) == "number" and config.announceInterval >= 1, "Invalid announceInterval")
 assert(type(config.timeout) == "number" and config.timeout > config.announceInterval, "Invalid timeout")
+assert(type(config.touchOffsets) == "table", "Invalid touchOffsets")
+for _, offset in pairs(config.touchOffsets) do
+    assert(type(offset) == "table" and type(offset.x) == "number" and type(offset.y) == "number"
+        and offset.x == math.floor(offset.x) and offset.y == math.floor(offset.y)
+        and math.abs(offset.x) <= 3 and math.abs(offset.y) <= 3, "Invalid touch offset")
+end
 local net = Network.new(networkConfig, false)
 local client = Monitor.new(net, config)
 print("Monitor client: " .. config.clientId)
 client.scan()
+if args[1] then
+    assert(args[1] == "calibrate" and not args[3], "Usage: clients_monitor_client calibrate [side]")
+    local side = args[2] or next(client.devices)
+    assert(side, "Attach a monitor first")
+    print("Calibrating " .. side .. ": tap the centre of each white +")
+    local offset, err = client.calibrate(side)
+    assert(offset, err)
+    config.touchOffsets[side] = offset
+    assert(storage.save("configs_monitor.txt", config))
+    print("Saved touch offset: x=" .. offset.x .. " y=" .. offset.y)
+    print("Reboot to return to the monitor client")
+    return
+end
 if not next(client.devices) then print("Attach one or more monitors; waiting...") end
 client.tick(os.clock())
 local timer = os.startTimer(1)
-while true do
-    local event, p1, p2, p3, p4 = os.pullEvent()
+local function process(item)
+    local event, p1, p2, p3, p4 = unpack(item)
     if event == "modem_message" then
         local message = net.receive(p1, p2, p3, p4)
         if message then client.handle(message, os.clock()) end
     elseif event == "monitor_touch" then
-        client.touch(p1, p2, p3)
-    elseif event == "timer" and p1 == timer then
+        client.touch(p1, p2, p3, p4)
+    elseif event == "timer" then
         client.tick(os.clock())
-        timer = os.startTimer(1)
     elseif event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" then
         if event ~= "monitor_resize" then net.peripheralChanged(p1) end
-        client.scan()
         client.tick(os.clock())
     end
 end
+-- Keep input/modem events while native drawing or peripheral calls yield. Each
+-- tap retains the UI revision visible when it arrived, not the revision after a repaint.
+local pending, head = {}, 1
+parallel.waitForAny(function()
+    while true do
+        local item = {os.pullEvent()}
+        local event, keep = item[1], false
+        if event == "monitor_touch" then
+            local device = client.devices[item[2]]
+            if device and device.connected and device.hasFrame then
+                item[5], keep = device.inputRevision or 0, true
+            end
+        elseif event == "timer" and item[2] == timer then
+            timer, keep = os.startTimer(1), true
+        elseif event == "modem_message" or event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" then keep = true end
+        if keep then pending[#pending + 1] = item; os.queueEvent("smarthome_monitor_work") end
+    end
+end, function()
+    while true do
+        if head <= #pending then
+            local item = pending[head]
+            pending[head], head = false, head + 1
+            process(item)
+            if head > #pending then pending, head = {}, 1 end
+        else os.pullEvent("smarthome_monitor_work") end
+    end
+end)
 ]=],
 }
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v7")
+print("SmartHome installer: bundled-v8")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor [--startup]")
@@ -1874,6 +2126,7 @@ else
         autorun = true
     end
     files = {"lib_storage.lua", "lib_network.lua"}
+    if role ~= "io" then files[#files + 1] = "lib_gui.lua" end
     if role == "server" then
         files[#files + 1] = "lib_io_picker.lua"
         files[#files + 1] = "lib_desktop.lua"

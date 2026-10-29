@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all ten runtime source files and **no apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v7`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all eleven runtime source files and **no apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v8`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -43,6 +43,8 @@ For direct file copying instead, preserve these paths:
 | IO client | Also `clients_io_client.lua`, `lib_io.lua` |
 | Monitor client | Also `clients_monitor_client.lua`, `lib_monitor.lua` |
 
+Both the OS and monitor roles also require `lib_gui.lua` for colour surfaces and drawing.
+
 For maintainers: edit the normal source files, then run `python3 tools_build_installer.py` to rebuild `install.lua`. `python3 tools_build_installer.py --check` checks that it matches those sources. The previous GitHub-downloading installer is retained at `tools_install_github.lua` as an optional alternative; it is not needed by the bundled installer or installed computers.
 
 ### Installing a user app later
@@ -62,7 +64,7 @@ If the raw download fails or returns invalid Lua, bundled-v7 tries the same file
 
 These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
 
-The first optional app is [coffee](documentation_coffee.md), adapted from the original standalone timer. Run `inst app coffee` on the OS computer to fetch it from GitHub. It starts automatically at every OS boot without a window. Its Settings menu uses the shared client → side → Digital/bundled-colour picker. Install the current bundled-v7 OS before installing this app; existing IO clients need no update; update monitor clients as well to get resolution polling on older CC versions.
+The first optional app is [coffee](documentation_coffee.md), adapted from the original standalone timer. Run `inst app coffee` on the OS computer to fetch it from GitHub. It starts automatically at every OS boot without a window. Its Settings menu uses the shared client → side → Digital/bundled-colour picker. Install the current bundled-v8 OS and monitor roles for the coloured desktop, ordered frames and buffered input. Keep the new Coffee file on GitHub so app downloads include its styled buttons; IO clients need no update for this GUI change.
 
 ### Confirm connection and test a wire
 
@@ -127,7 +129,11 @@ The desktop initially has no apps. Finish the console-based IO connection test b
 
 The taskbar's clock reads Minecraft world time from the OS computer's built-in `os.time()`; no time sensor or extra computer is required. This is the in-game day/night clock, not real-world local time. If that API is unavailable, an online sensor's `gameTime` value remains a fallback. The original `?:??` appeared because the earlier OS waited exclusively for that unimplemented sensor source.
 
-Every monitor has a bottom taskbar with `[+]`, local window buttons, overflow arrows and a clock when space permits. Title-bar controls are `[X][#][_]` at the top left: close this view, open layouts, and minimize. A normal app stops after its last view closes across all monitors; Coffee is a background service and keeps running. Click title text for move mode. Layouts include maximize/restore, halves, quarters and a custom two-corner rectangle with preview/OK/Cancel. See [desktop controls](documentation_desktop.md).
+Every monitor has a bottom taskbar with `[+]`, local window buttons, overflow arrows and a clock when space permits. The title is at the far left; controls are at the far right in this order: `-` minimize, `+` layouts, red `X` close this view. A normal app stops after its last view closes across all monitors; Coffee is a background service and keeps running. Click title text for move mode. The layout popup opens beside the window controls and offers maximize/restore, halves, quarters and a custom two-corner rectangle with preview/OK/Cancel. See [desktop controls](documentation_desktop.md).
+
+Advanced monitors now draw a coloured desktop, filled title bars/panels/buttons and wire-colour swatches. Drawing uses CC 1.5 foreground/background colours on character cells; it needs no `blit` or pixel API. Incoming modem/touch events are buffered while peripheral drawing waits. Frame ordering prevents a delayed frame from restoring an older page; touches retain the revision of the screen seen when they arrived, so duplicate/stale taps cannot apply an action twice. Clock-only repaints do not invalidate otherwise-current taps.
+
+If physical touches still appear offset, stop the monitor client with Ctrl+T and run `clients_monitor_client calibrate` (or add its side, such as `top`, if several monitors are attached). Tap the centre of each of three white `+` targets, then `reboot`. Calibration saves a measured per-side offset in `configs_monitor.txt`; inconsistent samples are rejected. Repeat calibration after changing text scale if needed. The OS does not apply a guessed global row offset.
 
 The OS resolves touches from coordinates and stacking order. Clients do not invent window IDs. From the OS console you can also use:
 

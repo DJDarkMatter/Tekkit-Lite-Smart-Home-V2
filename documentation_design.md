@@ -87,7 +87,7 @@ Monitors are classified by their actual block dimensions (e.g. "5x4", "10x7"). T
 
 Every monitor desktop has a taskbar:
 - Shows list of open windows on that monitor
-- Touch to focus/restore or minimize local views; use the top-left window controls to close or arrange them
+- Touch to focus/restore or minimize local views; use the top-right window controls to close or arrange them
 - Always visible on the bottom row; arrow controls scroll overflowing window buttons
 - Displays Minecraft time from the OS computer's built-in `os.time()` (sensor fallback if unavailable)
 
@@ -179,4 +179,4 @@ This document is the target architecture, not a claim that every feature is impl
 
 ## Implemented desktop controls
 
-The [desktop guide](documentation_desktop.md) describes the bottom taskbar, top-left controls, snap presets, two-corner custom sizing, click-to-move, normalized saved layouts and adaptive app views. Coffee is a declared background service; ordinary apps run only while at least one view exists.
+The [desktop guide](documentation_desktop.md) describes the coloured bottom taskbar, left title and top-right controls, snap presets, two-corner custom sizing, click-to-move, normalized saved layouts and adaptive app views. The OS composes foreground/background colour surfaces per monitor; clients only paint and relay input. Ordered frames, buffered events and input revisions prevent stale screens/touches from reversing UI actions. Optional measured touch calibration stays on each monitor computer. Coffee is a declared background service; ordinary apps run only while at least one view exists.

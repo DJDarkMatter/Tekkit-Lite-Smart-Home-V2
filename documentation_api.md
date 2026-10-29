@@ -37,6 +37,8 @@ return app
 
 Size limits describe **content** character dimensions. The OS adds a one-character frame and reserves one bottom taskbar row. Preferred sizes set initial content dimensions; optional maximum sizes constrain presets too. Omit maxima for fully responsive applications. A background-only app can omit `render`. `shutdown(state, api, {appName})` is an optional hook called when the last ordinary-app view closes. Closing or minimizing one view never stops work shared by other views. App state is shared across the app's windows and background hook and is persisted separately from window geometry. `handleTouch` may optionally return `handled, replacementState`.
 
+An app may attach `styles` to its returned array of text rows. Each style is `{x, y, width, height = 1, fg, bg}` in content coordinates, with numeric CC colour constants. Styles affect foreground/background without replacing text and are clipped to the content area. For example, `return {"Settings", styles = {{x = 1, y = 1, width = width, fg = 1, bg = 2048}}}` paints a blue heading. Old plain-text apps remain supported. Coffee's button helper generates its text, colour rectangle and hit rectangle from the same geometry. `lib_gui.lua` composes and encodes surfaces centrally; app code never draws on a peripheral.
+
 Hooks must return promptly and must not call `sleep`, `read`, `os.pullEvent`, HTTP, or other yielding functions. Lua 5.1 hooks run under `pcall` for fault isolation. Apps are trusted code, not sandboxed plugins.
 
 | API | Result |
@@ -132,6 +134,12 @@ An IO snapshot looks like:
 It sets a complete desired state instead of sending toggle commands, so a duplicate/retry cannot toggle twice. Boot sessions and increasing revisions prevent delayed commands from restoring obsolete outputs. This is convergence/acknowledgement, not an exactly-once guarantee for external machinery.
 
 Input updates use `inputData` with `side`, `value` (bundled mask), `digital`, and `serverSession`. Monitor touches use `touch` with `x`, `y` and `serverSession`; the OS decides the window. Frames use `render` with `lines`, `width`, `height`, `monitorId` and `serverSession`.
+
+Bundled-v8 monitors announce `touchProtocol = 1`. Render packets add `frameId`, `inputRevision`, `colourFormat = "rle1"`, and `foreground`/`background` row arrays. Each colour row is run-length encoded as repeated two-hex-digit counts (1–255) plus one colour digit (0–f, corresponding to `2^index`). The bridge validates full rows and draws contiguous spans with legacy colour setters and `write`; `blit` is not required. Older frame IDs are discarded, and cache keys include colours as well as text.
+
+New clients echo the displayed `inputRevision` with each touch. The OS advances it when interactions/layouts change and accepts only the current revision; stale touches trigger a replacement frame without applying an action. Background clock-only changes do not advance it. The bridge's event collector buffers modem/touch/timer events while its worker waits on peripheral calls, capturing each touch's revision at receipt. Old clients without the capability retain legacy input behavior. Install both new roles for the full colour/input behavior.
+
+Optional per-side `touchOffsets` in `configs_monitor.txt` are measured with `clients_monitor_client calibrate [side]`, persisted locally and applied before sending a touch. App content origin is `(win.x + 1, win.y + 1)`; forwarded local coordinates are `(touch.x - win.x, touch.y - win.y)`. No global guessed offset is applied by the OS.
 
 A future sensor adapter must implement the same announce/welcome/heartbeat process. Once welcomed, send `sensorData` with `varName`, scalar `value`, and `serverSession`. `playerOnline` must be boolean and `gameTime` must be a string; other names remain raw readings under that sensor client. There is no sensor peripheral driver included yet.
 

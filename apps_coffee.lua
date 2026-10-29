@@ -174,30 +174,36 @@ end
 
 local function build(width, height, state, api, context)
     local view = context.view
-    local lines, hits = {}, {}
+    local lines, hits = {styles = {}}, {}
     local function text(y, value) lines[y] = tostring(value):sub(1, width) end
-    local function button(y, label, action, x1, x2)
+    local function button(y, label, action, x1, x2, enabled)
         x1, x2 = x1 or 1, x2 or width
         local line = lines[y] or string.rep(" ", width)
         label = label:sub(1, x2 - x1 + 1)
-        lines[y] = line:sub(1, x1 - 1) .. label .. line:sub(x1 + #label)
-        hits[#hits + 1] = {y = y, x1 = x1, x2 = x2, action = action}
+        local padding = math.floor((x2 - x1 + 1 - #label) / 2)
+        label = string.rep(" ", padding) .. label .. string.rep(" ", x2 - x1 + 1 - padding - #label)
+        lines[y] = line:sub(1, x1 - 1) .. label .. line:sub(x2 + 1)
+        hits[#hits + 1] = {y = y, x1 = x1, x2 = x2, action = action, enabled = enabled}
+        lines.styles[#lines.styles + 1] = {x = x1, y = y, width = x2 - x1 + 1, height = 1, fg = enabled == false and 128 or 1,
+            bg = enabled == false and 256 or action == "force" and 2 or action == "confirmReset" and 16384
+                or action == "saveDuration" and 8192 or action == "pause" and 2048 or 128}
     end
     for y = 1, height do lines[y] = string.rep(" ", width) end
     local page = view.page or "main"
     if page == "settings" then
-        text(1, "Settings")
         local items = {{"Player IO >", "input"}, {"Harvest IO >", "output"}, {"Countdown >", "countdown"},
             {"Harvest time", "harvest"}, {"Stats >", "stats"}, {"Reset >", "reset"}, {"Import >", "import"}}
         local slots = height - 3
-        view.settingsPage = math.max(1, math.min(view.settingsPage or 1, math.ceil(#items / slots)))
+        view.settingsPages = math.ceil(#items / slots)
+        view.settingsPage = math.max(1, math.min(view.settingsPage or 1, view.settingsPages))
+        text(1, "Settings " .. view.settingsPage .. "/" .. view.settingsPages)
         for row = 1, slots do
             local item = items[(view.settingsPage - 1) * slots + row]
             if item then button(row + 1, item[1], item[2]) end
         end
         local half = math.floor(width / 2)
-        button(height - 1, "< Prev", "previous", 1, half)
-        button(height - 1, "Next >", "next", half + 1, width)
+        button(height - 1, "< Prev", "previous", 1, half, view.settingsPage > 1)
+        button(height - 1, "Next >", "next", half + 1, width, view.settingsPage < view.settingsPages)
         button(height, "Back", "main")
     elseif page == "duration" then
         text(1, view.field == "countdown" and "Countdown" or "Harvest time")
@@ -253,6 +259,13 @@ local function build(width, height, state, api, context)
             button(height, "Settings", "settings")
         end
     end
+    lines.styles[#lines.styles + 1] = {x = 1, y = 1, width = width, height = 1, fg = 1, bg = 2048}
+    if page == "main" then
+        local timer = lines[2]
+        lines[2] = string.rep(" ", math.max(0, math.floor((width - #timer) / 2))) .. timer
+        lines.styles[#lines.styles + 1] = {x = 1, y = 2, width = width, height = 1, fg = 2048, bg = 1}
+        lines.styles[#lines.styles + 1] = {x = 1, y = 3, width = width, height = 1, fg = saveError and 16384 or 32768, bg = 256}
+    end
     return lines, hits
 end
 
@@ -266,7 +279,7 @@ function app.handleTouch(x, y, width, height, state, api, context)
     local _, hits = build(width, height, state, api, context)
     local action
     for _, hit in ipairs(hits) do
-        if y == hit.y and x >= hit.x1 and x <= hit.x2 then action = hit.action; break end
+        if y == hit.y and x >= hit.x1 and x <= hit.x2 and hit.enabled ~= false then action = hit.action; break end
     end
     if not action then return false end
     notice = nil
@@ -295,7 +308,7 @@ function app.handleTouch(x, y, width, height, state, api, context)
         if ok then view.page, notice = "main", "Timer reset" end
     elseif action == "confirmImport" then importLegacy(state, api); view.page = "main"
     elseif action == "previous" then view.settingsPage = math.max(1, (view.settingsPage or 1) - 1)
-    elseif action == "next" then view.settingsPage = (view.settingsPage or 1) + 1
+    elseif action == "next" then view.settingsPage = math.min(view.settingsPages or 1, (view.settingsPage or 1) + 1)
     else view.page = action end
     if notice then noticeUntil = os.clock() + 4 end
     return true

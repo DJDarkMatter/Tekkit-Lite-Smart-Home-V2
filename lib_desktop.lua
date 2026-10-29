@@ -6,6 +6,13 @@ function Desktop.area(monitor)
     return {x = 1, y = 1, width = monitor.width, height = monitor.height - 1}
 end
 
+function Desktop.controls(win)
+    local x = win.x + win.width - 9
+    return {{x1 = x, x2 = x + 2, action = "minimize", label = " - "},
+        {x1 = x + 3, x2 = x + 5, action = "layout", label = " + "},
+        {x1 = x + 6, x2 = x + 8, action = "close", label = " X "}}
+end
+
 function Desktop.bounds(app, monitor)
     local area = Desktop.area(monitor)
     return math.max(10, (app.minWidth or 8) + 2), (app.minHeight or 2) + 2,
@@ -92,8 +99,8 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
     local labels, needed = {}, 0
     for _, win in ipairs(windows) do
         local marker = win.minimized and "_" or win.id == active and "*" or ""
-        local label = "[" .. marker .. win.appName .. "]"
-        if #label > 14 then label = label:sub(1, 13) .. "]" end
+        local label = " " .. marker .. win.appName .. " "
+        if #label > 14 then label = label:sub(1, 13) .. " " end
         labels[#labels + 1] = label
         needed = needed + #labels[#labels] + 1
     end
@@ -112,7 +119,7 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
         if available < 3 then break end
         local label = labels[index]
         local limit = math.min(14, available)
-        if #label > limit then label = label:sub(1, limit - 1) .. "]" end
+        if #label > limit then label = label:sub(1, limit - 1) .. " " end
         put(x, label, last); hit(x, x + #label - 1, "window", windows[index].id)
         x, finalVisible = x + #label + 1, index
     end
@@ -123,32 +130,33 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
 end
 
 -- Shared paginated popup geometry for the launcher and window layout menus.
-function Desktop.menu(monitor, title, items, page)
+function Desktop.menu(monitor, title, items, page, anchor)
     local area = Desktop.area(monitor)
     local width = math.min(area.width, 26)
     local height = math.min(area.height, math.max(4, #items + 3))
     local slots = math.max(1, height - 3)
     local pages = math.max(1, math.ceil(#items / slots))
     page = clamp(page or 1, 1, pages)
-    local rect = {x = 1, y = area.height - height + 1, width = width, height = height}
+    local rect = {x = clamp(anchor and anchor.x or 1, 1, area.width - width + 1),
+        y = clamp(anchor and anchor.y or area.height - height + 1, 1, area.height - height + 1), width = width, height = height}
     local lines, hits = {}, {}
-    for y = 1, height do lines[y] = "|" .. string.rep(" ", math.max(0, width - 2)) .. "|" end
-    lines[1] = ("+" .. title .. string.rep("-", width)):sub(1, width - 1) .. "+"
-    lines[height] = "+" .. string.rep("-", math.max(0, width - 2)) .. "+"
+    for y = 1, height do lines[y] = string.rep(" ", width) end
+    lines[1] = (" " .. title .. string.rep(" ", width)):sub(1, width)
+    lines[height] = (" " .. page .. "/" .. pages .. string.rep(" ", width)):sub(1, width)
     for row = 1, slots do
         local item = items[(page - 1) * slots + row]
         if item then
             local label = (item.enabled == false and "-" or " ") .. item.label
-            lines[row + 1] = "|" .. label:sub(1, width - 2) .. string.rep(" ", math.max(0, width - 2 - #label)) .. "|"
+            lines[row + 1] = " " .. label:sub(1, width - 2) .. string.rep(" ", math.max(0, width - 2 - #label)) .. " "
             hits[#hits + 1] = {x1 = rect.x + 1, x2 = rect.x + width - 2, y = rect.y + row,
                 action = "item", item = item}
         end
     end
-    if #items == 0 then lines[2] = "|" .. ("No apps"):sub(1, width - 2) .. string.rep(" ", math.max(0, width - 9)) .. "|" end
+    if #items == 0 then lines[2] = (" No apps" .. string.rep(" ", width)):sub(1, width) end
     if pages > 1 then
         local half = math.floor((width - 2) / 2)
-        lines[height - 1] = "|" .. ("< Prev" .. string.rep(" ", width)):sub(1, half)
-            .. ("Next >" .. string.rep(" ", width)):sub(1, width - 2 - half) .. "|"
+        lines[height - 1] = " " .. ("< Prev" .. string.rep(" ", width)):sub(1, half)
+            .. ("Next >" .. string.rep(" ", width)):sub(1, width - 2 - half) .. " "
         hits[#hits + 1] = {x1 = rect.x + 1, x2 = rect.x + half, y = rect.y + height - 2, action = "previous"}
         hits[#hits + 1] = {x1 = rect.x + half + 1, x2 = rect.x + width - 2, y = rect.y + height - 2, action = "next"}
     end

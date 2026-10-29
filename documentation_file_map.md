@@ -60,3 +60,7 @@ New flat files: `lib_desktop.lua`, `tests_desktop.lua`, and `documentation_deskt
 ## GitHub download compatibility update (bundled-v7)
 
 The installer now tries GitHub's contents API after a failed raw download and reports both failure reasons. No new files: changed files are `tools_build_installer.py`, generated `install.lua`, `tests_run.lua`, `README.md`, `documentation_api.md`, `documentation_coffee.md`, and this map. Runtime/app sources and saved formats are unchanged. Updating the installer paste is sufficient for this app-download change.
+
+## Colour GUI and input update (bundled-v8)
+
+New file: `lib_gui.lua`, installed on OS and monitor roles. Updated source/build: `lib_server.lua`, `lib_monitor.lua`, `clients_monitor_client.lua`, `lib_desktop.lua`, `lib_io_picker.lua`, `apps_coffee.lua`, `tools_build_installer.py`, and generated `install.lua`. Updated tests: `tests_run.lua`, `tests_desktop.lua`. Updated guides: `README.md`, `documentation_desktop.md`, `documentation_api.md`, `documentation_coffee.md`, `documentation_design.md`, `documentation_review.md`, and this map. All files remain in the root. Reinstall both OS and monitor roles; update the Coffee source on GitHub before running `inst app coffee`. App/window state is preserved, and measured touch offsets use the existing `configs_monitor.txt`.

@@ -104,6 +104,7 @@ local function newBus()
             "lightGray", "cyan", "purple", "blue", "brown", "green", "red", "black"}
         for i, name in ipairs(colorNames) do env.colors[name] = 2 ^ (i - 1) end
         env.os = {
+            queueEvent = function(name, ...) bus.queue(comp, {name, ...}) end,
             clock = function() return bus.now - comp.started end,
             getComputerID = function() return id end,
             startTimer = function(delay)
@@ -284,17 +285,33 @@ local function newBus()
     return bus
 end
 local function monitor(width, height)
-    local screen = {width = width, height = height, lines = {}, x = 1, y = 1}
-    function screen.setTextScale() end
+    local screen = {width = width, height = height, lines = {}, fg = {}, bg = {}, x = 1, y = 1,
+        foreground = 1, background = 32768, colour = true, writes = 0}
+    function screen.setTextScale(scale) screen.scale = scale end
+    function screen.isColor() return screen.colour end
+    function screen.setTextColor(colour)
+        assert(screen.colour or colour == 1 or colour == 32768, "Unsupported monochrome foreground")
+        screen.foreground = colour
+    end
+    function screen.setBackgroundColor(colour)
+        assert(screen.colour or colour == 1 or colour == 32768, "Unsupported monochrome background")
+        screen.background = colour
+    end
     function screen.getSize() return screen.width, screen.height end
-    function screen.clear() screen.lines = {} end
+    function screen.clear() screen.lines, screen.fg, screen.bg = {}, {}, {} end
     function screen.setCursorPos(x, y)
         assert(x >= 1 and y >= 1 and x == math.floor(x) and y == math.floor(y), "Invalid monitor cursor")
         screen.x, screen.y = x, y
     end
     function screen.write(text)
+        if screen.beforeWrite then screen.beforeWrite() end
         assert(screen.x + #text - 1 <= screen.width, "Monitor write overflow")
-        screen.lines[screen.y] = text
+        local line = screen.lines[screen.y] or string.rep(" ", screen.width)
+        line = (line .. string.rep(" ", screen.width)):sub(1, screen.width)
+        screen.lines[screen.y] = line:sub(1, screen.x - 1) .. text .. line:sub(screen.x + #text)
+        screen.fg[screen.y], screen.bg[screen.y] = screen.fg[screen.y] or {}, screen.bg[screen.y] or {}
+        for x = screen.x, screen.x + #text - 1 do screen.fg[screen.y][x], screen.bg[screen.y][x] = screen.foreground, screen.background end
+        screen.x, screen.writes = screen.x + #text, screen.writes + 1
     end
     return screen
 end
@@ -479,8 +496,8 @@ function tests.monitors_forward_touches_close_minimize_resize_and_restore_window
     local second = os.server.state.windows[id]
     assert(second.x >= 21, "Free space should be used for side-by-side windows")
     os.server.refreshMonitors(true); bus.pump()
-    equal(top.lines[second.y]:sub(second.x, second.x + 2), "[X]")
-    bus.queue(display, {"monitor_touch", "top", second.x + 1, second.y}); bus.pump()
+    equal(top.lines[second.y]:sub(second.x + second.width - 3, second.x + second.width - 1), " X ")
+    bus.queue(display, {"monitor_touch", "top", second.x + second.width - 2, second.y}); bus.pump()
     equal(os.server.state.windows[2], nil)
     top.width, top.height = 8, 4
     bus.queue(display, {"monitor_resize", "top"}); bus.pump()
@@ -837,7 +854,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v7", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v8", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
