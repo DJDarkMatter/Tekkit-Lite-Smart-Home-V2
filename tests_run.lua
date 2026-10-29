@@ -479,7 +479,11 @@ function tests.monitors_forward_touches_close_minimize_resize_and_restore_window
     assert(os.server.monitors["monitor_13:left"].online)
     -- Launcher -> app; no client-supplied window IDs.
     bus.queue(display, {"monitor_touch", "top", 2, top.height}); bus.pump()
-    local launch = os.server.monitors["monitor_13:top"].menuHits[1]
+    local launch
+    for _, hit in ipairs(os.server.monitors["monitor_13:top"].menuHits) do
+        if hit.item and hit.item.value == "switchboard" then launch = hit end
+    end
+    assert(launch)
     bus.queue(display, {"monitor_touch", "top", launch.x1, launch.y}); bus.pump()
     local win = os.server.state.windows[1]
     assert(win)
@@ -580,7 +584,8 @@ function tests.lost_handshake_acknowledgement_and_render_recover()
     bus.computer(13, "monitor", {monitors = {top = screen}}):start()
     assert(screen.lines[1]:find("Connecting", 1, true))
     bus.advance(5)
-    assert(screen.lines[1]:find("SmartHome OS", 1, true))
+    equal(screen.lines[1], string.rep(" ", screen.width))
+    equal(screen.bg[1][1], 2048)
     assert(droppedWelcome and droppedAck and droppedRender)
 end
 function tests.sensor_data_cannot_overwrite_os_structures_and_times_out()
@@ -854,7 +859,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v8", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v9", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -1270,6 +1275,7 @@ function tests.flat_upgrade_rejects_corrupt_legacy_data_and_failed_staging_witho
 end
 assert(hostLoadfile("tests_coffee.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_desktop.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
+assert(hostLoadfile("tests_appearance.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 local names, failures = {}, {}
 for name in pairs(tests) do names[#names + 1] = name end
 table.sort(names)

@@ -1,6 +1,87 @@
 -- CC 1.5 colour surfaces. Uses write/setTextColor/setBackgroundColor, never blit.
 local Gui = {}
 local digits = "0123456789abcdef"
+local names = {"White", "Orange", "Magenta", "Light blue", "Yellow", "Lime", "Pink", "Gray",
+    "Light gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
+function Gui.colourName(colour)
+    for index = 0, 15 do if colour == 2 ^ index then return names[index + 1] end end
+    return "Unknown"
+end
+function Gui.contrast(colour)
+    return (colour == 128 or colour == 1024 or colour == 2048 or colour == 4096
+        or colour == 8192 or colour == 16384 or colour == 32768) and 1 or 32768
+end
+function Gui.hit(hit, x, y)
+    return x >= hit.x1 and x <= hit.x2 and y >= (hit.y1 or hit.y) and y <= (hit.y2 or hit.y)
+end
+-- App widgets return text plus clipped colour rectangles, sharing geometry with hits.
+function Gui.content(width, height)
+    local ui = {lines = {styles = {}}, hits = {}}
+    ui.lines.hits = ui.hits
+    for y = 1, height do ui.lines[y] = string.rep(" ", width) end
+    function ui.style(x, y, w, h, fg, bg)
+        ui.lines.styles[#ui.lines.styles + 1] = {x = x, y = y, width = w, height = h, fg = fg, bg = bg}
+    end
+    function ui.text(y, text, centred)
+        if y < 1 or y > height then return end
+        text = tostring(text):sub(1, width)
+        local left = centred and math.floor((width - #text) / 2) or 0
+        ui.lines[y] = string.rep(" ", left) .. text .. string.rep(" ", width - left - #text)
+    end
+    function ui.heading(text, accent)
+        ui.text(1, text)
+        ui.style(1, 1, width, 1, Gui.contrast(accent or 128), accent or 128)
+    end
+    function ui.button(y, label, action, x1, x2, enabled, bg, fg, value)
+        x1, x2 = x1 or 1, x2 or width
+        label = label:sub(1, x2 - x1 + 1)
+        local left = math.floor((x2 - x1 + 1 - #label) / 2)
+        local text = string.rep(" ", left) .. label .. string.rep(" ", x2 - x1 + 1 - left - #label)
+        ui.lines[y] = ui.lines[y]:sub(1, x1 - 1) .. text .. ui.lines[y]:sub(x2 + 1)
+        bg = enabled == false and 256 or bg or 128
+        ui.style(x1, y, x2 - x1 + 1, 1, enabled == false and 128 or fg or Gui.contrast(bg), bg)
+        ui.hits[#ui.hits + 1] = {x1 = x1, x2 = x2, y = y, action = action, value = value, enabled = enabled}
+    end
+    return ui
+end
+function Gui.menu(width, height, title, items, page, back, accent)
+    local ui = Gui.content(width, height)
+    local slots = #items <= height - 2 and height - 2 or height - 3
+    local pages = math.max(1, math.ceil(#items / slots))
+    page = math.max(1, math.min(page or 1, pages))
+    ui.heading(title .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), accent)
+    for row = 1, slots do
+        local item = items[(page - 1) * slots + row]
+        if item then ui.button(row + 1, item.label, item.action, nil, nil, item.enabled) end
+    end
+    if pages > 1 then
+        local half = math.floor(width / 2)
+        ui.button(height - 1, "< Prev", "previous", 1, half, page > 1)
+        ui.button(height - 1, "Next >", "next", half + 1, width, page < pages)
+    end
+    ui.button(height, "Back", back)
+    return ui.lines, ui.hits, page, pages
+end
+function Gui.palette(width, height, current, title)
+    local ui = Gui.content(width, height)
+    ui.heading(title or "UI colour", 128)
+    local cellWidth, cellHeight = math.floor((width - 3) / 4), math.min(2, math.floor((height - 2) / 4))
+    local short = {"White", "Orange", "Mag.", "Sky", "Yellow", "Lime", "Pink", "Gray", "L.gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
+    for index = 0, 15 do
+        local x, y = 1 + index % 4 * (cellWidth + 1), 2 + math.floor(index / 4) * cellHeight
+        local colour = 2 ^ index
+        ui.style(x, y, cellWidth, cellHeight, Gui.contrast(colour), colour)
+        local label = colour == current and "*" or cellWidth >= 6 and short[index + 1] or ""
+        local left = math.floor((cellWidth - #label) / 2)
+        local row = ui.lines[y]
+        ui.lines[y] = row:sub(1, x - 1) .. string.rep(" ", left) .. label
+            .. string.rep(" ", cellWidth - left - #label) .. row:sub(x + cellWidth)
+        ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + cellWidth - 1, y = y, y1 = y,
+            y2 = y + cellHeight - 1, action = "colour", value = colour}
+    end
+    ui.button(height, "Back", "cancel")
+    return ui.lines, ui.hits
+end
 function Gui.code(colour, fallback)
     for index = 0, 15 do if colour == 2 ^ index then return digits:sub(index + 1, index + 1) end end
     return fallback

@@ -67,10 +67,11 @@ function Picker.render(dialog, width, height, clients)
         button(height, half + 1, width, "Cancel", "cancel")
     else
         local titles = {"Select IO", "Select side", "Select wire"}
-        local list, slots = choices(dialog, clients), math.max(1, height - 3)
+        local list = choices(dialog, clients)
+        local slots = #list <= height - 2 and height - 2 or math.max(1, height - 3)
         local pages = math.max(1, math.ceil(#list / slots))
         dialog.page = math.max(1, math.min(dialog.page, pages))
-        text(1, titles[dialog.stage] .. " " .. dialog.page .. "/" .. pages)
+        text(1, titles[dialog.stage] .. (pages > 1 and (" " .. dialog.page .. "/" .. pages) or ""))
         for row = 1, slots do
             local item = list[(dialog.page - 1) * slots + row]
             if item then
@@ -79,8 +80,10 @@ function Picker.render(dialog, width, height, clients)
             end
         end
         if #list == 0 then text(2, "No IO clients") end
-        button(height - 1, 1, half, "< Prev", "prev", nil, dialog.page > 1)
-        button(height - 1, half + 1, width, "Next >", "next", pages, dialog.page < pages)
+        if pages > 1 then
+            button(height - 1, 1, half, "< Prev", "prev", nil, dialog.page > 1)
+            button(height - 1, half + 1, width, "Next >", "next", pages, dialog.page < pages)
+        end
         button(height, 1, half, "Back", "back")
         button(height, half + 1, width, "Cancel", "cancel")
     end

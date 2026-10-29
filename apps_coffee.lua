@@ -1,5 +1,5 @@
 -- Optional SmartHome OS app. Install explicitly; all logic runs on the OS.
-local app = {minWidth = 12, minHeight = 6, preferredWidth = 30, preferredHeight = 10, backgroundService = true}
+local app = {title = "Coffee", minWidth = 12, minHeight = 6, preferredWidth = 30, preferredHeight = 10, backgroundService = true}
 local sinceSave, saveError, notice, runtimeStatus = 0, nil, nil, "Starting"
 local ready, noticeUntil = false, 0
 local steps = {1, 10, 60, 600, 3600}
@@ -44,7 +44,7 @@ end
 
 function app.init(state, api, context)
     ready = false
-    assert(api.pickIO and api.readInput and api.layoutWindow, "Coffee requires the bundled-v5 OS update")
+    assert(api.pickIO and api.readInput and api.pickColour and api.getAppColour and api.ui, "Coffee requires the bundled-v9 OS update")
     if state.version == nil then
         state.version, state.config = 1, {countdown = 14400, harvest = 60}
         state.phase, state.remainingTime, state.harvestRemaining = "countdown", 14400, 0
@@ -157,12 +157,12 @@ end
 local function importLegacy(state, api)
     local path = "countdown_state.txt"
     local file = fs.open(path, "r")
-    if not file then notice = "Copy old save to OS first"; return end
+    if not file then notice = "Copy old save to OS first"; return false end
     local raw = file.readAll(); file.close()
     local ok, legacy = pcall(textutils.unserialize, raw)
     if not ok or type(legacy) ~= "table" or not number(legacy.remainingTime, 0, 604800)
         or type(legacy.redstoneActive) ~= "boolean" or not number(legacy.redstoneEndTime, -604800, 604800) then
-        notice = "Invalid old save"; return
+        notice = "Invalid old save"; return false
     end
     ok = commit(state, api, function(s)
         s.phase = legacy.redstoneActive and "harvest" or "countdown"
@@ -170,103 +170,140 @@ local function importLegacy(state, api)
         s.paused, s.forced = true, false
     end, false)
     if ok then notice = "Imported; paused" end
+    return ok
 end
 
-local function build(width, height, state, api, context)
-    local view = context.view
-    local lines, hits = {styles = {}}, {}
-    local function text(y, value) lines[y] = tostring(value):sub(1, width) end
-    local function button(y, label, action, x1, x2, enabled)
-        x1, x2 = x1 or 1, x2 or width
-        local line = lines[y] or string.rep(" ", width)
-        label = label:sub(1, x2 - x1 + 1)
-        local padding = math.floor((x2 - x1 + 1 - #label) / 2)
-        label = string.rep(" ", padding) .. label .. string.rep(" ", x2 - x1 + 1 - padding - #label)
-        lines[y] = line:sub(1, x1 - 1) .. label .. line:sub(x2 + 1)
-        hits[#hits + 1] = {y = y, x1 = x1, x2 = x2, action = action, enabled = enabled}
-        lines.styles[#lines.styles + 1] = {x = x1, y = y, width = x2 - x1 + 1, height = 1, fg = enabled == false and 128 or 1,
-            bg = enabled == false and 256 or action == "force" and 2 or action == "confirmReset" and 16384
-                or action == "saveDuration" and 8192 or action == "pause" and 2048 or 128}
-    end
-    for y = 1, height do lines[y] = string.rep(" ", width) end
-    local page = view.page or "main"
-    if page == "settings" then
-        local items = {{"Player IO >", "input"}, {"Harvest IO >", "output"}, {"Countdown >", "countdown"},
-            {"Harvest time", "harvest"}, {"Stats >", "stats"}, {"Reset >", "reset"}, {"Import >", "import"}}
-        local slots = height - 3
-        view.settingsPages = math.ceil(#items / slots)
-        view.settingsPage = math.max(1, math.min(view.settingsPage or 1, view.settingsPages))
-        text(1, "Settings " .. view.settingsPage .. "/" .. view.settingsPages)
-        for row = 1, slots do
-            local item = items[(view.settingsPage - 1) * slots + row]
-            if item then button(row + 1, item[1], item[2]) end
-        end
-        local half = math.floor(width / 2)
-        button(height - 1, "< Prev", "previous", 1, half, view.settingsPage > 1)
-        button(height - 1, "Next >", "next", half + 1, width, view.settingsPage < view.settingsPages)
-        button(height, "Back", "main")
-    elseif page == "duration" then
-        text(1, view.field == "countdown" and "Countdown" or "Harvest time")
-        text(2, clock(view.draft))
-        text(3, "Step " .. steps[view.step] .. "s (tap)")
-        button(3, lines[3], "step")
-        local half = math.floor(width / 2)
-        button(4, "-", "minus", 1, half)
-        button(4, "+", "plus", half + 1, width)
-        button(height - 1, width >= 16 and "Save: next cycle" or "Save (next)", "saveDuration")
-        button(height, "Cancel", "settings")
-    elseif page == "actions" then
-        text(1, "Coffee menu")
-        button(2, state.paused and "Resume" or "Pause", "pause")
-        button(3, state.phase == "harvest" and "Harvest active" or "Harvest now", "force")
-        button(4, "Settings", "settings")
-        button(5, "Stats", "stats")
-        button(height, "Back", "main")
-    elseif page == "stats" then
-        text(1, "Harvests")
-        text(2, "Total: " .. state.totalHarvests)
-        text(3, "Trip: " .. state.tripHarvests)
-        button(4, "Reset trip", "resetTrip")
-        button(height, "Back", "settings")
-    elseif page == "reset" or page == "import" then
-        text(1, page == "reset" and "Reset timer?" or "Import old save?")
-        text(2, "Replaces progress")
-        if page == "import" then text(3, "countdown_state.txt") end
-        button(height - 1, "Confirm", page == "reset" and "confirmReset" or "confirmImport")
-        button(height, "Cancel", "settings")
-    else
-        text(1, state.phase == "harvest" and "Coffee harvest" or "Coffee timer")
-        text(2, clock(state.phase == "harvest" and state.harvestRemaining or state.remainingTime))
-        text(3, saveError and "SAVE FAILED" or notice or runtimeStatus)
-        if width < 24 or height < 9 then
-            button(height, "Menu", "actions")
-        else
-            local player = api.readInput(state.playerInput)
-            local details = {"Player: " .. (player == nil and "unknown" or player and "online" or "away"),
-                "Total: " .. state.totalHarvests, "Trip: " .. state.tripHarvests}
-            if width >= 36 and height >= 11 then
-                details[#details + 1] = "Countdown: " .. clock(state.config.countdown)
-                details[#details + 1] = "Harvest: " .. clock(state.config.harvest)
-                for _, item in ipairs({{"In", state.playerInput}, {"Out", state.outputAddress}}) do
-                    local address = item[2]
-                    details[#details + 1] = address and (item[1] .. ": " .. address.clientId .. "/" .. address.side
-                        .. "/" .. (address.color and tostring(address.color) or "Digital")) or item[1] .. ": not set"
+local digits = {
+    ["0"] = {"111","101","101","101","111"}, ["1"] = {"010","110","010","010","111"},
+    ["2"] = {"111","001","111","100","111"}, ["3"] = {"111","001","111","001","111"},
+    ["4"] = {"101","101","111","001","001"}, ["5"] = {"111","100","111","001","111"},
+    ["6"] = {"111","100","111","101","111"}, ["7"] = {"111","001","001","001","001"},
+    ["8"] = {"111","101","111","101","111"}, ["9"] = {"111","101","111","001","111"},
+    [":"] = {"0","1","0","1","0"},
+}
+local function largeClock(ui, width, height, value, accent, contrast)
+    local total = -1
+    for index = 1, #value do total = total + #digits[value:sub(index, index)][1] + 1 end
+    local scale = height >= 20 and width >= total * 2 and 2 or 1
+    local x = 1 + math.floor((width - total * scale) / 2)
+    ui.style(1, 2, width, 5 * scale, nil, contrast)
+    for index = 1, #value do
+        local pattern = digits[value:sub(index, index)]
+        for row, pixels in ipairs(pattern) do
+            for column = 1, #pixels do
+                if pixels:sub(column, column) == "1" then
+                    ui.style(x + (column - 1) * scale, 2 + (row - 1) * scale, scale, scale, nil, accent)
                 end
             end
-            for index, line in ipairs(details) do if index + 3 <= height - 3 then text(index + 3, line) end end
-            button(height - 2, state.paused and "Resume" or "Pause", "pause")
-            button(height - 1, state.phase == "harvest" and "Harvest active" or "Harvest now", "force")
-            button(height, "Settings", "settings")
+        end
+        x = x + (#pattern[1] + 1) * scale
+    end
+    return 5 * scale
+end
+local function build(width, height, state, api, context)
+    local view = context.view
+    local ui = api.ui.content(width, height)
+    local accent = api.getAppColour(context.appName or "coffee")
+    local page = view.page or "main"
+    local half = math.floor(width / 2)
+    local function button(y, label, action, x1, x2, enabled, bg)
+        ui.button(y, label, action, x1, x2, enabled, bg)
+    end
+    if page == "menu" or page == "settings" or page == "maintenance" then
+        local items, back, title
+        if page == "menu" then
+            title, back = "Menu", "main"
+            items = {{label = "Settings", action = "settings"}, {label = "Stats", action = "stats"},
+                {label = "Maintenance", action = "maintenance"}}
+        elseif page == "settings" then
+            title, back = "Settings", "menu"
+            items = {{label = width >= 16 and "Player input" or "Player IO", action = "input"},
+                {label = width >= 16 and "Harvest output" or "Harvest IO", action = "output"},
+                {label = "Countdown", action = "countdown"}, {label = "Harvest time", action = "harvest"},
+                {label = "UI colour", action = "colour"}}
+        else
+            title, back = "Maintenance", "menu"
+            items = {{label = "Reset timer", action = "reset"}, {label = "Import save", action = "import"}}
+        end
+        local key = page .. "Page"
+        local lines, hits, current, pages = api.ui.menu(width, height, title, items, view[key], back, accent)
+        view[key], view[page .. "Pages"] = current, pages
+        return lines, hits
+    elseif page == "duration" then
+        ui.heading(saveError and "Save failed" or view.field == "countdown" and "Countdown" or "Harvest time", accent)
+        ui.text(2, clock(view.draft), true)
+        button(3, "Step " .. steps[view.step] .. "s", "step")
+        button(4, "-", "minus", 1, half)
+        button(4, "+", "plus", half + 1, width)
+        button(height - 1, "Save (next)", "saveDuration", nil, nil, true, 8192)
+        button(height, "Cancel", "settings")
+    elseif page == "stats" then
+        ui.heading(saveError and "Save failed" or width >= 16 and "Harvest counts" or "Stats", accent)
+        ui.text(2, "Total: " .. state.totalHarvests)
+        ui.text(3, "Trip: " .. state.tripHarvests)
+        button(4, "Reset trip", "resetTrip")
+        button(height, "Back", "menu")
+    elseif page == "reset" or page == "import" then
+        ui.heading(page == "reset" and "Reset timer?" or "Import save?", accent)
+        ui.text(2, width >= 18 and "Replaces progress" or "Replace time", true)
+        ui.text(3, saveError and "Save failed" or notice or (page == "import" and
+            (width >= 16 and "Starts paused" or "Paused") or (width >= 16 and "Fresh countdown" or "Starts over")), true)
+        if page == "import" and width >= 20 and height >= 8 then ui.text(4, "countdown_state.txt", true) end
+        button(height - 1, "Confirm", page == "reset" and "confirmReset" or "confirmImport", nil, nil, true, 16384)
+        button(height, "Cancel", "maintenance")
+    else
+        local large = width >= 32 and height >= 14
+        local inline = width >= 36 and height >= 8
+        local statusRow, infoRow = 3, 4
+        local limit = height - (inline and 1 or 3)
+        local remaining = state.phase == "harvest" and state.harvestRemaining or state.remainingTime
+        ui.heading(state.phase == "harvest" and "Harvesting" or "Next harvest", accent)
+        if large then
+            statusRow = 2 + largeClock(ui, width, height, clock(remaining), accent, api.ui.contrast(accent))
+            infoRow = statusRow + 1
+        else
+            ui.text(2, clock(remaining), true)
+            ui.style(1, 2, width, 1, api.ui.contrast(accent) == 1 and accent or 32768, 1)
+        end
+        local status = saveError and "Save failed" or notice or runtimeStatus
+        if width < 20 then
+            local compact = {["Set harvest IO"] = "Set output", ["Set online output first"] = "Need output",
+                ["Output offline"] = "IO offline", ["Waiting for IO"] = "IO pending", ["Counting down"] = "Running"}
+            status = compact[status] or status
+        end
+        ui.text(statusRow, status, true)
+        local player = api.readInput(state.playerInput)
+        local details = {"Player: " .. (player == nil and "?" or player and (width < 16 and "on" or "online")
+            or (width < 16 and "off" or "away"))}
+        if width >= 36 then details[#details + 1] = "Harvests: " .. state.tripHarvests .. " trip / " .. state.totalHarvests .. " total"
+        elseif width >= 24 then details[#details + 1] = "Trip: " .. state.tripHarvests .. "  Total: " .. state.totalHarvests
+        else details[#details + 1] = "Total: " .. state.totalHarvests end
+        local available = limit - infoRow + 1
+        if width >= 24 and available - #details >= 2 then
+            details[#details + 1] = "Countdown: " .. clock(state.config.countdown)
+            details[#details + 1] = "Harvest: " .. clock(state.config.harvest)
+        end
+        if width >= 30 and available - #details >= 2 then
+            for _, item in ipairs({{"Input", state.playerInput}, {"Output", state.outputAddress}}) do
+                local address = item[2]
+                details[#details + 1] = address and item[1] .. ": " .. address.clientId .. "/" .. address.side
+                    .. "/" .. (address.color and api.ui.colourName(address.color) or "Digital") or item[1] .. ": not set"
+            end
+        end
+        for index, line in ipairs(details) do if infoRow + index - 1 <= limit then ui.text(infoRow + index - 1, line) end end
+        if inline then
+            local third = math.floor(width / 3)
+            button(height, state.paused and "Resume" or "Pause", "pause", 1, third, true, accent)
+            button(height, state.phase == "harvest" and "Active" or "Harvest now", "force", third + 1, 2 * third, state.phase ~= "harvest", 2)
+            button(height, "Menu", "menu", 2 * third + 1, width)
+        else
+            button(height - 2, state.paused and "Resume" or "Pause", "pause", nil, nil, true, accent)
+            button(height - 1, state.phase == "harvest" and (width >= 16 and "Harvest active" or "Active") or "Harvest now",
+                "force", nil, nil, state.phase ~= "harvest", 2)
+            button(height, "Menu", "menu")
         end
     end
-    lines.styles[#lines.styles + 1] = {x = 1, y = 1, width = width, height = 1, fg = 1, bg = 2048}
-    if page == "main" then
-        local timer = lines[2]
-        lines[2] = string.rep(" ", math.max(0, math.floor((width - #timer) / 2))) .. timer
-        lines.styles[#lines.styles + 1] = {x = 1, y = 2, width = width, height = 1, fg = 2048, bg = 1}
-        lines.styles[#lines.styles + 1] = {x = 1, y = 3, width = width, height = 1, fg = saveError and 16384 or 32768, bg = 256}
-    end
-    return lines, hits
+    return ui.lines, ui.hits
 end
 
 function app.render(width, height, state, api, context)
@@ -279,7 +316,7 @@ function app.handleTouch(x, y, width, height, state, api, context)
     local _, hits = build(width, height, state, api, context)
     local action
     for _, hit in ipairs(hits) do
-        if y == hit.y and x >= hit.x1 and x <= hit.x2 and hit.enabled ~= false then action = hit.action; break end
+        if api.ui.hit(hit, x, y) and hit.enabled ~= false then action = hit.action; break end
     end
     if not action then return false end
     notice = nil
@@ -287,6 +324,9 @@ function app.handleTouch(x, y, width, height, state, api, context)
     if action == "input" or action == "output" then
         local key = action == "input" and "playerInput" or "outputAddress"
         local ok, err = api.pickIO(context.windowId, key, action, state[key])
+        if not ok then notice = err end
+    elseif action == "colour" then
+        local ok, err = api.pickColour(context.windowId)
         if not ok then notice = err end
     elseif action == "countdown" or action == "harvest" then
         view.page, view.field, view.draft = "duration", action, state.config[action]
@@ -306,9 +346,12 @@ function app.handleTouch(x, y, width, height, state, api, context)
             s.phase, s.remainingTime, s.harvestRemaining, s.forced = "countdown", s.config.countdown, 0, false
         end, false)
         if ok then view.page, notice = "main", "Timer reset" end
-    elseif action == "confirmImport" then importLegacy(state, api); view.page = "main"
-    elseif action == "previous" then view.settingsPage = math.max(1, (view.settingsPage or 1) - 1)
-    elseif action == "next" then view.settingsPage = math.min(view.settingsPages or 1, (view.settingsPage or 1) + 1)
+    elseif action == "confirmImport" then
+        if importLegacy(state, api) then view.page = "main" end
+    elseif action == "previous" or action == "next" then
+        local key = (view.page or "menu") .. "Page"
+        local pages = view[(view.page or "menu") .. "Pages"] or 1
+        view[key] = math.max(1, math.min(pages, (view[key] or 1) + (action == "previous" and -1 or 1)))
     else view.page = action end
     if notice then noticeUntil = os.clock() + 4 end
     return true

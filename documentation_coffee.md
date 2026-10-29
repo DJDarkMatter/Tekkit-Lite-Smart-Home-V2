@@ -15,7 +15,7 @@ inst app coffee
 reboot
 ```
 
-The installer banner must say `bundled-v8`. `inst app coffee` downloads only `apps_coffee.lua` from GitHub and enables it in `configs_os.txt`; rerunning the command updates code while preserving saved timer/settings state. Coffee declares `backgroundService = true`; every OS boot starts its background service without opening a window. Install the bundled-v8 `server` and `monitor` roles for the new coloured UI and touch protocol. Coffee's state schema and IO protocol are unchanged. The central computer must stay loaded for any code to run.
+The installer banner must say `bundled-v9`. `inst app coffee` downloads only `apps_coffee.lua` from GitHub and enables it in `configs_os.txt`; rerunning the command updates code while preserving saved timer/settings state. Coffee declares `backgroundService = true`; every OS boot starts its background service without opening a window. Update the server role before loading this Coffee version; it requires the bundled-v9 UI APIs. Existing bundled-v8 monitor bridges remain compatible. Coffee's business-state schema and IO protocol are unchanged. The central computer must stay loaded for any code to run.
 
 The installer first uses `raw.githubusercontent.com`, then tries GitHub's contents API at `api.github.com` if the raw route fails. It validates the API's base64 file and checks Lua syntax before replacing installed code/settings. Check that GitHub has the latest app file before testing. You can optionally select a known branch/commit with `inst app coffee --ref REF`; Pastebin-ID and `--file PATH` modes remain available for other app sources.
 
@@ -23,7 +23,7 @@ If installation fails, record the separate `Raw:` and `API:` lines. A no-respons
 
 ## Configure wiring by touch
 
-On an advanced monitor, touch bottom-left `[+]`, then `coffee`. Choose `Settings`, or `Menu` then `Settings` in a compact window:
+On an advanced monitor, touch bottom-left `[+]` → **Coffee** → **Menu** → **Settings**:
 
 1. **Player IO:** select the IO computer, the physical side carrying the presence signal, and `Digital` for ordinary redstone or the bundled wire colour. Review and touch `Use`.
 2. **Harvest IO:** select the output client, side and Digital/colour the same way.
@@ -34,17 +34,19 @@ After both bindings are configured, an online player signal starts the countdown
 
 The picker belongs to the OS and can be used by future switchboard/other apps as well. It is not coffee-specific.
 
+**UI colour** in Settings opens the shared OS palette. Pick a swatch to apply one accent across all Coffee views. It is saved centrally and restored after reboot; changing it does not reset timers, counters or IO. The window title bar remains neutral so it is separate from both the desktop and app header.
+
 ## Behavior and controls
 
 - **Defaults:** 14,400 seconds (four hours) between harvests, and a 60-second harvest. Seconds use computer uptime, not Minecraft clock hours; changing world time does not advance the coffee timer.
 - **Original player behavior:** countdown pauses when the presence signal is OFF. During an automatic harvest, an absent player pauses the harvest timer while leaving the harvest output ON, as the original did. Unknown/disconnected input data causes the app to turn the harvest intent OFF until it can resume.
 - **Pause/Resume:** preserves remaining time. Manual Pause turns the harvest output OFF even during a harvest; Resume continues the remaining duration.
-- **Harvest now:** starts a harvest immediately, including when the player input is OFF or not configured. It still requires a configured online output. Repeated taps during a harvest do not restart or extend it. The normal presence rule returns after that harvest.
+- **Harvest now:** starts a harvest immediately, including when the player input is OFF or not configured. It still requires a configured online output. The button is disabled during a harvest; repeated taps cannot restart or extend it. The normal presence rule returns after that harvest.
 - **Countdown / Harvest time settings:** touch the Step row to cycle 1 s, 10 s, 60 s, 600 s and 3,600 s; use minus/plus, then Save. Durations can be 1 second to 7 days. Changes apply to the next phase and preserve the current remaining time.
-- **Reset:** explicitly starts a fresh countdown using the configured duration, stopping an active harvest if necessary. It asks for confirmation.
-- **Stats:** completed harvest total and resettable trip counter. Closing/minimizing a window never stops or duplicates the background service.
+- **Menu → Maintenance → Reset timer:** explicitly starts a fresh countdown using the configured duration, stopping an active harvest if necessary. It asks for confirmation.
+- **Menu → Stats:** completed harvest total and resettable trip counter. Closing/minimizing a window never stops or duplicates the background service.
 
-The smallest supported content area is 12×6 characters (14×9 including the bottom taskbar and window frame). Compact windows show the overview and a Menu button; larger windows expose controls, counts, durations and wiring details. The top-right `+` button opens snap/maximize/custom layout options. See [desktop controls](documentation_desktop.md), including optional physical-touch calibration. Multiple windows use independent settings pages/drafts while sharing one timer and applied configuration.
+The smallest supported content area is 12×6 characters (14×9 including the bottom taskbar and window frame). Every size keeps Pause/Resume, Harvest now and Menu directly available. Wide windows place these in one row; roomy windows use a graphical clock. Extra presence/count information and complete timing/wiring groups appear as space permits. Menu contains Settings, Stats and Maintenance, with one route to each control. The top-right `+` opens graphical snap cards, Restore, Custom and Move. See [desktop controls](documentation_desktop.md), including move nudges and optional touch calibration. Multiple windows use independent menus/drafts while sharing one timer and applied configuration.
 
 ## Restarts and saves
 
@@ -56,7 +58,7 @@ A crash can still lose progress since the last successful checkpoint, normally u
 
 ## Import the original standalone timer's progress
 
-Copy the original `countdown_state.txt` to the central OS computer's root. In Coffee Settings, choose `Import`, then confirm. The app validates and copies the original remaining countdown, harvest-active flag and remaining harvest duration; it leaves the old file untouched.
+Copy the original `countdown_state.txt` to the central OS computer's root. Choose **Menu → Maintenance → Import save**, then confirm. The app validates and copies the original remaining countdown, harvest-active flag and remaining harvest duration; it leaves the old file untouched. A missing/invalid file leaves the confirmation page visible with the error and does not replace progress.
 
 Imported state starts **paused**. Configure the IO addresses, inspect the remaining time, then press Resume. Importing is explicit so a stale original file cannot overwrite an existing new-app countdown on each boot.
 

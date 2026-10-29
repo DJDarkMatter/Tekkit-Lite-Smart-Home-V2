@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v8
+-- SmartHome OS installer: bundled-v9
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor [--startup]
@@ -165,6 +165,87 @@ return Network
     ["lib_gui.lua"] = [=[-- CC 1.5 colour surfaces. Uses write/setTextColor/setBackgroundColor, never blit.
 local Gui = {}
 local digits = "0123456789abcdef"
+local names = {"White", "Orange", "Magenta", "Light blue", "Yellow", "Lime", "Pink", "Gray",
+    "Light gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
+function Gui.colourName(colour)
+    for index = 0, 15 do if colour == 2 ^ index then return names[index + 1] end end
+    return "Unknown"
+end
+function Gui.contrast(colour)
+    return (colour == 128 or colour == 1024 or colour == 2048 or colour == 4096
+        or colour == 8192 or colour == 16384 or colour == 32768) and 1 or 32768
+end
+function Gui.hit(hit, x, y)
+    return x >= hit.x1 and x <= hit.x2 and y >= (hit.y1 or hit.y) and y <= (hit.y2 or hit.y)
+end
+-- App widgets return text plus clipped colour rectangles, sharing geometry with hits.
+function Gui.content(width, height)
+    local ui = {lines = {styles = {}}, hits = {}}
+    ui.lines.hits = ui.hits
+    for y = 1, height do ui.lines[y] = string.rep(" ", width) end
+    function ui.style(x, y, w, h, fg, bg)
+        ui.lines.styles[#ui.lines.styles + 1] = {x = x, y = y, width = w, height = h, fg = fg, bg = bg}
+    end
+    function ui.text(y, text, centred)
+        if y < 1 or y > height then return end
+        text = tostring(text):sub(1, width)
+        local left = centred and math.floor((width - #text) / 2) or 0
+        ui.lines[y] = string.rep(" ", left) .. text .. string.rep(" ", width - left - #text)
+    end
+    function ui.heading(text, accent)
+        ui.text(1, text)
+        ui.style(1, 1, width, 1, Gui.contrast(accent or 128), accent or 128)
+    end
+    function ui.button(y, label, action, x1, x2, enabled, bg, fg, value)
+        x1, x2 = x1 or 1, x2 or width
+        label = label:sub(1, x2 - x1 + 1)
+        local left = math.floor((x2 - x1 + 1 - #label) / 2)
+        local text = string.rep(" ", left) .. label .. string.rep(" ", x2 - x1 + 1 - left - #label)
+        ui.lines[y] = ui.lines[y]:sub(1, x1 - 1) .. text .. ui.lines[y]:sub(x2 + 1)
+        bg = enabled == false and 256 or bg or 128
+        ui.style(x1, y, x2 - x1 + 1, 1, enabled == false and 128 or fg or Gui.contrast(bg), bg)
+        ui.hits[#ui.hits + 1] = {x1 = x1, x2 = x2, y = y, action = action, value = value, enabled = enabled}
+    end
+    return ui
+end
+function Gui.menu(width, height, title, items, page, back, accent)
+    local ui = Gui.content(width, height)
+    local slots = #items <= height - 2 and height - 2 or height - 3
+    local pages = math.max(1, math.ceil(#items / slots))
+    page = math.max(1, math.min(page or 1, pages))
+    ui.heading(title .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), accent)
+    for row = 1, slots do
+        local item = items[(page - 1) * slots + row]
+        if item then ui.button(row + 1, item.label, item.action, nil, nil, item.enabled) end
+    end
+    if pages > 1 then
+        local half = math.floor(width / 2)
+        ui.button(height - 1, "< Prev", "previous", 1, half, page > 1)
+        ui.button(height - 1, "Next >", "next", half + 1, width, page < pages)
+    end
+    ui.button(height, "Back", back)
+    return ui.lines, ui.hits, page, pages
+end
+function Gui.palette(width, height, current, title)
+    local ui = Gui.content(width, height)
+    ui.heading(title or "UI colour", 128)
+    local cellWidth, cellHeight = math.floor((width - 3) / 4), math.min(2, math.floor((height - 2) / 4))
+    local short = {"White", "Orange", "Mag.", "Sky", "Yellow", "Lime", "Pink", "Gray", "L.gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
+    for index = 0, 15 do
+        local x, y = 1 + index % 4 * (cellWidth + 1), 2 + math.floor(index / 4) * cellHeight
+        local colour = 2 ^ index
+        ui.style(x, y, cellWidth, cellHeight, Gui.contrast(colour), colour)
+        local label = colour == current and "*" or cellWidth >= 6 and short[index + 1] or ""
+        local left = math.floor((cellWidth - #label) / 2)
+        local row = ui.lines[y]
+        ui.lines[y] = row:sub(1, x - 1) .. string.rep(" ", left) .. label
+            .. string.rep(" ", cellWidth - left - #label) .. row:sub(x + cellWidth)
+        ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + cellWidth - 1, y = y, y1 = y,
+            y2 = y + cellHeight - 1, action = "colour", value = colour}
+    end
+    ui.button(height, "Back", "cancel")
+    return ui.lines, ui.hits
+end
 function Gui.code(colour, fallback)
     for index = 0, 15 do if colour == 2 ^ index then return digits:sub(index + 1, index + 1) end end
     return fallback
@@ -249,6 +330,31 @@ function Gui.drawRow(screen, y, text, fg, bg, colour, paint)
 end
 return Gui
 ]=],
+    ["lib_settings.lua"] = [=[-- Built-in OS settings window. This is system UI, not an installed user app.
+local Settings = {title = "OS settings", minWidth = 12, minHeight = 6, preferredWidth = 28, preferredHeight = 8}
+local function build(width, height, api)
+    local ui = api.ui.content(width, height)
+    local settings = api.getOSSettings()
+    ui.heading("Appearance", 128)
+    ui.button(3, "Background", "background", nil, nil, true, settings.backgroundColour)
+    ui.text(4, api.ui.colourName(settings.backgroundColour), true)
+    if height >= 8 then ui.text(6, width >= 24 and "Applies to all monitors" or "All monitors", true) end
+    return ui.lines, ui.hits
+end
+function Settings.render(width, height, state, api)
+    return (build(width, height, api))
+end
+function Settings.handleTouch(x, y, width, height, state, api, context)
+    local _, hits = build(width, height, api)
+    for _, hit in ipairs(hits) do
+        if api.ui.hit(hit, x, y) and hit.action == "background" then
+            return api.pickColour(context.windowId, "background")
+        end
+    end
+    return false
+end
+return Settings
+]=],
     ["lib_io_picker.lua"] = [=[-- Reusable, server-rendered IO selector. No peripheral or network calls here.
 local Picker = {}
 local sideNames = {"top", "bottom", "left", "right", "front", "back"}
@@ -318,10 +424,11 @@ function Picker.render(dialog, width, height, clients)
         button(height, half + 1, width, "Cancel", "cancel")
     else
         local titles = {"Select IO", "Select side", "Select wire"}
-        local list, slots = choices(dialog, clients), math.max(1, height - 3)
+        local list = choices(dialog, clients)
+        local slots = #list <= height - 2 and height - 2 or math.max(1, height - 3)
         local pages = math.max(1, math.ceil(#list / slots))
         dialog.page = math.max(1, math.min(dialog.page, pages))
-        text(1, titles[dialog.stage] .. " " .. dialog.page .. "/" .. pages)
+        text(1, titles[dialog.stage] .. (pages > 1 and (" " .. dialog.page .. "/" .. pages) or ""))
         for row = 1, slots do
             local item = list[(dialog.page - 1) * slots + row]
             if item then
@@ -330,8 +437,10 @@ function Picker.render(dialog, width, height, clients)
             end
         end
         if #list == 0 then text(2, "No IO clients") end
-        button(height - 1, 1, half, "< Prev", "prev", nil, dialog.page > 1)
-        button(height - 1, half + 1, width, "Next >", "next", pages, dialog.page < pages)
+        if pages > 1 then
+            button(height - 1, 1, half, "< Prev", "prev", nil, dialog.page > 1)
+            button(height - 1, half + 1, width, "Next >", "next", pages, dialog.page < pages)
+        end
         button(height, 1, half, "Back", "back")
         button(height, half + 1, width, "Cancel", "cancel")
     end
@@ -367,6 +476,7 @@ return Picker
 ]=],
     ["lib_desktop.lua"] = [=[-- Character-based desktop geometry and widgets. No peripheral calls here.
 local Desktop = {}
+local Gui = dofile("lib_gui.lua")
 local function clamp(value, low, high) return math.max(low, math.min(value, high)) end
 
 function Desktop.area(monitor)
@@ -449,6 +559,83 @@ function Desktop.layoutOptions(win, app, monitor)
     return options
 end
 
+function Desktop.moveArrows(rect, monitor)
+    local hits, area = {}, Desktop.area(monitor)
+    local middleX, middleY = rect.x + math.floor((rect.width - 1) / 2), rect.y + math.floor(rect.height / 2)
+    local function add(x, y, label, dx, dy)
+        hits[#hits + 1] = {x1 = x, x2 = x + 2, y = y, label = label, dx = dx, dy = dy}
+    end
+    if rect.x > 1 then add(rect.x, middleY, " < ", -1, 0) end
+    if rect.x + rect.width - 1 < area.width then add(rect.x + rect.width - 3, middleY, " > ", 1, 0) end
+    if rect.y > 1 then add(middleX - 1, rect.y, " ^ ", 0, -1) end
+    if rect.y + rect.height - 1 < area.height then add(middleX - 1, rect.y + rect.height - 1, " v ", 0, 1) end
+    return hits
+end
+
+-- Windows-style snap cards: click the actual pane of a miniature desktop.
+function Desktop.layoutPicker(win, app, monitor, page, title)
+    local area, options = Desktop.area(monitor), Desktop.layoutOptions(win, app, monitor)
+    if area.height < 8 then
+        return Desktop.menu(monitor, title or "Layout", options, page, {x = win.x, y = win.y + 1})
+    end
+    local width = math.min(33, area.width)
+    local columns = width >= 25 and 2 or 1
+    local height = math.min(area.height, 3 + math.ceil(4 / columns) * 4)
+    local rows = math.max(1, math.floor((height - 3) / 4))
+    local paged = rows * columns < 4
+    if paged then rows = math.max(1, math.floor((height - 4) / 4)) end
+    local perPage, pages = rows * columns, math.ceil(4 / (rows * columns))
+    page = clamp(page or 1, 1, pages)
+    local rect = {x = clamp(win.x + win.width - width, 1, area.width - width + 1),
+        y = clamp(win.y + 1, 1, area.height - height + 1), width = width, height = height}
+    local ui, byMode = Gui.content(width, height), {}
+    for _, item in ipairs(options) do byMode[item.value] = item end
+    ui.heading((title or "Layout") .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), 128)
+    local cards = {"Full", "Columns", "Rows", "Grid"}
+    local cardWidth = math.floor((width - columns - 1) / columns)
+    local function zone(x, y, w, h, mode)
+        local item = byMode[mode]
+        ui.style(x, y, w, h, nil, item.enabled and (win.layout == mode and 2048 or 8) or 256)
+        ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + w - 1, y = y, y1 = y, y2 = y + h - 1, action = "item", item = item}
+    end
+    for slot = 1, perPage do
+        local index = (page - 1) * perPage + slot
+        if cards[index] then
+            local x, y = 2 + (slot - 1) % columns * (cardWidth + 1), 2 + math.floor((slot - 1) / columns) * 4
+            local line = ui.lines[y]
+            local label = cards[index]:sub(1, cardWidth)
+            ui.lines[y] = line:sub(1, x - 1) .. label .. line:sub(x + #label)
+            local half = math.floor((cardWidth - 1) / 2)
+            if index == 1 then zone(x, y + 1, cardWidth, 3, "maximize")
+            elseif index == 2 then
+                zone(x, y + 1, half, 3, "left"); zone(x + half + 1, y + 1, cardWidth - half - 1, 3, "right")
+            elseif index == 3 then zone(x, y + 1, cardWidth, 1, "top"); zone(x, y + 3, cardWidth, 1, "bottom")
+            else
+                zone(x, y + 1, half, 1, "top_left"); zone(x + half + 1, y + 1, cardWidth - half - 1, 1, "top_right")
+                zone(x, y + 3, half, 1, "bottom_left"); zone(x + half + 1, y + 3, cardWidth - half - 1, 1, "bottom_right")
+            end
+        end
+    end
+    local half = math.floor(width / 2)
+    if pages > 1 then
+        ui.button(height - 2, "< Prev", "previous", 1, half, page > 1)
+        ui.button(height - 2, "Next >", "next", half + 1, width, page < pages)
+    end
+    local function action(y, x1, x2, mode, label)
+        ui.button(y, label, "item", x1, x2, byMode[mode].enabled)
+        ui.hits[#ui.hits].item = byMode[mode]
+    end
+    action(height - 1, 1, half, "restore", "Restore")
+    action(height - 1, half + 1, width, "custom", "Custom")
+    action(height, 1, half, "move", "Move")
+    action(height, half + 1, width, "cancel", "Cancel")
+    for _, hit in ipairs(ui.hits) do
+        hit.x1, hit.x2, hit.y = hit.x1 + rect.x - 1, hit.x2 + rect.x - 1, hit.y + rect.y - 1
+        if hit.y1 then hit.y1, hit.y2 = hit.y1 + rect.y - 1, hit.y2 + rect.y - 1 end
+    end
+    return rect, ui.lines, ui.hits, page, pages
+end
+
 -- Returns a complete taskbar line and exact touch regions, with stable window order.
 function Desktop.taskbar(windows, monitor, clock, saved, active)
     local width = monitor.width
@@ -466,7 +653,7 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
     local labels, needed = {}, 0
     for _, win in ipairs(windows) do
         local marker = win.minimized and "_" or win.id == active and "*" or ""
-        local label = " " .. marker .. win.appName .. " "
+        local label = " " .. marker .. (win.title or win.appName) .. " "
         if #label > 14 then label = label:sub(1, 13) .. " " end
         labels[#labels + 1] = label
         needed = needed + #labels[#labels] + 1
@@ -537,6 +724,7 @@ local Server = {}
 local Picker = dofile("lib_io_picker.lua")
 local Desktop = dofile("lib_desktop.lua")
 local Gui = dofile("lib_gui.lua")
+local Settings = dofile("lib_settings.lua")
 local sideSet = {top = true, bottom = true, left = true, right = true, front = true, back = true}
 local function integer(value, low, high)
     return type(value) == "number" and value == math.floor(value) and value >= low and value <= high
@@ -579,6 +767,7 @@ end
 
 local function validApp(app)
     if type(app) ~= "table" then return false end
+    if app.title ~= nil and (type(app.title) ~= "string" or #app.title < 1 or #app.title > 64) then return false end
     for _, key in ipairs({"minWidth", "maxWidth", "minHeight", "maxHeight", "preferredWidth", "preferredHeight"}) do
         if app[key] ~= nil and not integer(app[key], 1, 512) then return false end
     end
@@ -596,10 +785,20 @@ function Server.new(net, storage, config)
     for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
         if type(state[name]) ~= "table" then state[name] = {} end
     end
+    state.appearance = type(state.appearance) == "table" and state.appearance or {}
+    if not colour(state.appearance.backgroundColour) then state.appearance.backgroundColour = 2048 end
+    if type(state.appearance.appColours) ~= "table" then state.appearance.appColours = {} end
+    for name, value in pairs(state.appearance.appColours) do
+        if type(name) ~= "string" or not colour(value) then state.appearance.appColours[name] = nil end
+    end
+    state.appStates["@settings"] = type(state.appStates["@settings"]) == "table" and state.appStates["@settings"] or {}
     local server = {state = state, monitors = {}, ioClients = {}, sensorClients = {}, apps = {},
-        gameTime = "?:??", playerOnline = false, lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}}
+        systemApps = {["@settings"] = Settings}, gameTime = "?:??", playerOnline = false,
+        lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}}
     local api, errors = {}, {}
     server.api = api
+    api.ui = Gui
+    local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
         local monitor = server.monitors[id]
         if monitor then monitor.inputRevision = (monitor.inputRevision or 0) + 1 end
@@ -629,15 +828,35 @@ function Server.new(net, storage, config)
     function server.save()
         local saved = {}
         for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides",
-            "nextWindowId", "bootCounter", "desktops", "desktopVersion"}) do saved[name] = state[name] end
+            "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance"}) do saved[name] = state[name] end
         local ok, err = storage.save(config.saveFile, saved)
         if not ok then print("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
         return ok, err
     end
     api.save = server.save
 
+    function api.getOSSettings()
+        return {backgroundMode = "solid", backgroundColour = state.appearance.backgroundColour}
+    end
+    function api.getAppColour(name) return state.appearance.appColours[name] or 2048 end
+    local function saveAppearance(change)
+        local previous = copy(state.appearance)
+        change(state.appearance)
+        local ok, err = server.save()
+        if not ok then state.appearance = previous end
+        return ok, err
+    end
+    function api.setBackgroundColour(value)
+        if not colour(value) then return false, "Choose a CC colour" end
+        return saveAppearance(function(appearance) appearance.backgroundColour = value end)
+    end
+    function api.setAppColour(name, value)
+        if not definition(name) or not colour(value) then return false, "Invalid app colour" end
+        return saveAppearance(function(appearance) appearance.appColours[name] = value end)
+    end
+
     local function appCall(name, hook, ...)
-        local app = server.apps[name]
+        local app = definition(name)
         if not app or not app[hook] then return true end
         local ok, a, b = pcall(app[hook], ...)
         if not ok then
@@ -660,7 +879,7 @@ function Server.new(net, storage, config)
         return true
     end
     local function stopApp(name)
-        if server.running[name] and not isService(server.apps[name]) and not hasViews(name) then
+        if server.running[name] and not isService(definition(name)) and not hasViews(name) then
             appCall(name, "shutdown", state.appStates[name], api, {appName = name})
             server.running[name] = nil
             server.save()
@@ -813,9 +1032,20 @@ function Server.new(net, storage, config)
             return false, "Invalid IO selector request"
         end
         if win.width < 14 or win.height < 8 then return false, "IO settings need a 12x6 content area" end
-        local app = server.apps[win.appName]
+        local app = definition(win.appName)
         if not app or not app.handleIOSelection then return false, "App has no IO selection handler" end
         server.dialogs[windowId] = Picker.new(key, direction, current)
+        invalidateInput(win.monitorId)
+        return true
+    end
+    function api.pickColour(windowId, target)
+        local win = state.windows[windowId]
+        target = target or "app"
+        if not win or (target ~= "app" and target ~= "background") then return false, "Invalid colour selector" end
+        if target == "background" and win.appName ~= "@settings" then return false, "Open OS settings for the background" end
+        if win.width < 14 or win.height < 8 then return false, "Colour settings need a 12x6 content area" end
+        server.dialogs[windowId] = {kind = "colour", target = target,
+            current = target == "background" and state.appearance.backgroundColour or api.getAppColour(win.appName)}
         invalidateInput(win.monitorId)
         return true
     end
@@ -871,8 +1101,9 @@ function Server.new(net, storage, config)
         return value.width > 0 and value.height > 0
     end
     local function fit(win, monitor)
-        local app = server.apps[win.appName]
+        local app = definition(win.appName)
         if not app then win.doesNotFit = true; return false end
+        win.title = app.title or win.appName
         if not validRelative(win.relative) then win.relative = nil end
         local rect
         if win.layout and win.layout ~= "normal" then
@@ -889,7 +1120,7 @@ function Server.new(net, storage, config)
         return true
     end
     local function compatible(name, monitor)
-        local app = server.apps[name]
+        local app = definition(name)
         local minW, minH, maxW, maxH = Desktop.bounds(app, monitor)
         return app.render and maxW >= minW and maxH >= minH
     end
@@ -898,7 +1129,7 @@ function Server.new(net, storage, config)
     end
 
     function api.openApp(name, monitorId, x, y, width, height)
-        local app, monitor = server.apps[name], server.monitors[monitorId]
+        local app, monitor = definition(name), server.monitors[monitorId]
         if not app then return nil, "Unknown app" end
         if not monitor or not monitor.online then return nil, "Monitor is offline or unknown" end
         if not compatible(name, monitor) then return nil, "App does not fit this monitor" end
@@ -967,7 +1198,7 @@ function Server.new(net, storage, config)
     function api.layoutWindow(id, mode)
         local win = state.windows[id]
         if not win then return false, "Unknown window" end
-        if not server.apps[win.appName] then return false, "App is not available" end
+        if not definition(win.appName) then return false, "App is not available" end
         local monitor = server.monitors[win.monitorId]
         if not monitor or not monitor.online then return false, "Monitor is offline" end
         local previous = copy(win)
@@ -977,7 +1208,7 @@ function Server.new(net, storage, config)
             win.layout, win.relative, win.restore = restore.layout, copy(restore.relative), nil
         else
             local rect = Desktop.zone(mode, monitor)
-            if not Desktop.fits(rect, server.apps[win.appName], monitor) then return false, "Layout does not fit this app" end
+            if not Desktop.fits(rect, definition(win.appName), monitor) then return false, "Layout does not fit this app" end
             win.restore = {layout = win.layout or "normal", relative = copy(win.relative)}
             win.layout = mode
         end
@@ -994,11 +1225,11 @@ function Server.new(net, storage, config)
     end
 
     local function renderMonitor(id, monitor)
-        local surface = Gui.new(monitor.width, monitor.height, 1, 2048)
+        local desktopColour = state.appearance.backgroundColour
+        local surface = Gui.new(monitor.width, monitor.height, Gui.contrast(desktopColour), desktopColour)
         local function write(x, y, text, limit)
             surface.write(x, y, text, nil, nil, limit)
         end
-        write(1, 1, "SmartHome OS")
         local active
         for _, win in ipairs(windowsFor(id)) do
             if fit(win, monitor) and not win.minimized and server.running[win.appName] then active = win.id end
@@ -1007,14 +1238,22 @@ function Server.new(net, storage, config)
             if fit(win, monitor) and not win.minimized and server.running[win.appName] then
                 surface.fill(win.x, win.y, win.width, win.height, 32768, 128)
                 surface.fill(win.x + 1, win.y + 1, win.width - 2, win.height - 2, 32768, 256)
-                surface.fill(win.x, win.y, win.width, 1, 1, active == win.id and 2048 or 128)
-                write(win.x, win.y, win.appName, win.width - 9)
+                local titleColour = active == win.id and (desktopColour == 128 and 32768 or 128)
+                    or (desktopColour == 256 and 128 or 256)
+                surface.fill(win.x, win.y, win.width, 1, Gui.contrast(titleColour), titleColour)
+                write(win.x, win.y, win.title, win.width - 9)
                 for _, control in ipairs(Desktop.controls(win)) do
                     surface.write(control.x1, win.y, control.label, 1, control.action == "close" and 16384 or 128)
                 end
                 local ok, content
                 if server.dialogs[win.id] then
-                    ok, content = true, Picker.render(server.dialogs[win.id], win.width - 2, win.height - 2, api.getIOClients())
+                    local dialog = server.dialogs[win.id]
+                    ok = true
+                    if dialog.kind == "colour" then
+                        dialog.current = dialog.target == "background" and state.appearance.backgroundColour or api.getAppColour(win.appName)
+                        content, dialog.hits = Gui.palette(win.width - 2, win.height - 2, dialog.current,
+                            dialog.error or (dialog.target == "background" and "Background" or "UI colour"))
+                    else content = Picker.render(dialog, win.width - 2, win.height - 2, api.getIOClients()) end
                 else
                     ok, content = appCall(win.appName, "render", win.width - 2, win.height - 2,
                         state.appStates[win.appName], api, viewContext(win))
@@ -1044,36 +1283,48 @@ function Server.new(net, storage, config)
         if monitor.launcher or monitor.layoutMenu then
             local items, title, model
             if monitor.launcher then
-                model, title, items = monitor, "Apps", {}
+                model, title = monitor, "Start"
+                items = {{label = "OS settings", value = "@settings", enabled = compatible("@settings", monitor)}}
                 for _, name in ipairs(sortedKeys(server.apps)) do
                     if compatible(name, monitor) then
-                        items[#items + 1] = {label = name .. (server.running[name] and " *" or ""), value = name, enabled = true}
+                        items[#items + 1] = {label = (server.apps[name].title or name) .. (server.running[name] and " *" or ""), value = name, enabled = true}
                     end
                 end
-                if #items == 0 then
-                    items[1] = {label = next(server.apps) and "No apps fit" or "No apps installed", enabled = false}
+                if #items == 1 then
+                    items[2] = {label = next(server.apps) and "No apps fit" or "No apps installed", enabled = false}
                 end
             else
                 model, title = monitor.layoutMenu, monitor.layoutMenu.error or "Layout"
                 local win = state.windows[model.windowId]
-                items = win and Desktop.layoutOptions(win, server.apps[win.appName], monitor) or {}
+                items = win and Desktop.layoutOptions(win, definition(win.appName), monitor) or {}
             end
             local win = monitor.layoutMenu and state.windows[monitor.layoutMenu.windowId]
             local anchor = win and {x = win.x + win.width - 26, y = win.y + 1}
-            local rect, content, hits, page, pages = Desktop.menu(monitor, title, items, model.menuPage, anchor)
+            local rect, content, hits, page, pages
+            if win then rect, content, hits, page, pages = Desktop.layoutPicker(win, definition(win.appName), monitor, model.menuPage, model.error)
+            else rect, content, hits, page, pages = Desktop.menu(monitor, title, items, model.menuPage, anchor) end
             model.menuPage, model.menuPages, model.menuHits = page, pages, hits
             surface.fill(rect.x, rect.y, rect.width, rect.height, 32768, 1)
             for row = 1, rect.height do write(rect.x, rect.y + row - 1, content[row], rect.width) end
-            surface.style(rect.x, rect.y, rect.width, 1, 1, 2048)
-            for _, hit in ipairs(hits) do
-                surface.style(hit.x1, hit.y, hit.x2 - hit.x1 + 1, 1,
-                    hit.item and hit.item.enabled == false and 128 or 32768, hit.action == "item" and 256 or 128)
+            surface.style(rect.x, rect.y, rect.width, 1, 1, 128)
+            if content.styles then
+                for _, style in ipairs(content.styles) do
+                    surface.style(rect.x + style.x - 1, rect.y + style.y - 1, style.width, style.height or 1, style.fg, style.bg)
+                end
+            else
+                for _, hit in ipairs(hits) do
+                    surface.style(hit.x1, hit.y, hit.x2 - hit.x1 + 1, 1,
+                        hit.item and hit.item.enabled == false and 128 or 32768, hit.action == "item" and 256 or 128)
+                end
             end
         end
         local placement = monitor.placement
         if placement then
             local rect = placement.preview
             if rect then
+                local win = state.windows[placement.windowId]
+                placement.valid = win and Desktop.fits(rect, definition(win.appName), monitor) and true or false
+                if not placement.valid then placement.error = "Does not fit" end
                 local border = placement.error and 16384 or 32
                 surface.fill(rect.x, rect.y, rect.width, 1, 1, border)
                 if rect.height > 1 then surface.fill(rect.x, rect.y + rect.height - 1, rect.width, 1, 1, border) end
@@ -1087,9 +1338,17 @@ function Server.new(net, storage, config)
             if rect and not placement.error then hint = "OK: " .. rect.width .. "x" .. rect.height end
             write(1, 1, hint .. string.rep(" ", monitor.width))
             write(1, monitor.height, "[OK][Cancel]" .. string.rep(" ", math.max(0, monitor.width - 12)))
-            surface.style(1, 1, monitor.width, 1, 1, 2048)
+            surface.style(1, 1, monitor.width, 1, 1, 128)
             surface.style(1, monitor.height, 4, 1, 1, 8192)
             surface.style(5, monitor.height, 8, 1, 1, 16384)
+            placement.hits = {}
+            if placement.kind == "move" and rect then
+                if placement.valid then placement.hits = Desktop.moveArrows(rect, monitor) end
+                for _, hit in ipairs(placement.hits) do surface.write(hit.x1, hit.y, hit.label, 1, 128) end
+                local x = monitor.width - 4
+                surface.write(x, 1, "Place", 32768, 256)
+                placement.hits[#placement.hits + 1] = {x1 = x, x2 = monitor.width, y = 1, action = "place"}
+            end
         end
         return surface.frame()
     end
@@ -1124,7 +1383,7 @@ function Server.new(net, storage, config)
                 if x >= 5 and x <= 12 then monitor.placement = nil
                 elseif x <= 4 and placement.preview and placement.valid then
                     local rect = placement.preview
-                    if not Desktop.fits(rect, server.apps[win.appName], monitor) then
+                    if not Desktop.fits(rect, definition(win.appName), monitor) then
                         placement.valid, placement.error = false, "Does not fit"; return
                     end
                     local ok, err = api.placeWindow(win.id, rect.x, rect.y, rect.width, rect.height)
@@ -1132,7 +1391,21 @@ function Server.new(net, storage, config)
                 end
                 return
             end
+            for _, hit in ipairs(placement.hits or {}) do
+                if Gui.hit(hit, x, y) then
+                    if hit.action == "place" then
+                        placement.preview, placement.valid, placement.error = nil, false, nil
+                        return
+                    end
+                    local rect = placement.preview
+                    rect.x, rect.y = rect.x + hit.dx, rect.y + hit.dy
+                    placement.valid = Desktop.fits(rect, definition(win.appName), monitor) and true or false
+                    placement.error = not placement.valid and "Does not fit" or nil
+                    return
+                end
+            end
             if placement.kind == "move" then
+                if placement.preview then return end
                 placement.preview = {x = math.max(1, math.min(x, monitor.width - win.width + 1)),
                     y = math.max(1, math.min(y, monitor.height - win.height)), width = win.width, height = win.height}
             elseif not placement.first then placement.first = {x = x, y = y}
@@ -1140,7 +1413,7 @@ function Server.new(net, storage, config)
                 placement.preview = {x = math.min(x, placement.first.x), y = math.min(y, placement.first.y),
                     width = math.abs(x - placement.first.x) + 1, height = math.abs(y - placement.first.y) + 1}
             end
-            placement.valid = Desktop.fits(placement.preview, server.apps[win.appName], monitor) and true or false
+            placement.valid = Desktop.fits(placement.preview, definition(win.appName), monitor) and true or false
             placement.error = placement.preview and not placement.valid and "Does not fit" or nil
             return
         end
@@ -1171,7 +1444,7 @@ function Server.new(net, storage, config)
         local model = monitor.launcher and monitor or monitor.layoutMenu
         if model then
             for _, hit in ipairs(model.menuHits or {}) do
-                if y == hit.y and x >= hit.x1 and x <= hit.x2 then
+                if Gui.hit(hit, x, y) then
                     if hit.action == "previous" then model.menuPage = math.max(1, model.menuPage - 1)
                     elseif hit.action == "next" then model.menuPage = math.min(model.menuPages, model.menuPage + 1)
                     elseif hit.item.enabled ~= false then
@@ -1219,7 +1492,18 @@ function Server.new(net, storage, config)
                 if x > win.x and x < win.x + win.width - 1 and y < win.y + win.height - 1 then
                     local dialog = server.dialogs[win.id]
                     if dialog then
-                        local action, address = Picker.touch(dialog, x - win.x, y - win.y)
+                        local action, address
+                        if dialog.kind == "colour" then
+                            for _, hit in ipairs(dialog.hits or {}) do
+                                if Gui.hit(hit, x - win.x, y - win.y) then action, address = hit.action, hit.value; break end
+                            end
+                            if action == "colour" then
+                                local ok, err
+                                if dialog.target == "background" then ok, err = api.setBackgroundColour(address)
+                                else ok, err = api.setAppColour(win.appName, address) end
+                                if ok then server.dialogs[win.id] = nil else dialog.error = tostring(err) end
+                            elseif action == "cancel" then server.dialogs[win.id] = nil end
+                        else action, address = Picker.touch(dialog, x - win.x, y - win.y) end
                         if action == "cancel" then server.dialogs[win.id] = nil
                         elseif action == "selected" then
                             local ok, accepted, err = appCall(win.appName, "handleIOSelection", dialog.key,
@@ -1358,6 +1642,7 @@ function Server.new(net, storage, config)
         for _, name in ipairs(sortedKeys(server.apps)) do
             if isService(server.apps[name]) or hasViews(name) then startApp(name) end
         end
+        for _, name in ipairs(sortedKeys(server.systemApps)) do if hasViews(name) then startApp(name) end end
         net.ensureModem()
         print("SmartHome OS computer " .. net.id .. ", network " .. net.config.networkId)
         if not net.modem then print("Attach a wireless modem; waiting...") end
@@ -1984,7 +2269,7 @@ end)
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v8")
+print("SmartHome installer: bundled-v9")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor [--startup]")
@@ -2128,6 +2413,7 @@ else
     files = {"lib_storage.lua", "lib_network.lua"}
     if role ~= "io" then files[#files + 1] = "lib_gui.lua" end
     if role == "server" then
+        files[#files + 1] = "lib_settings.lua"
         files[#files + 1] = "lib_io_picker.lua"
         files[#files + 1] = "lib_desktop.lua"
         files[#files + 1] = "lib_server.lua"

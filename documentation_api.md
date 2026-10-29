@@ -39,6 +39,10 @@ Size limits describe **content** character dimensions. The OS adds a one-charact
 
 An app may attach `styles` to its returned array of text rows. Each style is `{x, y, width, height = 1, fg, bg}` in content coordinates, with numeric CC colour constants. Styles affect foreground/background without replacing text and are clipped to the content area. For example, `return {"Settings", styles = {{x = 1, y = 1, width = width, fg = 1, bg = 2048}}}` paints a blue heading. Old plain-text apps remain supported. Coffee's button helper generates its text, colour rectangle and hit rectangle from the same geometry. `lib_gui.lua` composes and encodes surfaces centrally; app code never draws on a peripheral.
 
+Bundled-v9 adds optional `app.title` (1–64 characters) for launcher, taskbar and title-bar display; the filename/app identifier remains unchanged. **Every future app Settings menu should include UI colour** and use `api.getAppColour(context.appName)` for its heading/primary controls. Call `api.pickColour(context.windowId)` from that setting; the OS handles the palette, validates/saves the accent and returns to the underlying page. No app-specific colour callback or duplicate colour state is needed. Use `api.ui.contrast(accent)` for text on the accent.
+
+`api.ui.content(width, height)` supplies `lines`, `hits`, `text`, `heading`, `style`, and `button`; the returned `lines.hits` aliases the same rectangles used for interaction. `api.ui.menu(width, height, title, items, page, backAction, accent)` returns `lines, hits, page, pages`, with pagination only when needed. Items use `{label, action, enabled}`. `api.ui.hit(hit, x, y)` supports both one-row and rectangular controls. These helpers are pure layout functions and do not touch peripherals. Coffee is the reference for responsive action placement and parent navigation.
+
 Hooks must return promptly and must not call `sleep`, `read`, `os.pullEvent`, HTTP, or other yielding functions. Lua 5.1 hooks run under `pcall` for fault isolation. Apps are trusted code, not sandboxed plugins.
 
 | API | Result |
@@ -58,6 +62,11 @@ Hooks must return promptly and must not call `sleep`, `read`, `os.pullEvent`, HT
 | `api.closeWindow(windowId)` | `ok, error`; closes only this view and stops a normal app after its last view |
 | `api.placeWindow(windowId, x, y, width, height)` | `ok, error`; nil fields retain the old values |
 | `api.layoutWindow(windowId, mode)` | `ok, error`; maximize, restore, left/right/top/bottom, top_left/top_right/bottom_left/bottom_right |
+| `api.getAppColour(appName)` | Saved app accent, default blue; shared by all its views |
+| `api.setAppColour(appName, colour)` | `ok, error`; validates/saves or rolls back on failure |
+| `api.pickColour(windowId)` | Opens the shared palette for this window's app; selection saves automatically |
+| `api.getOSSettings()` | `{backgroundMode = "solid", backgroundColour}` |
+| `api.setBackgroundColour(colour)` | `ok, error`; changes the static background on all desktops |
 | `api.save()` | `ok, error`; checkpoints central state |
 
 Physical sides use computer-relative names. Mappings are independent of apps and persisted centrally. All mapped sides are fully owned by the OS. Input/sensor values are live observations, not restored stale values. Losing a sensor client clears its supplied system indicators.
@@ -144,3 +153,5 @@ Optional per-side `touchOffsets` in `configs_monitor.txt` are measured with `cli
 A future sensor adapter must implement the same announce/welcome/heartbeat process. Once welcomed, send `sensorData` with `varName`, scalar `value`, and `serverSession`. `playerOnline` must be boolean and `gameTime` must be a string; other names remain raw readings under that sensor client. There is no sensor peripheral driver included yet.
 
 The desktop stores normalized free rectangles and named snap zones, and reserves the bottom row for its taskbar. User layout menus and placement are OS overlays, so application hooks need no pointer-drag handling. See [desktop behavior](documentation_desktop.md).
+
+Built-in OS settings lives in `lib_settings.lua` and a private system-app registry, with saved window identifier `@settings`. It is always offered by Start and requires no `enabledApps` entry or app download. User-app registration/consent remains separate. The saved state's `appearance` table holds `backgroundColour` and `appColours`; neither is business state in `appStates`. Cosmetic changes checkpoint immediately and roll back on save failure. A future screensaver can extend desktop appearance; only solid background colour is implemented now.

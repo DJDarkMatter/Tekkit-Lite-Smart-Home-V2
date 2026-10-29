@@ -269,7 +269,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         press(app, state, central.server.api, context, "Harvest now")
         bus.pump(); bus.advance(3)
         local remaining = state.harvestRemaining
-        press(app, state, central.server.api, context, "Harvest active")
+        equal(app.handleTouch(1, 9, 30, 10, state, central.server.api, context), false, "Active harvest button is disabled")
         equal(state.harvestRemaining, remaining, "Repeated Force must not restart a harvest")
         assert(app.handleIOSelection("outputAddress", {clientId = "io_11", side = "bottom", color = 1},
             state, central.server.api))
@@ -299,8 +299,8 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local win = central.server.state.windows[first]
         local display = bus.computers[13]
         bus.queue(display, {"monitor_touch", "top", win.x + 1, win.y + win.height - 2}); bus.pump()
-        equal(central.server.views[first].page, "actions")
-        bus.queue(display, {"monitor_touch", "top", win.x + 1, win.y + 4}); bus.pump()
+        equal(central.server.views[first].page, "menu")
+        bus.queue(display, {"monitor_touch", "top", win.x + 1, win.y + 2}); bus.pump()
         equal(central.server.views[first].page, "settings")
         equal(central.server.views[second].page, nil)
         local before = state.remainingTime

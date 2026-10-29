@@ -1,5 +1,6 @@
 -- Character-based desktop geometry and widgets. No peripheral calls here.
 local Desktop = {}
+local Gui = dofile("lib_gui.lua")
 local function clamp(value, low, high) return math.max(low, math.min(value, high)) end
 
 function Desktop.area(monitor)
@@ -82,6 +83,83 @@ function Desktop.layoutOptions(win, app, monitor)
     return options
 end
 
+function Desktop.moveArrows(rect, monitor)
+    local hits, area = {}, Desktop.area(monitor)
+    local middleX, middleY = rect.x + math.floor((rect.width - 1) / 2), rect.y + math.floor(rect.height / 2)
+    local function add(x, y, label, dx, dy)
+        hits[#hits + 1] = {x1 = x, x2 = x + 2, y = y, label = label, dx = dx, dy = dy}
+    end
+    if rect.x > 1 then add(rect.x, middleY, " < ", -1, 0) end
+    if rect.x + rect.width - 1 < area.width then add(rect.x + rect.width - 3, middleY, " > ", 1, 0) end
+    if rect.y > 1 then add(middleX - 1, rect.y, " ^ ", 0, -1) end
+    if rect.y + rect.height - 1 < area.height then add(middleX - 1, rect.y + rect.height - 1, " v ", 0, 1) end
+    return hits
+end
+
+-- Windows-style snap cards: click the actual pane of a miniature desktop.
+function Desktop.layoutPicker(win, app, monitor, page, title)
+    local area, options = Desktop.area(monitor), Desktop.layoutOptions(win, app, monitor)
+    if area.height < 8 then
+        return Desktop.menu(monitor, title or "Layout", options, page, {x = win.x, y = win.y + 1})
+    end
+    local width = math.min(33, area.width)
+    local columns = width >= 25 and 2 or 1
+    local height = math.min(area.height, 3 + math.ceil(4 / columns) * 4)
+    local rows = math.max(1, math.floor((height - 3) / 4))
+    local paged = rows * columns < 4
+    if paged then rows = math.max(1, math.floor((height - 4) / 4)) end
+    local perPage, pages = rows * columns, math.ceil(4 / (rows * columns))
+    page = clamp(page or 1, 1, pages)
+    local rect = {x = clamp(win.x + win.width - width, 1, area.width - width + 1),
+        y = clamp(win.y + 1, 1, area.height - height + 1), width = width, height = height}
+    local ui, byMode = Gui.content(width, height), {}
+    for _, item in ipairs(options) do byMode[item.value] = item end
+    ui.heading((title or "Layout") .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), 128)
+    local cards = {"Full", "Columns", "Rows", "Grid"}
+    local cardWidth = math.floor((width - columns - 1) / columns)
+    local function zone(x, y, w, h, mode)
+        local item = byMode[mode]
+        ui.style(x, y, w, h, nil, item.enabled and (win.layout == mode and 2048 or 8) or 256)
+        ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + w - 1, y = y, y1 = y, y2 = y + h - 1, action = "item", item = item}
+    end
+    for slot = 1, perPage do
+        local index = (page - 1) * perPage + slot
+        if cards[index] then
+            local x, y = 2 + (slot - 1) % columns * (cardWidth + 1), 2 + math.floor((slot - 1) / columns) * 4
+            local line = ui.lines[y]
+            local label = cards[index]:sub(1, cardWidth)
+            ui.lines[y] = line:sub(1, x - 1) .. label .. line:sub(x + #label)
+            local half = math.floor((cardWidth - 1) / 2)
+            if index == 1 then zone(x, y + 1, cardWidth, 3, "maximize")
+            elseif index == 2 then
+                zone(x, y + 1, half, 3, "left"); zone(x + half + 1, y + 1, cardWidth - half - 1, 3, "right")
+            elseif index == 3 then zone(x, y + 1, cardWidth, 1, "top"); zone(x, y + 3, cardWidth, 1, "bottom")
+            else
+                zone(x, y + 1, half, 1, "top_left"); zone(x + half + 1, y + 1, cardWidth - half - 1, 1, "top_right")
+                zone(x, y + 3, half, 1, "bottom_left"); zone(x + half + 1, y + 3, cardWidth - half - 1, 1, "bottom_right")
+            end
+        end
+    end
+    local half = math.floor(width / 2)
+    if pages > 1 then
+        ui.button(height - 2, "< Prev", "previous", 1, half, page > 1)
+        ui.button(height - 2, "Next >", "next", half + 1, width, page < pages)
+    end
+    local function action(y, x1, x2, mode, label)
+        ui.button(y, label, "item", x1, x2, byMode[mode].enabled)
+        ui.hits[#ui.hits].item = byMode[mode]
+    end
+    action(height - 1, 1, half, "restore", "Restore")
+    action(height - 1, half + 1, width, "custom", "Custom")
+    action(height, 1, half, "move", "Move")
+    action(height, half + 1, width, "cancel", "Cancel")
+    for _, hit in ipairs(ui.hits) do
+        hit.x1, hit.x2, hit.y = hit.x1 + rect.x - 1, hit.x2 + rect.x - 1, hit.y + rect.y - 1
+        if hit.y1 then hit.y1, hit.y2 = hit.y1 + rect.y - 1, hit.y2 + rect.y - 1 end
+    end
+    return rect, ui.lines, ui.hits, page, pages
+end
+
 -- Returns a complete taskbar line and exact touch regions, with stable window order.
 function Desktop.taskbar(windows, monitor, clock, saved, active)
     local width = monitor.width
@@ -99,7 +177,7 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
     local labels, needed = {}, 0
     for _, win in ipairs(windows) do
         local marker = win.minimized and "_" or win.id == active and "*" or ""
-        local label = " " .. marker .. win.appName .. " "
+        local label = " " .. marker .. (win.title or win.appName) .. " "
         if #label > 14 then label = label:sub(1, 13) .. " " end
         labels[#labels + 1] = label
         needed = needed + #labels[#labels] + 1

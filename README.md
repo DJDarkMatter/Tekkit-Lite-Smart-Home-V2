@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all eleven runtime source files and **no apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v8`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twelve runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v9`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -39,7 +39,7 @@ For direct file copying instead, preserve these paths:
 | Role | Required files |
 | --- | --- |
 | All roles | `lib_network.lua`, `lib_storage.lua` |
-| Central OS | Also `main_os.lua`, `lib_server.lua`, `lib_io_picker.lua`, `lib_desktop.lua` |
+| Central OS | Also `main_os.lua`, `lib_server.lua`, `lib_io_picker.lua`, `lib_desktop.lua`, `lib_settings.lua` |
 | IO client | Also `clients_io_client.lua`, `lib_io.lua` |
 | Monitor client | Also `clients_monitor_client.lua`, `lib_monitor.lua` |
 
@@ -64,7 +64,7 @@ If the raw download fails or returns invalid Lua, bundled-v7 tries the same file
 
 These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
 
-The first optional app is [coffee](documentation_coffee.md), adapted from the original standalone timer. Run `inst app coffee` on the OS computer to fetch it from GitHub. It starts automatically at every OS boot without a window. Its Settings menu uses the shared client → side → Digital/bundled-colour picker. Install the current bundled-v8 OS and monitor roles for the coloured desktop, ordered frames and buffered input. Keep the new Coffee file on GitHub so app downloads include its styled buttons; IO clients need no update for this GUI change.
+The first optional app is [Coffee](documentation_coffee.md), adapted from the original standalone timer. Run `inst app coffee` on the OS computer to fetch it from GitHub. It starts automatically at every OS boot without a window. Use Menu → Settings for its IO, durations and UI colour. Install the current bundled-v9 OS and keep the new Coffee file on GitHub before downloading the app. Existing bundled-v8 monitor clients understand these frames; this update does not require reinstalling them or the IO clients.
 
 ### Confirm connection and test a wire
 
@@ -125,11 +125,13 @@ reboot
 
 For touch input, use advanced monitors. All attached monitors become independent desktops, e.g. `monitor_13:top` and `monitor_13:left`. A replacement monitor on the same side keeps that desktop's identity. Adjust `textScale` in `configs_monitor.txt` if needed.
 
-The desktop initially has no apps. Finish the console-based IO connection test before installing user-specific apps. Role installation never installs a switchboard or coffee timer; `inst app NAME` is an explicit opt-in. The OS loads an app only when its name is explicitly set to `true` in `enabledApps` in `configs_os.txt`; an old auto-populated app registry does not enable it. An earlier installed example may remain on disk after an update, but is disabled by default. The switchboard test fixture is `tests_fixtures_switchboard.lua` and is not installed.
+The desktop initially has no user apps. `[+]` always offers **OS settings**, where the desktop's static colour can be selected. There is no branding text on the background. Graphical screensavers are a future extension; no unimplemented screensaver option is shown. Finish the console-based IO connection test before installing user-specific apps. Role installation never installs a switchboard or coffee timer; `inst app NAME` is an explicit opt-in. The OS loads a user app only when its name is explicitly set to `true` in `enabledApps` in `configs_os.txt`; an old auto-populated app registry does not enable it. The switchboard test fixture is `tests_fixtures_switchboard.lua` and is not installed.
 
 The taskbar's clock reads Minecraft world time from the OS computer's built-in `os.time()`; no time sensor or extra computer is required. This is the in-game day/night clock, not real-world local time. If that API is unavailable, an online sensor's `gameTime` value remains a fallback. The original `?:??` appeared because the earlier OS waited exclusively for that unimplemented sensor source.
 
-Every monitor has a bottom taskbar with `[+]`, local window buttons, overflow arrows and a clock when space permits. The title is at the far left; controls are at the far right in this order: `-` minimize, `+` layouts, red `X` close this view. A normal app stops after its last view closes across all monitors; Coffee is a background service and keeps running. Click title text for move mode. The layout popup opens beside the window controls and offers maximize/restore, halves, quarters and a custom two-corner rectangle with preview/OK/Cancel. See [desktop controls](documentation_desktop.md).
+Every monitor has a bottom taskbar with `[+]`, local window buttons, overflow arrows and a clock when space permits. The title is at the far left on a neutral bar that contrasts with the desktop; controls are at the far right: `-` minimize, `+` layouts, red `X` close this view. A normal app stops after its last view closes across all monitors; Coffee is a background service and keeps running. The layout flyout shows miniature full-screen, column, row and grid layouts; click the pane to occupy. Restore, Custom, Move and Cancel remain below the diagrams. Click title text for Move, choose a coarse position, then use one-cell arrows on the green preview. Arrows disappear at workspace boundaries. Place picks another coarse position; OK commits and Cancel discards. See [desktop controls](documentation_desktop.md).
+
+Coffee's Pause/Resume, Harvest now and Menu controls remain available at every supported size. Menu has Settings, Stats and Maintenance without duplicate routes. Wide windows put the main controls in one row; roomy windows add a graphical timer. Details are grouped so timings and wiring appear as complete pairs when they fit. Each app should offer UI colour in its Settings; the OS supplies a reusable palette and saves one shared accent per app. Coffee uses it for its heading, timer and primary control.
 
 Advanced monitors now draw a coloured desktop, filled title bars/panels/buttons and wire-colour swatches. Drawing uses CC 1.5 foreground/background colours on character cells; it needs no `blit` or pixel API. Incoming modem/touch events are buffered while peripheral drawing waits. Frame ordering prevents a delayed frame from restoring an older page; touches retain the revision of the screen seen when they arrived, so duplicate/stale taps cannot apply an action twice. Clock-only repaints do not invalidate otherwise-current taps.
 

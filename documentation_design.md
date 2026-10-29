@@ -95,6 +95,8 @@ Every monitor desktop has a taskbar:
 
 Apps are single files stored on the OS computer.
 
+The Start popup also offers built-in OS settings, independently of installed apps. It currently selects a static desktop colour without background branding; a graphical screensaver is a future option. Neutral window chrome separates app accents from the desktop. Each app's Settings must offer the reusable UI-colour picker, with its accent saved centrally and shared by all views.
+
 The OS installer includes no apps and enables none by default. Apps are user-specific, installed separately and explicitly enabled in `configs_os.txt`. The same installer downloads a requested app from the V2 GitHub repository with `inst app NAME`, so the installer is the only required Pastebin upload. An app file's presence or an older saved registry entry must not cause it to run automatically. Explicitly installed/enabled coffee runs at every OS boot without needing an open window.
 
 ### App Structure
@@ -179,4 +181,4 @@ This document is the target architecture, not a claim that every feature is impl
 
 ## Implemented desktop controls
 
-The [desktop guide](documentation_desktop.md) describes the coloured bottom taskbar, left title and top-right controls, snap presets, two-corner custom sizing, click-to-move, normalized saved layouts and adaptive app views. The OS composes foreground/background colour surfaces per monitor; clients only paint and relay input. Ordered frames, buffered events and input revisions prevent stale screens/touches from reversing UI actions. Optional measured touch calibration stays on each monitor computer. Coffee is a declared background service; ordinary apps run only while at least one view exists.
+The [desktop guide](documentation_desktop.md) describes the coloured bottom taskbar, left title and top-right controls, graphical snap cards, two-corner custom sizing, coarse placement followed by one-cell move nudges, normalized saved layouts and adaptive app views. Boundary arrows disappear; previews commit only on OK. The OS composes foreground/background colour surfaces per monitor; clients only paint and relay input. Ordered frames, buffered events and input revisions prevent stale screens/touches from reversing UI actions. Optional measured touch calibration stays on each monitor computer. Coffee is a declared background service; ordinary apps run only while at least one view exists.

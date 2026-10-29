@@ -240,7 +240,8 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         state.remainingTime = 1234
         t.paint()
         assert(table.concat(t.left.lines, "\n"):find("Menu", 1, true))
-        assert(not table.concat(t.left.lines, "\n"):find("Pause", 1, true))
+        assert(table.concat(t.left.lines, "\n"):find("Pause", 1, true))
+        assert(not table.concat(t.left.lines, "\n"):find("Countdown:", 1, true))
         t.layout(big, "maximize")
         assert(table.concat(t.top.lines, "\n"):find("Countdown:", 1, true))
         assert(table.concat(t.top.lines, "\n"):find("Pause", 1, true))
@@ -254,9 +255,9 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local t = setup(60, 24, {coffee = true})
         local id = t.open("coffee")
         local win = t.window(id)
-        equal(t.top.bg[win.y][win.x], 2048, "Active title is blue")
+        equal(t.top.bg[win.y][win.x], 128, "Title contrasts with the blue desktop")
         equal(t.top.bg[win.y][win.x + win.width - 2], 16384, "Close is red at the far right")
-        equal(t.top.lines[win.y]:sub(win.x, win.x + 5), "coffee")
+        equal(t.top.lines[win.y]:sub(win.x, win.x + 5), "Coffee")
         equal(t.top.bg[win.y + 1][win.x + 1], 2048, "App heading is a filled panel")
         local buttonY = win.y + win.height - 4
         assert(t.top.lines[buttonY]:find("Pause", 1, true))
@@ -419,10 +420,10 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         end
         for _, id in ipairs({a, b}) do press(id, "Menu"); press(id, "Settings") end
         local va, vb = t.central.server.views[a], t.central.server.views[b]
-        for page = 2, 3 do press(a, "Next >"); equal(va.settingsPage, page) end
-        for _ = 1, 5 do press(a, "Next >"); equal(va.settingsPage, 3) end
+        press(a, "Next >"); equal(va.settingsPage, 2)
+        for _ = 1, 5 do press(a, "Next >"); equal(va.settingsPage, 2) end
         equal(vb.settingsPage, 1)
-        for page = 2, 1, -1 do press(a, "< Prev"); equal(va.settingsPage, page) end
+        press(a, "< Prev"); equal(va.settingsPage, 1)
         for _ = 1, 5 do press(a, "< Prev"); equal(va.settingsPage, 1) end
     end
 end
