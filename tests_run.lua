@@ -869,7 +869,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v12", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v13", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -951,6 +951,36 @@ local function githubFile(name, contents)
     end
     return '{"type":"file","name":"' .. name .. '","encoding":"base64","size":' .. #contents
         .. ',"content":"' .. table.concat(encoded) .. '\\n"}'
+end
+function tests.app_installer_downloads_actual_switchboard_and_boots_it_with_only_extracted_core_files()
+    local bus = newBus()
+    local comp = bus.computer(10, "server")
+    comp.env.shell = {dir = function() return "" end}
+    local install = assert(comp.env.loadfile("install.lua"))
+    install("server", "--startup")
+    equal(comp.disk.files["apps_switchboard.lua"], nil, "No apps in the core bundle")
+    local file = assert(io.open("apps_switchboard.lua", "r"))
+    local source = file:read("*a"); file:close()
+    local requests = 0
+    comp.env.http = {get = function(url)
+        equal(url, "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/apps_switchboard.lua?ref=main")
+        requests = requests + 1
+        return {readAll = function() return githubFile("apps_switchboard.lua", source) end, close = function() end}
+    end}
+    install("app", "switchboard")
+    equal(requests, 1); equal(comp.disk.files["apps_switchboard.lua"], source)
+    equal(unserialize(comp.disk.files["configs_os.txt"]).enabledApps.switchboard, true)
+    comp.env.loadfile = function(path)
+        local fn, err = loadstring(assert(comp.disk.files[path], "File not extracted: " .. path), path)
+        if fn then setfenv(fn, comp.env) end
+        return fn, err
+    end
+    comp:start()
+    equal(comp.server.running.switchboard, nil, "Switchboard waits until opened")
+    bus.computer(13, "monitor", {monitors = {top = monitor(40, 20)}}):start()
+    assert(comp.server.api.openApp("switchboard", "monitor_13:top"))
+    equal(comp.server.running.switchboard, true)
+    equal(comp.server.state.appStates.switchboard.version, 1)
 end
 function tests.app_installer_github_default_downloads_one_app_without_running_or_resetting_it()
     local bus = newBus()
@@ -1301,6 +1331,7 @@ end
 assert(hostLoadfile("tests_coffee.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_desktop.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_appearance.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
+assert(hostLoadfile("tests_switchboard.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_console.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 local names, failures = {}, {}
 for name in pairs(tests) do names[#names + 1] = name end

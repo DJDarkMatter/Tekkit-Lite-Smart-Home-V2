@@ -2,7 +2,7 @@
 
 ## Single-file apps
 
-The installer contains no apps. A user app is a Lua file returning an app table, stored as `apps_NAME.lua` in the OS computer root. It executes only if `enabledApps[APP_NAME] = true` in `configs_os.txt`; restart the OS after changing this setting. The default is an empty table. The saved legacy `appRegistry` does not enable execution. Enabled app definitions are registered at OS boot. Ordinary apps initialize when first opened (or when saved views restore), run while any view exists, and stop after their last view closes. Apps with `backgroundService = true`, and apps without a render hook, start at boot and continue with zero views. `apps_coffee.lua` is the first optional app.
+The installer contains no apps. A user app is a Lua file returning an app table, stored as `apps_NAME.lua` in the OS computer root. It executes only if `enabledApps[APP_NAME] = true` in `configs_os.txt`; restart the OS after changing this setting. The default is an empty table. The saved legacy `appRegistry` does not enable execution. Enabled app definitions are registered at OS boot. Ordinary apps initialize when first opened (or when saved views restore), run while any view exists, and stop after their last view closes. Apps with `backgroundService = true`, and apps without a render hook, start at boot and continue with zero views. Optional apps are `apps_coffee.lua` and `apps_switchboard.lua`.
 
 Explicit installation uses the same installer: `inst app APP_NAME` downloads the root file `apps_APP_NAME.lua` from `DJDarkMatter/Tekkit-Lite-Smart-Home-V2` on GitHub (`main` branch). `inst app APP_NAME --ref BRANCH_OR_COMMIT` selects another ref. Apps therefore need no separate Pastebin upload. Optional alternatives remain `inst app APP_NAME PASTE_ID` or `inst app APP_NAME --file /path/to/app.lua`. The installer checks syntax, installs the file and enables that one app for the next OS start. It preserves existing settings, startup and saved app state, backing up replaced code/settings. It does not execute the app at install time. GitHub mode uses the CC 1.5 `http.get` API; role installation remains offline and app-free.
 
@@ -49,6 +49,7 @@ Hooks must return promptly and must not call `sleep`, `read`, `os.pullEvent`, HT
 | --- | --- |
 | `api.mapOutput(name, clientId, side, color, initialValue)` | `ok, error`; nil colour means ordinary/digital redstone; otherwise one CC colour bit. Optional boolean sets mapping and initial intent in one checkpoint, useful for safely binding a new wire OFF |
 | `api.setOutput(name, boolean)` | `ok, error`; saves desired state before sending it |
+| `api.updateOutputs(changes)` | `ok, error`; bundled-v13 atomic batch of mappings, removals and desired values; see below |
 | `api.getOutput(name)` | Desired boolean; false if unknown |
 | `api.getOutputs()` | Sorted array of `{name, clientId, side, color, value, online, confirmed}` |
 | `api.getInput(clientId, side)` | `{value = bundledMask, digital = boolean}`, or nil if unknown/offline |
@@ -89,11 +90,27 @@ function app.handleIOSelection(key, address, state, api, context)
 end
 ```
 
-The callback should validate/apply the change, roll back its own state on failed save/mapping, and return `true` or `false, error`. For outputs use `api.mapOutput` and a logical output name; apps never write redstone directly. The coffee callback demonstrates committing an OFF binding with its address. A future switchboard can reuse the same picker for each output.
+The callback should validate/apply the change, roll back its own state on failed save/mapping, and return `true` or `false, error`. For outputs use `api.mapOutput` and a logical output name; apps never write redstone directly. The coffee callback demonstrates committing an OFF binding with its address. Switchboard reuses the same picker for each output, including detecting stale selections from another monitor.
 
 OS checkpoints include all app states and window position/size/order/minimized status, snap/restore metadata and per-monitor taskbar scrolling at an interval no longer than one second, even when an older config still specifies 30 seconds. Important transitions and applied settings save immediately. This is checkpoint recovery, not an exact transaction with the external Minecraft machine.
 
 `dt` is elapsed ComputerCraft `os.clock()` time between OS ticks. It is not reconstructed across program/server downtime. A real coffee app must define its own online/pause/harvest state transitions and explicitly save important counters.
+
+## Atomic output groups (bundled-v13)
+
+`api.updateOutputs(changes)` accepts a dense array of operations, each with a unique logical `name`:
+
+```lua
+api.updateOutputs({
+    {name = "panel_1", clientId = "io_11", side = "left", color = 1, value = false},
+    {name = "panel_2", value = false}, -- Existing mapping, new desired value.
+    {name = "old_panel_3", remove = true},
+})
+```
+
+A mapping includes `clientId`, `side` and optional bundled `color`; nil colour means Digital. Optional `value` is boolean; omitted values retain previous intent. Value-only operations need existing mappings. Removal clears the mapping and desired value. Empty arrays checkpoint caller app-state edits without changing IO. New mappings are checked against online client capabilities. All final mappings are checked for duplicate wires, including other apps; swapping two routes in one batch is permitted.
+
+The group and caller's current app state save before hardware sync. Validation/save failure changes no mappings, intent or hardware; apps must restore their own edited state on failure, as Switchboard does. Released sides remain in the snapshots so old wires clear. Each affected client receives one new revision after the checkpoint, with normal cooldown/retry/ACK semantics. This is an atomic central checkpoint, not simultaneous switching across computers. Switchboard uses it for presets, route changes, grid shrink, disconnect/delete and All OFF. Existing `mapOutput`/`setOutput` remain compatible with Coffee.
 
 ## Transport
 

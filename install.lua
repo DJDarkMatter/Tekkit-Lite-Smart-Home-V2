@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v12
+-- SmartHome OS installer: bundled-v13
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor [--startup]
@@ -1199,6 +1199,73 @@ function Server.new(net, storage, config, logger)
     end
 
     function api.getOutput(name) return state.outputs[name] == true end
+    -- One checkpoint for a whole panel, reroute, removal or group action. App
+    -- state changed by the caller is included in that same durable checkpoint.
+    function api.updateOutputs(changes)
+        if type(changes) ~= "table" then return false, "Expected output changes" end
+        local count = 0
+        for index in pairs(changes) do
+            if not integer(index, 1, #changes) then return false, "Expected a dense array of output changes" end
+            count = count + 1
+        end
+        if count ~= #changes then return false, "Expected a dense array of output changes" end
+        local mappings, values, managed = copy(state.outputMap), copy(state.outputs), copy(state.managedSides)
+        local seen, affected = {}, {}
+        local function remember(mapping)
+            if not mapping then return end
+            affected[mapping.clientId] = true
+            managed[mapping.clientId] = managed[mapping.clientId] or {}
+            managed[mapping.clientId][mapping.side] = true
+        end
+        for _, change in ipairs(changes) do
+            if type(change) ~= "table" or type(change.name) ~= "string" or not change.name:match("^[%w_-]+$")
+                or seen[change.name] then return false, "Invalid or repeated output name" end
+            if change.remove ~= nil and type(change.remove) ~= "boolean"
+                or change.clientId == nil and (change.side ~= nil or change.color ~= nil) then return false, "Invalid output change" end
+            seen[change.name] = true
+            remember(mappings[change.name])
+            if change.remove == true then
+                mappings[change.name], values[change.name] = nil, nil
+            else
+                local mapping = mappings[change.name]
+                if change.clientId ~= nil then
+                    if type(change.clientId) ~= "string" or change.clientId == "" or not sideSet[change.side]
+                        or (change.color ~= nil and not colour(change.color)) then return false, "Invalid output mapping" end
+                    mapping = {clientId = change.clientId, side = change.side, color = change.color}
+                    local client = server.ioClients[mapping.clientId]
+                    if client and client.online and not client.capabilities[mapping.side] then
+                        return false, "That side is unavailable (possibly occupied by the modem)"
+                    end
+                    mappings[change.name] = mapping
+                end
+                if not mapping then return false, "Unknown output: " .. change.name end
+                if change.value ~= nil then
+                    if type(change.value) ~= "boolean" then return false, "Output value must be boolean" end
+                    values[change.name] = change.value
+                end
+                remember(mapping)
+            end
+        end
+        local wires = {}
+        for _, name in ipairs(sortedKeys(mappings)) do
+            local mapping = mappings[name]
+            wires[mapping.clientId] = wires[mapping.clientId] or {}
+            local sides = wires[mapping.clientId]
+            sides[mapping.side] = sides[mapping.side] or {}
+            local key = mapping.color or "digital"
+            if sides[mapping.side][key] then return false, "Wire already mapped to " .. sides[mapping.side][key] end
+            sides[mapping.side][key] = name
+        end
+        local previousMap, previousValues, previousManaged = state.outputMap, state.outputs, state.managedSides
+        state.outputMap, state.outputs, state.managedSides = mappings, values, managed
+        local ok, err = server.save()
+        if not ok then
+            state.outputMap, state.outputs, state.managedSides = previousMap, previousValues, previousManaged
+            return false, err
+        end
+        for _, id in ipairs(sortedKeys(affected)) do server.syncIO(id, true) end
+        return true
+    end
     function api.getOutputs()
         local result = {}
         for _, name in ipairs(sortedKeys(state.outputMap)) do
@@ -2641,7 +2708,7 @@ end)
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v12")
+print("SmartHome installer: bundled-v13")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor [--startup]")

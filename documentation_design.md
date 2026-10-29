@@ -150,6 +150,10 @@ All switchboard IO goes through IO clients:
 
 This abstraction allows adding IO clients or moving cables without changing apps.
 
+### User Switchboard, implemented in bundled-v13
+
+The optional [Switchboard](documentation_switchboard.md) starts with paged saved-view cards, Add view and bottom Settings. Adding a client/side creates all sixteen bundled switches, initially OFF, as one saved operation. Empty views offer independent 1–16 column/row selection and per-switch routing to client/side/colour. Preferred grids page at small monitor/window sizes, including 2×2 pages on a 13×7 content area. Names use a responsive touch keyboard. View settings offer rename, switch editing/routing, grid changes, order, All OFF and confirmed deletion. App settings cover UI/background/button-border/unwired colours, density and All OFF across this app only. Bundled tiles retain their wire colours. Shared configuration and output intent survive restarts and window closures; navigation/drafts stay per window. Existing wire ownership is respected, and released wires clear after a successful checkpoint. Calibration and window/taskbar geometry are unchanged.
+
 ## 9. Mass Fabricators and Solar
 
 Sensors wired to IO clients feed data to OS:

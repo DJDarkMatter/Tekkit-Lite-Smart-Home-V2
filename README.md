@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all thirteen runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v12`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all thirteen runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v13`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -64,7 +64,7 @@ The installer decodes the API's base64 content using Lua 5.1, checks the filenam
 
 These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
 
-The first optional app is [Coffee](documentation_coffee.md), adapted from the original standalone timer. Run `inst app coffee` on the OS computer to fetch it from GitHub. It starts automatically at every OS boot without a window. Use Menu → Settings for its IO, durations and UI colour. Install the current bundled-v12 OS and keep the current Coffee file on GitHub before downloading the app. Coffee and window resizing are unchanged from bundled-v10. Existing bundled-v8 monitor clients understand these frames; install the bundled-v12 monitor role for nine-point calibration, stock reset and live testing. IO clients do not need this update.
+Optional apps are [Coffee](documentation_coffee.md) and [Switchboard](documentation_switchboard.md). Run `inst app coffee` or `inst app switchboard` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers Menu → Settings for its IO, durations and UI colour. Switchboard starts when opened from the monitor launcher and offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and app appearance. Install the bundled-v13 **server** role before Switchboard; keep the current app files on GitHub. Coffee code, window resizing, calibration and IO/monitor clients are unchanged in this update. No client update is needed for Switchboard.
 
 ### Confirm connection and test a wire
 
@@ -168,7 +168,7 @@ Window sizes in these commands include the frame. `move` and `resize` clamp to t
 
 ## Still to build from the design
 
-Production measurement/averages, real sensor peripheral adapters, and the user's switchboard app are not implemented. The coffee app is optional and separate from the OS installer. The original coffee/switchboard programs are the root `oldfiles_*.lua` archives; the OS does not load them. Character resolution is measured from the monitor API; physical block dimensions are not guessed from that resolution.
+Production measurement/averages and real sensor peripheral adapters are not implemented. Coffee and Switchboard are optional and separate from the OS installer. The original coffee/switchboard programs are the root `oldfiles_*.lua` archives; the OS does not load them. Character resolution is measured from the monitor API; physical block dimensions are not guessed from that resolution.
 
 Periodic checkpoints can lose progress since the last successful checkpoint on a crash (normally up to one second). Important app transitions call `api.save()` or save with the output intent before hardware commands. No program runs while its own computer is unloaded. Network confirmations report that the IO computer applied an output, not that an external machine physically responded. Disconnect detection still uses the configured client timeout; external-machine feedback requires a real input.
 
