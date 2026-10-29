@@ -4,6 +4,8 @@ local Picker = dofile("lib_io_picker.lua")
 local Desktop = dofile("lib_desktop.lua")
 local Gui = dofile("lib_gui.lua")
 local Settings = dofile("lib_settings.lua")
+local systemColours = {background = {field = "backgroundColour", title = "Background"},
+    windowBorder = {field = "windowBorderColour", title = "Window border"}, taskbar = {field = "taskbarColour", title = "Taskbar"}}
 local sideSet = {top = true, bottom = true, left = true, right = true, front = true, back = true}
 local function integer(value, low, high)
     return type(value) == "number" and value == math.floor(value) and value >= low and value <= high
@@ -67,6 +69,8 @@ function Server.new(net, storage, config, logger)
     end
     state.appearance = type(state.appearance) == "table" and state.appearance or {}
     if not colour(state.appearance.backgroundColour) then state.appearance.backgroundColour = 2048 end
+    if not colour(state.appearance.windowBorderColour) then state.appearance.windowBorderColour = 128 end
+    if not colour(state.appearance.taskbarColour) then state.appearance.taskbarColour = 128 end
     if type(state.appearance.appColours) ~= "table" then state.appearance.appColours = {} end
     for name, value in pairs(state.appearance.appColours) do
         if type(name) ~= "string" or not colour(value) then state.appearance.appColours[name] = nil end
@@ -116,7 +120,8 @@ function Server.new(net, storage, config, logger)
     api.save = server.save
 
     function api.getOSSettings()
-        return {backgroundMode = "solid", backgroundColour = state.appearance.backgroundColour}
+        return {backgroundMode = "solid", backgroundColour = state.appearance.backgroundColour,
+            windowBorderColour = state.appearance.windowBorderColour, taskbarColour = state.appearance.taskbarColour}
     end
     function api.getAppColour(name) return state.appearance.appColours[name] or 2048 end
     local function saveAppearance(change)
@@ -130,6 +135,16 @@ function Server.new(net, storage, config, logger)
         if not colour(value) then return false, "Choose a CC colour" end
         return saveAppearance(function(appearance) appearance.backgroundColour = value end)
     end
+    function api.setWindowBorderColour(value)
+        if not colour(value) then return false, "Choose a CC colour" end
+        return saveAppearance(function(appearance) appearance.windowBorderColour = value end)
+    end
+    function api.setTaskbarColour(value)
+        if not colour(value) then return false, "Choose a CC colour" end
+        return saveAppearance(function(appearance) appearance.taskbarColour = value end)
+    end
+    local systemColourSetters = {background = api.setBackgroundColour,
+        windowBorder = api.setWindowBorderColour, taskbar = api.setTaskbarColour}
     function api.setAppColour(name, value)
         if not definition(name) or not colour(value) then return false, "Invalid app colour" end
         return saveAppearance(function(appearance) appearance.appColours[name] = value end)
@@ -321,11 +336,12 @@ function Server.new(net, storage, config, logger)
     function api.pickColour(windowId, target)
         local win = state.windows[windowId]
         target = target or "app"
-        if not win or (target ~= "app" and target ~= "background") then return false, "Invalid colour selector" end
-        if target == "background" and win.appName ~= "@settings" then return false, "Open OS settings for the background" end
+        local option = systemColours[target]
+        if not win or (target ~= "app" and not option) then return false, "Invalid colour selector" end
+        if option and win.appName ~= "@settings" then return false, "Open OS settings for system colours" end
         if win.width < 14 or win.height < 8 then return false, "Colour settings need a 12x6 content area" end
         server.dialogs[windowId] = {kind = "colour", target = target,
-            current = target == "background" and state.appearance.backgroundColour or api.getAppColour(win.appName)}
+            current = option and state.appearance[option.field] or api.getAppColour(win.appName)}
         invalidateInput(win.monitorId)
         return true
     end
@@ -506,6 +522,7 @@ function Server.new(net, storage, config, logger)
 
     local function renderMonitor(id, monitor)
         local desktopColour = state.appearance.backgroundColour
+        local borderColour, taskbarColour = state.appearance.windowBorderColour, state.appearance.taskbarColour
         local surface = Gui.new(monitor.width, monitor.height, Gui.contrast(desktopColour), desktopColour)
         local function write(x, y, text, limit)
             surface.write(x, y, text, nil, nil, limit)
@@ -516,23 +533,23 @@ function Server.new(net, storage, config, logger)
         end
         for _, win in ipairs(windowsFor(id)) do
             if fit(win, monitor) and not win.minimized and server.running[win.appName] then
-                surface.fill(win.x, win.y, win.width, win.height, 32768, 128)
+                surface.fill(win.x, win.y, win.width, win.height, Gui.contrast(borderColour), borderColour)
                 surface.fill(win.x + 1, win.y + 1, win.width - 2, win.height - 2, 32768, 256)
-                local titleColour = active == win.id and (desktopColour == 128 and 32768 or 128)
-                    or (desktopColour == 256 and 128 or 256)
-                surface.fill(win.x, win.y, win.width, 1, Gui.contrast(titleColour), titleColour)
+                surface.fill(win.x, win.y, win.width, 1, Gui.contrast(borderColour), borderColour)
                 write(win.x, win.y, win.title, win.width - 9)
                 for _, control in ipairs(Desktop.controls(win)) do
-                    surface.write(control.x1, win.y, control.label, 1, control.action == "close" and 16384 or 128)
+                    local controlColour = control.action == "close" and 16384 or borderColour
+                    surface.write(control.x1, win.y, control.label, Gui.contrast(controlColour), controlColour)
                 end
                 local ok, content
                 if server.dialogs[win.id] then
                     local dialog = server.dialogs[win.id]
                     ok = true
                     if dialog.kind == "colour" then
-                        dialog.current = dialog.target == "background" and state.appearance.backgroundColour or api.getAppColour(win.appName)
+                        local option = systemColours[dialog.target]
+                        dialog.current = option and state.appearance[option.field] or api.getAppColour(win.appName)
                         content, dialog.hits = Gui.palette(win.width - 2, win.height - 2, dialog.current,
-                            dialog.error or (dialog.target == "background" and "Background" or "UI colour"))
+                            dialog.error or (option and option.title or "UI colour"))
                     else content = Picker.render(dialog, win.width - 2, win.height - 2, api.getIOClients()) end
                 else
                     ok, content = appCall(win.appName, "render", win.width - 2, win.height - 2,
@@ -554,11 +571,12 @@ function Server.new(net, storage, config, logger)
         local taskbar
         taskbar, monitor.taskbar = Desktop.taskbar(windowsFor(id, true), monitor, server.gameTime, desktopState(id), active)
         write(1, monitor.height, taskbar)
-        surface.style(1, monitor.height, monitor.width, 1, 1, 128)
+        surface.style(1, monitor.height, monitor.width, 1, Gui.contrast(taskbarColour), taskbarColour)
         for _, hit in ipairs(monitor.taskbar) do
-            surface.style(hit.x1, monitor.height, hit.x2 - hit.x1 + 1, 1, 1,
-                (hit.action == "launcher" or hit.id == active) and 2048 or 256)
-            if hit.action ~= "launcher" and hit.id ~= active then surface.style(hit.x1, monitor.height, hit.x2 - hit.x1 + 1, 1, 32768, nil) end
+            if (hit.action == "launcher" and monitor.launcher) or (hit.action == "window" and hit.id == active) then
+                local highlight = Gui.contrast(taskbarColour)
+                surface.style(hit.x1, monitor.height, hit.x2 - hit.x1 + 1, 1, Gui.contrast(highlight), highlight)
+            end
         end
         if monitor.launcher or monitor.layoutMenu then
             local items, title, model
@@ -784,7 +802,7 @@ function Server.new(net, storage, config, logger)
                             end
                             if action == "colour" then
                                 local ok, err
-                                if dialog.target == "background" then ok, err = api.setBackgroundColour(address)
+                                if systemColourSetters[dialog.target] then ok, err = systemColourSetters[dialog.target](address)
                                 else ok, err = api.setAppColour(win.appName, address) end
                                 if ok then server.dialogs[win.id] = nil else dialog.error = tostring(err) end
                             elseif action == "cancel" then server.dialogs[win.id] = nil end

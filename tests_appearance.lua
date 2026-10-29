@@ -62,7 +62,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.api.getOSSettings().backgroundColour, 128)
         equal(t.top.bg[20][60], 128); equal(t.left.bg[2][2], 128)
         local win = t.window(id)
-        equal(t.top.bg[win.y][win.x], 32768, "A gray desktop gets a contrasting title bar")
+        equal(t.top.bg[win.y][win.x], 128, "Changing the desktop must not override the selected window-border colour")
         equal(next(t.central.server.state.appRegistry), nil)
         equal(next(unserialize(t.central.disk.files["configs_os.txt"]).enabledApps), nil)
         t.reboot()
@@ -318,11 +318,84 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         for index = 0, 15 do
             local bg, accent = 2 ^ index, 2 ^ ((index + 5) % 16)
             assert(t.api.setBackgroundColour(bg)); assert(t.api.setAppColour("coffee", accent)); t.paint()
-            assert(t.top.bg[win.y][win.x] ~= bg)
+            assert(t.api.setWindowBorderColour(accent)); assert(t.api.setTaskbarColour(bg)); t.paint()
+            equal(t.top.bg[win.y][win.x], accent)
             assert(t.top.fg[win.y + 1][win.x + 1] ~= t.top.bg[win.y + 1][win.x + 1])
             assert(t.top.fg[win.y + 2][win.x + 1] ~= t.top.bg[win.y + 2][win.x + 1])
         end
     end
+
+    function tests.appearance_system_border_and_taskbar_palettes_apply_globally_and_survive_reboot()
+        local t = setup(true)
+        local coffee = t.open("coffee", "left")
+        local settings = t.open("@settings")
+        local state = t.central.server.state.appStates.coffee
+        state.remainingTime = 1234
+        local wiring = serialize(t.central.server.state.outputMap)
+        t.click(settings, "windowBorder"); t.click(settings, "colour", 16)
+        t.click(settings, "taskbar"); t.click(settings, "colour", 8192)
+        local preferences = t.api.getOSSettings()
+        equal(preferences.windowBorderColour, 16); equal(preferences.taskbarColour, 8192)
+        for _, item in ipairs({{settings, t.top}, {coffee, t.left}}) do
+            local win, screen = t.window(item[1]), item[2]
+            equal(screen.bg[win.y][win.x], 16)
+            equal(screen.bg[win.y + 1][win.x], 16)
+            equal(screen.bg[win.y + win.height - 1][win.x], 16)
+            equal(screen.fg[win.y][win.x], 32768)
+            equal(screen.bg[win.y][win.x + win.width - 2], 16384, "Close stays red")
+            equal(screen.bg[screen.height][screen.width], 8192)
+            equal(screen.bg[screen.height - 1][screen.width], t.api.getOSSettings().backgroundColour, "Taskbar colouring must not extend upward")
+            equal(screen.fg[screen.height][screen.width], 1)
+        end
+        equal(state.remainingTime, 1234); equal(serialize(t.central.server.state.outputMap), wiring)
+        equal(t.api.pickColour(coffee, "windowBorder"), false)
+        equal(t.api.pickColour(coffee, "taskbar"), false)
+        t.reboot()
+        equal(t.api.getOSSettings().windowBorderColour, 16); equal(t.api.getOSSettings().taskbarColour, 8192)
+        equal(t.central.server.state.appStates.coffee.remainingTime, 1234)
+        equal(t.left.bg[t.window(coffee).y][t.window(coffee).x], 16)
+    end
+
+    function tests.appearance_system_colours_roll_back_failed_saves_and_default_old_or_invalid_preferences()
+        local t = setup(true)
+        local id = t.open("@settings")
+        t.click(id, "windowBorder")
+        local before = t.central.disk.files["configs_os_state.txt"]
+        t.central.disk.failWrite = true; t.click(id, "colour", 2)
+        equal(t.api.getOSSettings().windowBorderColour, 128)
+        equal(t.central.disk.files["configs_os_state.txt"], before)
+        assert(t.central.server.dialogs[id].error)
+        t.central.disk.failWrite = false; t.click(id, "colour", 2)
+        t.click(id, "taskbar")
+        t.central.disk.failWrite = true; t.click(id, "colour", 1)
+        equal(t.api.getOSSettings().taskbarColour, 128)
+        t.central.disk.failWrite = false; t.click(id, "colour", 1)
+        equal(t.api.getOSSettings().taskbarColour, 1)
+        equal(t.top.fg[t.top.height][t.top.width], 32768, "A white taskbar needs black text")
+        equal(t.api.setWindowBorderColour(3), false); equal(t.api.setTaskbarColour("red"), false)
+        local saved = unserialize(t.central.disk.files["configs_os_state.txt"])
+        saved.appearance.windowBorderColour, saved.appearance.taskbarColour = nil, 3
+        saved.appStates.coffee.remainingTime = 4321
+        t.central.disk.files["configs_os_state.txt"] = serialize(saved)
+        t.reboot()
+        equal(t.api.getOSSettings().windowBorderColour, 128); equal(t.api.getOSSettings().taskbarColour, 128)
+        equal(t.central.server.state.appStates.coffee.remainingTime, 4321)
+    end
+
+    function tests.appearance_all_three_os_colour_controls_fit_compact_settings_windows()
+        local t = setup(false)
+        local app = t.central.server.systemApps["@settings"]
+        for _, width in ipairs({12, 20, 28}) do for _, height in ipairs({6, 8, 10}) do
+            local lines = app.render(width, height, {}, t.api)
+            local actions = {}
+            for _, h in ipairs(lines.hits) do
+                assert(h.y >= 1 and h.y <= height); assert(not actions[h.y], "OS appearance controls overlap")
+                actions[h.y] = true
+            end
+            equal(#lines.hits, 3)
+        end end
+    end
+
 
     function tests.appearance_coffee_layout_matrix_has_no_overlapping_controls_or_duplicate_menu_paths()
         local t = setup(true)

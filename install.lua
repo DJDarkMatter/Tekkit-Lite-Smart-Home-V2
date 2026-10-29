@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v11
+-- SmartHome OS installer: bundled-v12
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor [--startup]
@@ -455,14 +455,20 @@ end
 return Gui
 ]=],
     ["lib_settings.lua"] = [=[-- Built-in OS settings window. This is system UI, not an installed user app.
-local Settings = {title = "OS settings", minWidth = 12, minHeight = 6, preferredWidth = 28, preferredHeight = 8}
+local Settings = {title = "OS settings", minWidth = 12, minHeight = 6, preferredWidth = 28, preferredHeight = 10}
 local function build(width, height, api)
     local ui = api.ui.content(width, height)
     local settings = api.getOSSettings()
+    ui.style(1, 1, width, height, 1, 32768)
     ui.heading("Appearance", 128)
-    ui.button(3, "Background", "background", nil, nil, true, settings.backgroundColour)
-    ui.text(4, api.ui.colourName(settings.backgroundColour), true)
-    if height >= 8 then ui.text(6, width >= 24 and "Applies to all monitors" or "All monitors", true) end
+    local items = {{label = "Background", action = "background", colour = settings.backgroundColour},
+        {label = width >= 13 and "Window border" or "Borders", action = "windowBorder", colour = settings.windowBorderColour},
+        {label = "Taskbar", action = "taskbar", colour = settings.taskbarColour}}
+    for index, item in ipairs(items) do
+        local label = width >= 24 and item.label .. ": " .. api.ui.colourName(item.colour) or item.label
+        ui.button(3 + (index - 1) * (height >= 9 and 2 or 1), label, item.action, nil, nil, true, item.colour)
+    end
+    ui.text(height >= 9 and 9 or height, width >= 24 and "Applies to all monitors" or "All monitors", true)
     return ui.lines, ui.hits
 end
 function Settings.render(width, height, state, api)
@@ -471,8 +477,8 @@ end
 function Settings.handleTouch(x, y, width, height, state, api, context)
     local _, hits = build(width, height, api)
     for _, hit in ipairs(hits) do
-        if api.ui.hit(hit, x, y) and hit.action == "background" then
-            return api.pickColour(context.windowId, "background")
+        if api.ui.hit(hit, x, y) then
+            return api.pickColour(context.windowId, hit.action)
         end
     end
     return false
@@ -909,6 +915,8 @@ local Picker = dofile("lib_io_picker.lua")
 local Desktop = dofile("lib_desktop.lua")
 local Gui = dofile("lib_gui.lua")
 local Settings = dofile("lib_settings.lua")
+local systemColours = {background = {field = "backgroundColour", title = "Background"},
+    windowBorder = {field = "windowBorderColour", title = "Window border"}, taskbar = {field = "taskbarColour", title = "Taskbar"}}
 local sideSet = {top = true, bottom = true, left = true, right = true, front = true, back = true}
 local function integer(value, low, high)
     return type(value) == "number" and value == math.floor(value) and value >= low and value <= high
@@ -972,6 +980,8 @@ function Server.new(net, storage, config, logger)
     end
     state.appearance = type(state.appearance) == "table" and state.appearance or {}
     if not colour(state.appearance.backgroundColour) then state.appearance.backgroundColour = 2048 end
+    if not colour(state.appearance.windowBorderColour) then state.appearance.windowBorderColour = 128 end
+    if not colour(state.appearance.taskbarColour) then state.appearance.taskbarColour = 128 end
     if type(state.appearance.appColours) ~= "table" then state.appearance.appColours = {} end
     for name, value in pairs(state.appearance.appColours) do
         if type(name) ~= "string" or not colour(value) then state.appearance.appColours[name] = nil end
@@ -1021,7 +1031,8 @@ function Server.new(net, storage, config, logger)
     api.save = server.save
 
     function api.getOSSettings()
-        return {backgroundMode = "solid", backgroundColour = state.appearance.backgroundColour}
+        return {backgroundMode = "solid", backgroundColour = state.appearance.backgroundColour,
+            windowBorderColour = state.appearance.windowBorderColour, taskbarColour = state.appearance.taskbarColour}
     end
     function api.getAppColour(name) return state.appearance.appColours[name] or 2048 end
     local function saveAppearance(change)
@@ -1035,6 +1046,16 @@ function Server.new(net, storage, config, logger)
         if not colour(value) then return false, "Choose a CC colour" end
         return saveAppearance(function(appearance) appearance.backgroundColour = value end)
     end
+    function api.setWindowBorderColour(value)
+        if not colour(value) then return false, "Choose a CC colour" end
+        return saveAppearance(function(appearance) appearance.windowBorderColour = value end)
+    end
+    function api.setTaskbarColour(value)
+        if not colour(value) then return false, "Choose a CC colour" end
+        return saveAppearance(function(appearance) appearance.taskbarColour = value end)
+    end
+    local systemColourSetters = {background = api.setBackgroundColour,
+        windowBorder = api.setWindowBorderColour, taskbar = api.setTaskbarColour}
     function api.setAppColour(name, value)
         if not definition(name) or not colour(value) then return false, "Invalid app colour" end
         return saveAppearance(function(appearance) appearance.appColours[name] = value end)
@@ -1226,11 +1247,12 @@ function Server.new(net, storage, config, logger)
     function api.pickColour(windowId, target)
         local win = state.windows[windowId]
         target = target or "app"
-        if not win or (target ~= "app" and target ~= "background") then return false, "Invalid colour selector" end
-        if target == "background" and win.appName ~= "@settings" then return false, "Open OS settings for the background" end
+        local option = systemColours[target]
+        if not win or (target ~= "app" and not option) then return false, "Invalid colour selector" end
+        if option and win.appName ~= "@settings" then return false, "Open OS settings for system colours" end
         if win.width < 14 or win.height < 8 then return false, "Colour settings need a 12x6 content area" end
         server.dialogs[windowId] = {kind = "colour", target = target,
-            current = target == "background" and state.appearance.backgroundColour or api.getAppColour(win.appName)}
+            current = option and state.appearance[option.field] or api.getAppColour(win.appName)}
         invalidateInput(win.monitorId)
         return true
     end
@@ -1411,6 +1433,7 @@ function Server.new(net, storage, config, logger)
 
     local function renderMonitor(id, monitor)
         local desktopColour = state.appearance.backgroundColour
+        local borderColour, taskbarColour = state.appearance.windowBorderColour, state.appearance.taskbarColour
         local surface = Gui.new(monitor.width, monitor.height, Gui.contrast(desktopColour), desktopColour)
         local function write(x, y, text, limit)
             surface.write(x, y, text, nil, nil, limit)
@@ -1421,23 +1444,23 @@ function Server.new(net, storage, config, logger)
         end
         for _, win in ipairs(windowsFor(id)) do
             if fit(win, monitor) and not win.minimized and server.running[win.appName] then
-                surface.fill(win.x, win.y, win.width, win.height, 32768, 128)
+                surface.fill(win.x, win.y, win.width, win.height, Gui.contrast(borderColour), borderColour)
                 surface.fill(win.x + 1, win.y + 1, win.width - 2, win.height - 2, 32768, 256)
-                local titleColour = active == win.id and (desktopColour == 128 and 32768 or 128)
-                    or (desktopColour == 256 and 128 or 256)
-                surface.fill(win.x, win.y, win.width, 1, Gui.contrast(titleColour), titleColour)
+                surface.fill(win.x, win.y, win.width, 1, Gui.contrast(borderColour), borderColour)
                 write(win.x, win.y, win.title, win.width - 9)
                 for _, control in ipairs(Desktop.controls(win)) do
-                    surface.write(control.x1, win.y, control.label, 1, control.action == "close" and 16384 or 128)
+                    local controlColour = control.action == "close" and 16384 or borderColour
+                    surface.write(control.x1, win.y, control.label, Gui.contrast(controlColour), controlColour)
                 end
                 local ok, content
                 if server.dialogs[win.id] then
                     local dialog = server.dialogs[win.id]
                     ok = true
                     if dialog.kind == "colour" then
-                        dialog.current = dialog.target == "background" and state.appearance.backgroundColour or api.getAppColour(win.appName)
+                        local option = systemColours[dialog.target]
+                        dialog.current = option and state.appearance[option.field] or api.getAppColour(win.appName)
                         content, dialog.hits = Gui.palette(win.width - 2, win.height - 2, dialog.current,
-                            dialog.error or (dialog.target == "background" and "Background" or "UI colour"))
+                            dialog.error or (option and option.title or "UI colour"))
                     else content = Picker.render(dialog, win.width - 2, win.height - 2, api.getIOClients()) end
                 else
                     ok, content = appCall(win.appName, "render", win.width - 2, win.height - 2,
@@ -1459,11 +1482,12 @@ function Server.new(net, storage, config, logger)
         local taskbar
         taskbar, monitor.taskbar = Desktop.taskbar(windowsFor(id, true), monitor, server.gameTime, desktopState(id), active)
         write(1, monitor.height, taskbar)
-        surface.style(1, monitor.height, monitor.width, 1, 1, 128)
+        surface.style(1, monitor.height, monitor.width, 1, Gui.contrast(taskbarColour), taskbarColour)
         for _, hit in ipairs(monitor.taskbar) do
-            surface.style(hit.x1, monitor.height, hit.x2 - hit.x1 + 1, 1, 1,
-                (hit.action == "launcher" or hit.id == active) and 2048 or 256)
-            if hit.action ~= "launcher" and hit.id ~= active then surface.style(hit.x1, monitor.height, hit.x2 - hit.x1 + 1, 1, 32768, nil) end
+            if (hit.action == "launcher" and monitor.launcher) or (hit.action == "window" and hit.id == active) then
+                local highlight = Gui.contrast(taskbarColour)
+                surface.style(hit.x1, monitor.height, hit.x2 - hit.x1 + 1, 1, Gui.contrast(highlight), highlight)
+            end
         end
         if monitor.launcher or monitor.layoutMenu then
             local items, title, model
@@ -1689,7 +1713,7 @@ function Server.new(net, storage, config, logger)
                             end
                             if action == "colour" then
                                 local ok, err
-                                if dialog.target == "background" then ok, err = api.setBackgroundColour(address)
+                                if systemColourSetters[dialog.target] then ok, err = systemColourSetters[dialog.target](address)
                                 else ok, err = api.setAppColour(win.appName, address) end
                                 if ok then server.dialogs[win.id] = nil else dialog.error = tostring(err) end
                             elseif action == "cancel" then server.dialogs[win.id] = nil end
@@ -2262,80 +2286,163 @@ function Monitor.new(net, config)
             end
         end
     end
-    function client.calibrate(side)
+    function client.calibrate(side, mode)
         local device = assert(client.devices[side], "No monitor on that side")
         local w, h = device.width, device.height
         device.cache = {}
         assert(w >= 12 and h >= 8, "Calibration needs at least 12x8 characters")
-        local targets = {{math.floor(w / 4), math.max(3, math.floor(h / 4))},
-            {math.floor(3 * w / 4), math.floor(h / 2)}, {math.floor(w / 2), math.min(h - 1, math.floor(3 * h / 4))}}
+        local targets = {}
+        for _, y in ipairs({3, math.floor(h / 2), h - 3}) do
+            for _, x in ipairs({math.max(3, math.floor(w / 6)), math.floor(w / 2), math.min(w - 2, math.floor(5 * w / 6))}) do
+                targets[#targets + 1] = {x, y}
+            end
+        end
+        local previous = config.touchOffsets and config.touchOffsets[side] or {x = 0, y = 0}
+        local candidate = {x = previous.x, y = previous.y}
+        local stage, last, mixed = mode == "test" and "preview" or "samples", nil, false
         local function draw(surface)
             local paint = {}
             for row = 1, h do Gui.drawRow(device.peripheral, row, surface.lines[row], surface.foreground[row], surface.background[row], device.colour, paint) end
         end
-        local function touch()
+        local function event()
             while true do
-                local event, touched, x, y = os.pullEvent()
-                if event == "monitor_touch" and touched == side and type(x) == "number" and type(y) == "number"
-                    and x == math.floor(x) and y == math.floor(y) and x >= 1 and x <= w and y >= 1 and y <= h then return x, y end
-                if event == "char" and type(touched) == "string" and touched:lower() == "r" then return "retry" end
-                if (event == "char" and type(touched) == "string" and (touched:lower() == "c" or touched:lower() == "q"))
-                    or (event == "key" and touched == 1) then return "cancel" end
+                local kind, value, x, y = os.pullEvent()
+                if kind == "monitor_touch" and value == side and type(x) == "number" and type(y) == "number"
+                    and x == math.floor(x) and y == math.floor(y) and x >= 1 and x <= w and y >= 1 and y <= h then return "touch", x, y end
+                if kind == "char" and type(value) == "string" then
+                    local actions = {r = "retry", c = "cancel", q = "cancel", s = "save", ["0"] = "reset", z = "reset"}
+                    if actions[value:lower()] then return actions[value:lower()] end
+                elseif kind == "key" then
+                    local actions = {[1] = "cancel", [203] = "left", [205] = "right", [200] = "up", [208] = "down"}
+                    if actions[value] then return actions[value] end
+                end
             end
         end
-        while true do
-            local xs, ys, restart = {}, {}, false
-            for index, target in ipairs(targets) do
-                local surface = Gui.new(w, h, 1, 2048)
-                surface.write(1, 1, "Tap white + " .. index .. "/3")
-                surface.fill(target[1] - 1, target[2] - 1, 3, 3, 1, 128)
-                surface.write(target[1], target[2], "+", 32768, 1)
-                draw(surface)
-                local x, y
-                while true do
-                    x, y = touch()
-                    if x == "cancel" then return nil, "Calibration cancelled; previous offset kept" end
-                    if x == "retry" then restart = true; break end
-                    if math.abs(target[1] - x) <= 4 and math.abs(target[2] - y) <= 4 then break end
-                    -- A queued repeat of the previous target is not a sample
-                    -- of this target. Keep it visible and explain what to tap.
-                    surface.write(1, h, "Tap centre of white +")
-                    draw(surface)
-                end
-                if restart then break end
-                xs[index], ys[index] = target[1] - x, target[2] - y
-                print("Sample " .. index .. ": expected " .. target[1] .. "," .. target[2]
-                    .. "; received " .. x .. "," .. y .. "; offset " .. xs[index] .. "," .. ys[index])
+        local function footer(surface, first)
+            local third = math.floor(w / 3)
+            local labels = {w < 15 and first == "Retry" and "R" or first, w >= 15 and "Reset" or "0", w >= 18 and "Cancel" or "Exit"}
+            for index, label in ipairs(labels) do
+                local x, stop = (index - 1) * third + 1, index == 3 and w or index * third
+                surface.fill(x, h, stop - x + 1, 1, 1, index == 3 and 16384 or index == 1 and 8192 or 128)
+                surface.write(x + math.floor((stop - x + 1 - #label) / 2), h, label)
             end
-            if not restart then
-                -- A tap can round to an adjacent native cell. Use the median
-                -- only when every sample lies within one cell of it on each axis.
-                table.sort(xs); table.sort(ys)
-                local dx, dy = xs[2], ys[2]
-                local consistent = math.abs(dx) <= 3 and math.abs(dy) <= 3
-                for index = 1, 3 do
-                    consistent = consistent and math.abs(xs[index] - dx) <= 1 and math.abs(ys[index] - dy) <= 1
-                        and math.abs(xs[index]) <= 3 and math.abs(ys[index]) <= 3
+        end
+        local function footerAction(action, x, y, first)
+            if action == "touch" and y == h then
+                local third = math.floor(w / 3)
+                return x <= third and first or x <= third * 2 and "reset" or "cancel"
+            end
+            return action
+        end
+        while true do
+            if stage == "samples" then
+                local xs, ys, interrupted = {}, {}, false
+                for index, target in ipairs(targets) do
+                    local surface = Gui.new(w, h, 1, 2048)
+                    surface.write(1, 1, "Circle " .. index .. "/" .. #targets)
+                    for row, pixels in ipairs({"01110", "10001", "01110"}) do
+                        for column = 1, #pixels do
+                            if pixels:sub(column, column) == "1" then
+                                surface.fill(target[1] + column - 3, target[2] + row - 2, 1, 1, 1, 1)
+                            end
+                        end
+                    end
+                    surface.write(target[1], target[2], "+", 32768, 1)
+                    footer(surface, "Retry"); draw(surface)
+                    while true do
+                        local action, x, y = event()
+                        action = footerAction(action, x, y, "retry")
+                        if action == "cancel" then return nil, "Calibration cancelled; previous offset kept" end
+                        if action == "reset" then
+                            candidate, last, mixed, stage, interrupted = {x = 0, y = 0}, nil, false, "preview", true; break
+                        elseif action == "retry" then interrupted = true; break
+                        elseif action == "touch" then
+                            if math.abs(target[1] - x) <= 4 and math.abs(target[2] - y) <= 4 then
+                                xs[index], ys[index] = target[1] - x, target[2] - y
+                                print("Sample " .. index .. ": expected " .. target[1] .. "," .. target[2]
+                                    .. "; received " .. x .. "," .. y .. "; offset " .. xs[index] .. "," .. ys[index])
+                                break
+                            end
+                            surface.write(1, h - 1, "Tap circle centre"); draw(surface)
+                        end
+                    end
+                    if interrupted then break end
                 end
-                if consistent then return {x = dx, y = dy} end
+                if not interrupted then
+                    table.sort(xs); table.sort(ys)
+                    local dx, dy = xs[5], ys[5]
+                    local consistent = math.abs(dx) <= 3 and math.abs(dy) <= 3
+                    local countX, countY, totalX, totalY = 0, 0, 0, 0
+                    for index = 1, #targets do
+                        consistent = consistent and math.abs(xs[index] - dx) <= 1 and math.abs(ys[index] - dy) <= 1
+                            and math.abs(xs[index]) <= 3 and math.abs(ys[index]) <= 3
+                        countX, countY = countX + (xs[index] == dx and 1 or 0), countY + (ys[index] == dy and 1 or 0)
+                        totalX, totalY = totalX + xs[index], totalY + ys[index]
+                    end
+                    print(string.format("Average measured X:%.2f Y:%.2f cells; median agreement X:%d/9 Y:%d/9",
+                        totalX / #targets, totalY / #targets, countX, countY))
+                    if consistent then
+                        mixed = countX < 7 or countY < 7
+                        -- A near half-cell split cannot be represented faithfully.
+                        -- Do not turn an uncertain measurement into a forced 1-cell shift.
+                        if countX < 7 then dx = 0 end
+                        if countY < 7 then dy = 0 end
+                        candidate, last, stage = {x = dx, y = dy}, nil, "preview"
+                        if mixed then print("Mixed readings: testing stock on uncertain axes; no fractional touch data is available.") end
+                        print("Test proposed offset " .. dx .. "," .. dy .. ". Arrows adjust; 0 resets; S saves; R remeasures; C cancels.")
+                    else stage = "retry" end
+                end
+            elseif stage == "retry" then
                 local surface = Gui.new(w, h, 1, 32768)
                 surface.write(1, 1, "Calibration needs retry", 1, 16384)
                 surface.write(1, 2, "Taps differ too much")
                 surface.write(1, 3, "Old offset kept")
-                surface.write(1, 4, "R: retry  C: cancel")
-                local half = math.floor(w / 2)
-                surface.fill(1, h - 2, half, 3, 1, 8192)
-                surface.fill(half + 1, h - 2, w - half, 3, 1, 16384)
-                surface.write(1, h - 1, "Retry"); surface.write(half + 1, h - 1, "Cancel")
-                draw(surface)
-                print("Samples differ too much. Tap Retry/Cancel, or press R/C on this computer. Previous offset is unchanged.")
-                while true do
-                    local x, y = touch()
-                    if x == "cancel" or (type(x) == "number" and y >= h - 2 and x > half) then
-                        return nil, "Calibration cancelled; previous offset kept"
+                surface.write(1, 4, "R:retry 0:reset C:exit")
+                footer(surface, "Retry"); draw(surface)
+                print("Samples differ too much. Retry, Reset or Cancel; previous offset is unchanged.")
+                local action, x, y = event()
+                action = footerAction(action, x, y, "retry")
+                if action == "cancel" then return nil, "Calibration cancelled; previous offset kept" end
+                if action == "retry" then stage = "samples"
+                elseif action == "reset" then candidate, last, mixed, stage = {x = 0, y = 0}, nil, false, "preview" end
+            else
+                local surface = Gui.new(w, h, 1, 2048)
+                surface.write(1, 1, "Test before saving", 1, 128)
+                surface.write(1, 2, "X:" .. candidate.x .. " Y:" .. candidate.y .. "  S:save")
+                local points = {}
+                for _, y in ipairs({3, 3 + math.floor((h - 6) / 2), h - 3}) do
+                    for _, x in ipairs({2, math.floor(w / 2), w - 1}) do
+                        surface.write(x, y, "+", 32768, 1); points[x .. ":" .. y] = true
                     end
-                    if x == "retry" or (type(x) == "number" and y >= h - 2 and x <= half) then break end
                 end
+                if last then
+                    local x, y = last.x + candidate.x, last.y + candidate.y
+                    if x >= 1 and x <= w and y >= 3 and y <= h - 3 then
+                        surface.write(x, y, "X", 1, points[x .. ":" .. y] and 8192 or 16384)
+                    end
+                end
+                local arrows, quarter = {" < ", " > ", " ^ ", " v "}, math.floor(w / 4)
+                for index, label in ipairs(arrows) do
+                    local x = (index - 1) * quarter + 1
+                    surface.fill(x, h - 2, index == 4 and w - x + 1 or quarter, 1, 1, 128)
+                    surface.write(x, h - 2, label)
+                end
+                surface.write(1, h - 1, mixed and "Mixed readings: test!" or "R:remeasure 0:stock")
+                footer(surface, "Save"); draw(surface)
+                local action, x, y = event()
+                action = footerAction(action, x, y, "save")
+                if action == "touch" and y == h - 2 then
+                    action = ({"left", "right", "up", "down"})[math.min(4, math.floor((x - 1) / quarter) + 1)]
+                end
+                if action == "save" then return {x = candidate.x, y = candidate.y} end
+                if action == "cancel" then return nil, "Calibration cancelled; previous offset kept" end
+                if action == "retry" then stage = "samples"
+                elseif action == "reset" then candidate, last, mixed = {x = 0, y = 0}, nil, false
+                elseif action == "left" then candidate.x = math.max(-3, candidate.x - 1)
+                elseif action == "right" then candidate.x = math.min(3, candidate.x + 1)
+                elseif action == "up" then candidate.y = math.max(-3, candidate.y - 1)
+                elseif action == "down" then candidate.y = math.min(3, candidate.y + 1)
+                elseif action == "touch" and y >= 3 and y <= h - 3 then last = {x = x, y = y} end
             end
         end
     end
@@ -2457,11 +2564,21 @@ local client = Monitor.new(net, config)
 print("Monitor client: " .. config.clientId)
 client.scan()
 if args[1] then
-    assert(args[1] == "calibrate" and not args[3], "Usage: clients_monitor_client.lua calibrate [side]")
-    local side = args[2] or next(client.devices)
+    local usage = "Usage: clients_monitor_client.lua calibrate [side] [--reset|--test]"
+    assert(args[1] == "calibrate" and not args[4], usage)
+    local side, mode
+    for index = 2, #args do
+        if args[index] == "--reset" or args[index] == "--test" then assert(not mode, usage); mode = args[index]
+        else assert(not side and client.devices[args[index]], usage); side = args[index] end
+    end
+    side = side or next(client.devices)
     assert(side, "Attach a monitor first")
-    print("Calibrating " .. side .. ": tap the centre of each white +")
-    local offset, err = client.calibrate(side)
+    print("Calibrating " .. side .. "; stock offset is X:0 Y:0")
+    print("Measurement uses nine circles; aim at each centre from your usual viewing position")
+    print("Preview: arrows adjust, 0 resets, S saves, R remeasures, C cancels")
+    local offset, err
+    if mode == "--reset" then offset = {x = 0, y = 0}
+    else offset, err = client.calibrate(side, mode == "--test" and "test" or nil) end
     local saved = false
     if offset then
         local previous = config.touchOffsets[side]
@@ -2524,7 +2641,7 @@ end)
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v11")
+print("SmartHome installer: bundled-v12")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor [--startup]")

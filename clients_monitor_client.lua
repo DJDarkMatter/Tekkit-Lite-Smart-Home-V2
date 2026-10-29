@@ -23,11 +23,21 @@ local client = Monitor.new(net, config)
 print("Monitor client: " .. config.clientId)
 client.scan()
 if args[1] then
-    assert(args[1] == "calibrate" and not args[3], "Usage: clients_monitor_client.lua calibrate [side]")
-    local side = args[2] or next(client.devices)
+    local usage = "Usage: clients_monitor_client.lua calibrate [side] [--reset|--test]"
+    assert(args[1] == "calibrate" and not args[4], usage)
+    local side, mode
+    for index = 2, #args do
+        if args[index] == "--reset" or args[index] == "--test" then assert(not mode, usage); mode = args[index]
+        else assert(not side and client.devices[args[index]], usage); side = args[index] end
+    end
+    side = side or next(client.devices)
     assert(side, "Attach a monitor first")
-    print("Calibrating " .. side .. ": tap the centre of each white +")
-    local offset, err = client.calibrate(side)
+    print("Calibrating " .. side .. "; stock offset is X:0 Y:0")
+    print("Measurement uses nine circles; aim at each centre from your usual viewing position")
+    print("Preview: arrows adjust, 0 resets, S saves, R remeasures, C cancels")
+    local offset, err
+    if mode == "--reset" then offset = {x = 0, y = 0}
+    else offset, err = client.calibrate(side, mode == "--test" and "test" or nil) end
     local saved = false
     if offset then
         local previous = config.touchOffsets[side]

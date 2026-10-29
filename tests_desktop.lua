@@ -370,7 +370,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local id = t.open()
         assert(t.api.layoutWindow(id, "maximize")); t.paint()
         equal(t.top.bg[127][1], 128)
-        equal(t.top.bg[128][1], 2048)
+        equal(t.top.bg[128][1], 128, "The closed launcher uses the selected taskbar colour")
         for _, packet in ipairs(t.bus.wire) do assert(#packet.raw <= 65536) end
     end
 
@@ -402,10 +402,12 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local work = coroutine.create(function() assert(display.env.loadfile("clients_monitor_client.lua"))("calibrate", "top") end)
         local ok, event = coroutine.resume(work)
         assert(ok, event); equal(event, nil)
-        for _, point in ipairs({{10, 4}, {30, 9}, {20, 13}}) do
+        for _, point in ipairs({{6, 3}, {20, 3}, {33, 3}, {6, 9}, {20, 9}, {33, 9}, {6, 15}, {20, 15}, {33, 15}}) do
             ok, event = coroutine.resume(work, "monitor_touch", "top", point[1] + 1, point[2] + 1)
             assert(ok, event)
         end
+        equal(coroutine.status(work), "suspended", "Calibration waits for preview approval")
+        ok, event = coroutine.resume(work, "char", "s"); assert(ok, event)
         equal(coroutine.status(work), "dead")
         local config = unserialize(display.disk.files["configs_monitor.txt"])
         equal(config.touchOffsets.top.x, -1); equal(config.touchOffsets.top.y, -1)
@@ -419,18 +421,18 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(central.server.state.windows[id], nil, "Calibration maps the visible close button back to its exact cell")
     end
 
-    local function calibration(previous)
+    local function calibration(previous, mode)
         local bus, screen = newBus(), monitor(40, 18)
         local display = bus.computer(13, "monitor", {monitors = {top = screen}})
         if previous then display.disk.files["configs_monitor.txt"] = serialize({clientId = "keep", textScale = 0.5,
             announceInterval = 5, timeout = 15, touchOffsets = {top = previous, left = {x = 0, y = 2}}}) end
-        local work = coroutine.create(function() assert(display.env.loadfile("clients_monitor_client.lua"))("calibrate", "top") end)
+        local work = coroutine.create(function() assert(display.env.loadfile("clients_monitor_client.lua"))("calibrate", "top", mode) end)
         local ok, event = coroutine.resume(work); assert(ok, event)
         local function resume(...)
             local success, err = coroutine.resume(work, ...); assert(success, err)
         end
         local function sample(index, dx, dy)
-            local target = ({{10, 4}, {30, 9}, {20, 13}})[index]
+            local target = ({{6, 3}, {20, 3}, {33, 3}, {6, 9}, {20, 9}, {33, 9}, {6, 15}, {20, 15}, {33, 15}})[index]
             resume("monitor_touch", "top", target[1] - dx, target[2] - dy)
         end
         return display, screen, work, sample, resume
@@ -439,12 +441,16 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     function tests.desktop_calibration_collects_all_samples_and_tolerates_one_cell_tap_variation()
         local display, screen, work, sample, resume = calibration({x = 0, y = 0})
         sample(1, -1, -1)
-        resume("monitor_touch", "top", 11, 5) -- Queued repeat of the old first target.
-        assert(screen.lines[1]:find("2/3", 1, true), "Old-target touches must not count for the next target")
+        resume("monitor_touch", "top", 7, 4) -- Queued repeat of the old first target.
+        assert(screen.lines[1]:find("2/9", 1, true), "Old-target touches must not count for the next target")
         sample(2, -2, -1)
         equal(coroutine.status(work), "suspended", "The second differing tap must not terminate calibration")
-        assert(screen.lines[1]:find("3/3", 1, true))
+        assert(screen.lines[1]:find("3/9", 1, true))
         sample(3, -1, -2)
+        for index = 4, 9 do sample(index, -1, -1) end
+        equal(coroutine.status(work), "suspended")
+        equal(unserialize(display.disk.files["configs_monitor.txt"]).touchOffsets.top.x, 0, "A proposed correction is not saved automatically")
+        resume("char", "s")
         equal(coroutine.status(work), "dead")
         local saved = unserialize(display.disk.files["configs_monitor.txt"])
         equal(saved.touchOffsets.top.x, -1); equal(saved.touchOffsets.top.y, -1)
@@ -456,12 +462,14 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local display, screen, work, sample, resume = calibration({x = 2, y = 1})
         local previous = display.disk.files["configs_monitor.txt"]
         sample(1, -3, 0); sample(2, 0, 0); sample(3, 3, 0)
+        for index = 4, 9 do sample(index, 0, 0) end
         equal(coroutine.status(work), "suspended")
         equal(display.disk.files["configs_monitor.txt"], previous)
-        assert(screen.lines[1]:find("needs retry", 1, true)); assert(screen.lines[17]:find("Retry", 1, true))
-        resume("monitor_touch", "top", 4, 17)
-        assert(screen.lines[1]:find("1/3", 1, true))
-        sample(1, 0, -1); sample(2, 0, -1); sample(3, 0, -1)
+        assert(screen.lines[1]:find("needs retry", 1, true)); assert(screen.lines[18]:find("Retry", 1, true))
+        resume("monitor_touch", "top", 4, 18)
+        assert(screen.lines[1]:find("1/9", 1, true))
+        for index = 1, 9 do sample(index, 0, -1) end
+        resume("char", "s")
         equal(coroutine.status(work), "dead")
         local saved = unserialize(display.disk.files["configs_monitor.txt"])
         equal(saved.touchOffsets.top.x, 0); equal(saved.touchOffsets.top.y, -1)
@@ -470,7 +478,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     function tests.desktop_calibration_rejects_excessive_offsets_and_cancel_keeps_previous_settings()
         local display, screen, work, sample, resume = calibration({x = 1, y = -1})
         local previous = display.disk.files["configs_monitor.txt"]
-        sample(1, 4, 0); sample(2, 4, 0); sample(3, 4, 0)
+        for index = 1, 9 do sample(index, 4, 0) end
         equal(coroutine.status(work), "suspended")
         assert(screen.lines[1]:find("needs retry", 1, true))
         resume("char", "c")
@@ -480,14 +488,69 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     end
 
     function tests.desktop_calibration_failed_save_keeps_the_previous_offset_and_reports_failure()
-        local display, screen, work, sample = calibration({x = 1, y = -1})
+        local display, screen, work, sample, resume = calibration({x = 1, y = -1})
         local previous = display.disk.files["configs_monitor.txt"]
         display.disk.failWrite = true
-        sample(1, -1, 0); sample(2, -1, 0); sample(3, -1, 0)
+        for index = 1, 9 do sample(index, -1, 0) end
+        resume("char", "s")
         equal(coroutine.status(work), "dead")
         equal(display.disk.files["configs_monitor.txt"], previous)
         assert(table.concat(display.log, "\n"):find("Cannot save calibration", 1, true))
         assert(screen.lines[1]:find("not saved", 1, true))
+    end
+
+    function tests.desktop_calibration_reset_command_restores_stock_and_preserves_other_monitor_offsets()
+        local display, screen, work = calibration({x = 1, y = -1}, "--reset")
+        equal(coroutine.status(work), "dead")
+        local saved = unserialize(display.disk.files["configs_monitor.txt"])
+        equal(saved.touchOffsets.top.x, 0); equal(saved.touchOffsets.top.y, 0)
+        equal(saved.touchOffsets.left.y, 2)
+        assert(screen.lines[1]:find("saved", 1, true))
+    end
+
+    function tests.desktop_calibration_live_test_can_fine_tune_reset_or_cancel_before_saving()
+        local display, screen, work, _, resume = calibration({x = 1, y = -1}, "--test")
+        local previous = display.disk.files["configs_monitor.txt"]
+        resume("monitor_touch", "top", 20, 9)
+        equal(screen.bg[8][21], 16384, "A correction that overshoots appears beside the target")
+        resume("key", 203); resume("key", 208)
+        equal(screen.bg[9][20], 8192, "One-cell nudges move the marker onto the intended target")
+        equal(display.disk.files["configs_monitor.txt"], previous)
+        resume("char", "s"); equal(coroutine.status(work), "dead")
+        local saved = unserialize(display.disk.files["configs_monitor.txt"])
+        equal(saved.touchOffsets.top.x, 0); equal(saved.touchOffsets.top.y, 0)
+        display, screen, work, _, resume = calibration({x = 2, y = 1}, "--test")
+        previous = display.disk.files["configs_monitor.txt"]
+        resume("char", "0"); assert(screen.lines[2]:find("X:0 Y:0", 1, true))
+        resume("char", "c"); equal(display.disk.files["configs_monitor.txt"], previous)
+    end
+
+    function tests.desktop_calibration_reset_button_opens_zero_offset_preview_and_requires_save()
+        local display, screen, work, _, resume = calibration({x = 1, y = -1})
+        local previous = display.disk.files["configs_monitor.txt"]
+        assert(screen.lines[18]:find("Reset", 1, true))
+        resume("monitor_touch", "top", 20, 18)
+        assert(screen.lines[2]:find("X:0 Y:0", 1, true))
+        equal(display.disk.files["configs_monitor.txt"], previous)
+        resume("monitor_touch", "top", 20, 9)
+        equal(screen.bg[9][20], 8192)
+        resume("monitor_touch", "top", 4, 18)
+        equal(coroutine.status(work), "dead")
+        local saved = unserialize(display.disk.files["configs_monitor.txt"])
+        equal(saved.touchOffsets.top.x, 0); equal(saved.touchOffsets.top.y, 0)
+        equal(saved.touchOffsets.left.y, 2)
+    end
+
+    function tests.desktop_calibration_half_cell_like_split_is_reported_without_forcing_a_full_cell_shift()
+        local display, screen, work, sample, resume = calibration({x = 0, y = 0})
+        local previous = display.disk.files["configs_monitor.txt"]
+        for index = 1, 9 do sample(index, 0, index <= 5 and -1 or 0) end
+        assert(screen.lines[2]:find("X:0 Y:0", 1, true))
+        assert(screen.lines[17]:find("Mixed readings", 1, true))
+        assert(table.concat(display.log, "\n"):find("Y:-0.56", 1, true))
+        equal(display.disk.files["configs_monitor.txt"], previous)
+        resume("char", "c"); equal(coroutine.status(work), "dead")
+        equal(display.disk.files["configs_monitor.txt"], previous)
     end
 
     function tests.desktop_coffee_settings_paging_is_bounded_and_per_window()
