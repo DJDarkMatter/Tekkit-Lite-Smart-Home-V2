@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v6
+-- SmartHome OS installer: bundled-v7
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor [--startup]
@@ -1732,7 +1732,7 @@ end
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v6")
+print("SmartHome installer: bundled-v7")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor [--startup]")
@@ -1758,13 +1758,85 @@ if role == "app" then
         assert(http and type(http.get) == "function", "HTTP is disabled; GitHub app downloads need HTTP enabled")
         local url = "https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/" .. ref .. "/" .. path
         print("Downloading " .. path .. " from GitHub (" .. ref .. ")")
-        -- http.get may yield on CC 1.5: do not call it inside pcall.
-        local response, downloadError = http.get(url)
-        assert(response, "GitHub app download failed; check the repository file and HTTP access: "
-            .. tostring(downloadError or url))
-        local code = response.getResponseCode and response.getResponseCode() or 200
-        contents = response.readAll(); response.close()
-        assert(code == 200, "GitHub returned HTTP " .. tostring(code) .. " for " .. path)
+        local function download(address)
+            -- A child coroutine catches native request errors without preventing
+            -- http.get from yielding on Lua 5.1. Terminate still aborts the install.
+            local request = coroutine.create(function() return http.get(address) end)
+            local result = {coroutine.resume(request)}
+            while result[1] and coroutine.status(request) ~= "dead" do
+                result = {coroutine.resume(request, os.pullEvent(result[2]))}
+            end
+            if not result[1] then return nil, "Request error: " .. tostring(result[2]) end
+            local response = result[2] or result[4] -- Newer CC may return an error handle.
+            if not response then return nil, tostring(result[3] or "No response; CC supplied no reason") end
+            -- Reading/closing response handles does not yield, unlike http.get.
+            local ok, code, body = pcall(function()
+                return response.getResponseCode and response.getResponseCode() or 200, response.readAll()
+            end)
+            local closed, closeError = pcall(response.close)
+            if not ok then return nil, "Cannot read response: " .. tostring(code) end
+            if not closed then return nil, "Cannot close response: " .. tostring(closeError) end
+            if code ~= 200 then return nil, "GitHub returned HTTP " .. tostring(code) end
+            if not result[2] then return nil, tostring(result[3] or "HTTP request failed") end
+            if type(body) ~= "string" or #body == 0 then return nil, "Empty app source" end
+            return body
+        end
+        local function checkLua(body)
+            if body == nil then return nil end
+            local chunk, err = loadstring(body, path)
+            if not chunk then return nil, "Invalid app Lua: " .. tostring(err) end
+            return body
+        end
+        local function apiSource(body)
+            -- Read only GitHub's known base64 content field; no JSON API or
+            -- execution of downloaded text is needed on old ComputerCraft.
+            if not body:match('"type"%s*:%s*"file"') or not body:match('"encoding"%s*:%s*"base64"')
+                or body:match('"name"%s*:%s*"([^"]*)"') ~= path then
+                return nil, "GitHub API did not return the requested base64 file"
+            end
+            local encoded = body:match('"content"%s*:%s*"([^"]*)"')
+            if not encoded then return nil, "GitHub API response has no file content" end
+            encoded = encoded:gsub("\\n", ""):gsub("\\r", ""):gsub("\\/", "/"):gsub("%s", "")
+            local padding = encoded:match("=*$")
+            local data = encoded:sub(1, #encoded - #padding)
+            if #encoded % 4 ~= 0 or #padding > 2 or data:find("[^A-Za-z0-9+/]") then
+                return nil, "Invalid base64 in GitHub API response"
+            end
+            local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+            local output, value, bits = {}, 0, 0
+            for index = 1, #data do
+                value, bits = value * 64 + alphabet:find(data:sub(index, index), 1, true) - 1, bits + 6
+                if bits >= 8 then
+                    bits = bits - 8
+                    output[#output + 1] = string.char(math.floor(value / 2 ^ bits))
+                    value = value % 2 ^ bits
+                end
+            end
+            local decoded = table.concat(output)
+            if value ~= 0 or tonumber(body:match('"size"%s*:%s*(%d+)')) ~= #decoded then
+                return nil, "GitHub API file size/encoding mismatch"
+            end
+            if #decoded == 0 then return nil, "Empty app source" end
+            return decoded
+        end
+        local rawError, apiError, body
+        contents, rawError = download(url)
+        if contents then contents, rawError = checkLua(contents) end
+        if not contents then
+            print("Raw download failed; trying GitHub API")
+            local apiUrl = "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/"
+                .. path .. "?ref=" .. ref
+            body, apiError = download(apiUrl)
+            if body then contents, apiError = apiSource(body) end
+            if contents then contents, apiError = checkLua(contents) end
+            if not contents then
+                print("Raw: " .. tostring(rawError))
+                print("API: " .. tostring(apiError))
+                print("No response from both? Ask the server admin to check GitHub HTTPS access and the Java/server log.")
+                error("GitHub app download failed; installed files were not changed", 0)
+            end
+            print("Downloaded via GitHub API")
+        end
     elseif source == "--file" then
         local file = assert(fs.open(args[4], "r"), "Cannot read app source: " .. args[4])
         contents = file.readAll(); file.close()

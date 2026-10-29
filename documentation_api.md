@@ -6,6 +6,8 @@ The installer contains no apps. A user app is a Lua file returning an app table,
 
 Explicit installation uses the same installer: `inst app APP_NAME` downloads the root file `apps_APP_NAME.lua` from `DJDarkMatter/Tekkit-Lite-Smart-Home-V2` on GitHub (`main` branch). `inst app APP_NAME --ref BRANCH_OR_COMMIT` selects another ref. Apps therefore need no separate Pastebin upload. Optional alternatives remain `inst app APP_NAME PASTE_ID` or `inst app APP_NAME --file /path/to/app.lua`. The installer checks syntax, installs the file and enables that one app for the next OS start. It preserves existing settings, startup and saved app state, backing up replaced code/settings. It does not execute the app at install time. GitHub mode uses the CC 1.5 `http.get` API; role installation remains offline and app-free.
 
+Bundled-v7 tries the raw file first, then the GitHub contents API if needed. The API response is decoded from base64 without `textutils.unserializeJSON`; it must describe the requested filename with a matching decoded size and valid Lua. Request exceptions are caught through a child coroutine so CC 1.5 HTTP can still yield; response handles are closed and termination aborts without retrying. Failures print separate raw/API reasons before any app/settings replacement. Server network restrictions and Java TLS failures require server-side investigation.
+
 ```lua
 local app = {minWidth = 18, minHeight = 4, preferredWidth = 30, preferredHeight = 10}
 -- Set backgroundService = true for always-on automation such as Coffee.

@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all ten runtime source files and **no apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v6`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all ten runtime source files and **no apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v7`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -58,9 +58,11 @@ inst app APP_NAME --file /path/to/app.lua
 
 `inst app APP_NAME` fetches the root file `apps_APP_NAME.lua` from the V2 repository's `main` branch, using `https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/main/apps_APP_NAME.lua`. Use `--ref` to select a different branch or commit. Keep the current app file on GitHub; only the installer needs a Pastebin paste. This mode requires working HTTP access to GitHub from the server. The optional Pastebin mode uses the built-in `pastebin get` program; the file mode needs no network.
 
+If the raw download fails or returns invalid Lua, bundled-v7 tries the same file through GitHub's contents API at `api.github.com`. It decodes the API's base64 content using Lua 5.1, checks the filename and decoded byte count, and compiles the recovered source without running it. This uses only GitHub hosts and needs no token or newer JSON API. If both routes fail, the console prints separate `Raw:` and `API:` reasons. Old CC can return no error detail at all; a correct public URL alone cannot establish that the Minecraft server can reach it. Ask the server admin to check GitHub access and Java/SSL errors in the server log if both routes give no response. Lua cannot change the server's HTTP policy or Java TLS support.
+
 These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
 
-The first optional app is [coffee](documentation_coffee.md), adapted from the original standalone timer. Run `inst app coffee` on the OS computer to fetch it from GitHub. It starts automatically at every OS boot without a window. Its Settings menu uses the shared client → side → Digital/bundled-colour picker. Install the current bundled-v6 OS before installing this app; existing IO clients need no update; update monitor clients as well to get resolution polling on older CC versions.
+The first optional app is [coffee](documentation_coffee.md), adapted from the original standalone timer. Run `inst app coffee` on the OS computer to fetch it from GitHub. It starts automatically at every OS boot without a window. Its Settings menu uses the shared client → side → Digital/bundled-colour picker. Install the current bundled-v7 OS before installing this app; existing IO clients need no update; update monitor clients as well to get resolution polling on older CC versions.
 
 ### Confirm connection and test a wire
 

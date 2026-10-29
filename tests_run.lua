@@ -837,7 +837,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v6", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v7", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -930,7 +930,7 @@ function tests.app_installer_github_default_downloads_one_app_without_running_or
     assert(ok, event); equal(event, "http_success")
     equal(comp.disk.files["apps_test_app.lua"], "-- original app", "Keep the installed app while downloading")
     equal(comp.disk.files["configs_os.txt"], settings)
-    ok, event = coroutine.resume(thread)
+    ok, event = coroutine.resume(thread, "http_success")
     assert(ok, event); equal(coroutine.status(thread), "dead")
     equal(downloads, 1); equal(closed, true)
     equal(comp.env.githubAppExecuted, nil, "Installing only compiles app code")
@@ -999,7 +999,8 @@ function tests.app_installer_github_failures_preserve_existing_code_settings_and
         if reason == "ref" then ok, err = pcall(install, "app", "coffee", "--ref", "../other")
         else ok, err = pcall(install, "app", "coffee") end
         equal(ok, false, reason .. " should fail")
-        assert(tostring(err):find(expected[reason], 1, true), tostring(err))
+        local report = table.concat(comp.log, "\n") .. "\n" .. tostring(err)
+        assert(report:find(expected[reason], 1, true), report)
         if downloaded and reason ~= "network" then equal(closed, true) end
         equal(comp.disk.files["apps_coffee.lua"], "-- original coffee", reason)
         equal(comp.disk.files["configs_os.txt"], settings, reason)
@@ -1007,6 +1008,112 @@ function tests.app_installer_github_failures_preserve_existing_code_settings_and
         equal(comp.disk.files.startup, "-- original startup", reason)
         equal(comp.disk.files["apps_coffee.lua.pre_update"], nil, reason)
     end
+end
+
+function tests.app_installer_github_api_fallback_handles_raw_failure_native_errors_and_yields()
+    for _, failure in ipairs({"nil", "native_error", "html", "error_handle"}) do
+        local comp = newBus().computer(10, "server")
+        comp.env.shell = {dir = function() return "" end}
+        local install = assert(comp.env.loadfile("install.lua"))
+        install("server")
+        local saved = serialize({appStates = {coffee = {remainingTime = 1234}}})
+        comp.disk.files["configs_os_state.txt"] = saved
+        local requests, closes = {}, 0
+        local function response(code, body)
+            return {getResponseCode = function() return code end, readAll = function() return body end,
+                close = function() closes = closes + 1 end}
+        end
+        comp.env.http = {get = function(url)
+            requests[#requests + 1] = url
+            if #requests == 1 then
+                coroutine.yield("http_failure")
+                if failure == "nil" then return nil end -- Original screenshot: no error reason.
+                if failure == "native_error" then error("Access denied") end
+                if failure == "html" then return response(200, "<!DOCTYPE html>") end
+                return nil, "Forbidden", response(403, "{}")
+            end
+            equal(url, "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/apps_coffee.lua?ref=main")
+            coroutine.yield("http_success")
+            return response(200, '{"type":"file","name":"apps_coffee.lua","encoding":"base64",'
+                .. '"size":10,"content":"cmV0dXJuIHt9Cg==\\n"}')
+        end}
+        local work = coroutine.create(function() install("app", "coffee") end)
+        local ok, event = coroutine.resume(work)
+        while ok and coroutine.status(work) ~= "dead" do
+            assert(event == "http_failure" or event == "http_success", tostring(event))
+            ok, event = coroutine.resume(work, event)
+        end
+        assert(ok, event)
+        equal(#requests, 2)
+        equal(closes, (failure == "html" or failure == "error_handle") and 2 or 1)
+        equal(comp.disk.files["apps_coffee.lua"], "return {}\n")
+        equal(comp.disk.files["configs_os_state.txt"], saved)
+        equal(unserialize(comp.disk.files["configs_os.txt"]).enabledApps.coffee, true)
+        assert(table.concat(comp.log, "\n"):find("Downloaded via GitHub API", 1, true))
+    end
+end
+
+function tests.app_installer_github_api_rejects_invalid_payloads_before_replacing_files()
+    local function json(name, size, data)
+        return '{"type":"file","name":"' .. name .. '","encoding":"base64","size":' .. size
+            .. ',"content":"' .. data .. '"}'
+    end
+    local cases = {
+        {body = json("apps_other.lua", 9, "cmV0dXJuIHt9"), reason = "requested base64 file"},
+        {body = json("apps_coffee.lua", 9, "cmV0dXJuIHt9?"), reason = "Invalid base64"},
+        {body = json("apps_coffee.lua", 9, "cmV0dXJuIHt="), reason = "size/encoding mismatch"},
+        {body = json("apps_coffee.lua", 100, "cmV0dXJuIHt9"), reason = "size/encoding mismatch"},
+        {body = json("apps_coffee.lua", 8, "cmV0dXJuIHs="), reason = "Invalid app Lua"},
+        {body = "<!DOCTYPE html>", reason = "requested base64 file"},
+        {body = "{}", code = 403, reason = "HTTP 403"},
+    }
+    for _, case in ipairs(cases) do
+        local comp = newBus().computer(10, "server")
+        comp.env.shell = {dir = function() return "" end}
+        local install = assert(comp.env.loadfile("install.lua"))
+        install("server")
+        local settings, saved = serialize({enabledApps = {other = true}}), serialize({appStates = {coffee = {remainingTime = 42}}})
+        comp.disk.files["configs_os.txt"], comp.disk.files["configs_os_state.txt"] = settings, saved
+        comp.disk.files["apps_coffee.lua"], comp.disk.files.startup = "-- keep coffee", "-- keep startup"
+        local closed = false
+        comp.env.http = {get = function(url)
+            if url:find("raw.githubusercontent.com", 1, true) then return nil end
+            return {getResponseCode = function() return case.code or 200 end,
+                readAll = function() return case.body end, close = function() closed = true end}
+        end}
+        local ok, err = pcall(install, "app", "coffee")
+        equal(ok, false)
+        assert(tostring(err):find("GitHub app download failed", 1, true), tostring(err))
+        assert(table.concat(comp.log, "\n"):find(case.reason, 1, true), table.concat(comp.log, "\n"))
+        equal(closed, true)
+        equal(comp.disk.files["apps_coffee.lua"], "-- keep coffee")
+        equal(comp.disk.files["configs_os.txt"], settings)
+        equal(comp.disk.files["configs_os_state.txt"], saved)
+        equal(comp.disk.files.startup, "-- keep startup")
+        equal(comp.disk.files["apps_coffee.lua.pre_update"], nil)
+    end
+end
+
+function tests.app_installer_github_terminate_during_download_does_not_retry_or_replace_files()
+    local comp = newBus().computer(10, "server")
+    comp.env.shell = {dir = function() return "" end}
+    local install = assert(comp.env.loadfile("install.lua"))
+    install("server")
+    comp.disk.files["apps_coffee.lua"] = "-- keep coffee"
+    local requests = 0
+    comp.env.http = {get = function()
+        requests = requests + 1
+        coroutine.yield("http_success")
+        error("Download should have been terminated")
+    end}
+    local work = coroutine.create(function() install("app", "coffee") end)
+    local ok, event = coroutine.resume(work)
+    assert(ok, event); equal(event, "http_success")
+    ok, event = coroutine.resume(work, "terminate")
+    equal(ok, false); assert(tostring(event):find("Terminated", 1, true), tostring(event))
+    equal(requests, 1)
+    equal(comp.disk.files["apps_coffee.lua"], "-- keep coffee")
+    equal(comp.disk.files["configs_os.txt"], nil)
 end
 
 function tests.app_installer_can_install_a_local_file_without_network()
