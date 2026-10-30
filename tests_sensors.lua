@@ -422,4 +422,99 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         assert(listing:find("targets=72 reactors=2", 1, true))
         equal(t.central.server.command("sensors unknown")[1], "No matching sensor clients")
     end
+
+    function tests.reactors_remaining_reads_explicit_seconds_ticks_and_clocks_without_inventing_fuel_lifetime()
+        local Data = assert(loadfile("lib_sensor_data.lua"))()
+        for _, case in ipairs({{"timeLeft", 9705, 9705}, {"TimeLeft", " 9705 ", 9705},
+            {"RemainingSeconds", "00:10:00", 600}, {"RemainingTimeSeconds", 0, 0},
+            {"RemainingTicks", 1200, 60}, {"remainingTicks", "1200", 60}, {"TimeLeftTicks", 0, 0}}) do
+            local reading = Data.reactor({Heat = 7, MaxHeat = 10000, [case[1]] = case[2]})
+            equal(reading.remaining, case[3]); equal(reading.remainingField, case[1])
+        end
+        for _, invalid in ipairs({-1, "00:99:00", "not a time", math.huge, 1000000000001,
+            string.rep("9", 400) .. ":00:00"}) do
+            equal(Data.reactor({Heat = 7, MaxHeat = 10000, timeLeft = invalid}).remaining, nil)
+        end
+        equal(Data.reactor({Heat = 7, MaxHeat = 10000, RemainingTicks = "00:01:00"}).remaining, nil)
+        local native = Data.reactor({Heat = 48036, MaxHeat = 58000, Active = true, Output = 30, HeatPercentage = 82,
+            EnergyEmitted = 1234567, EnergySunken = 0})
+        equal(native.remaining, nil); equal(native.remainingField, nil)
+        equal(native.heatToMelting, 1264); equal(native.heatToMax, 9964)
+        equal(native.energyEmitted, 1234567); equal(native.energySunken, 0)
+    end
+
+    function tests.reactors_details_show_native_energy_and_heat_margins_without_adding_chambers()
+        local t = setup()
+        t.machine.targets["2,0,0"] = {Name = "Reactor Chamber", RawName = "ic2.blockreactorchamber"}
+        t.machine.targets["3,0,0"] = {Name = "Reactor Chamber", RawName = "ic2.blockreactorchamber"}
+        local data = t.machine.details["1,0,0"]
+        data.RemainingTime, data.EnergyEmitted, data.EnergySunken = nil, 1234567, 0
+        local entry = t.add(t.id); t.bus.advance(6)
+        equal(#t.state.reactors, 1); equal(#t.sensor.client.watches, 1)
+        equal(t.sensor.client.watches[1].target, "1,0,0")
+        local text = table.concat(t.content(t.id), "\n")
+        for _, expected in ipairs({"Remaining: Unavailable", "To melting*: 1 264", "To MaxHeat: 9 964", "Emitted: 1.23 MEU",
+            "Received: 0 EU", "Sensor: sensor_14", "Side: top", "Target: 1,0,0"}) do
+            assert(text:find(expected, 1, true), "Missing detail: " .. expected)
+        end
+        equal(t.api.getSensorReading(entry.sensor).reactor.remaining, nil)
+        assert(not text:find("Switch ON", 1, true) and not text:find("Switch OFF", 1, true))
+    end
+
+    function tests.reactors_output_buttons_show_on_off_state_in_overview_and_detail()
+        local t = setup(); local entry = t.add(t.id); t.route(t.id, entry, nil); t.bus.advance(2)
+        local function label()
+            local lines = t.content(t.id)
+            for _, hit in ipairs(lines.hits) do if hit.action == "toggle" and hit.value == entry.id then
+                return lines[hit.y]:sub(hit.x1, hit.x2):match("^%s*(.-)%s*$")
+            end end
+            error("Missing output button")
+        end
+        equal(label(), "OFF")
+        t.click(t.id, "toggle", entry.id); t.bus.advance(1); equal(label(), "ON")
+        t.click(t.id, "home"); equal(label(), "ON")
+        t.click(t.id, "toggle", entry.id); t.bus.advance(1); equal(label(), "OFF")
+        t.click(t.id, "open", entry.id); equal(label(), "OFF")
+        equal(t.api.getSensorReading(entry.sensor).reactor.active, true, "Actual activity stays independent of requested output")
+    end
+
+    function tests.reactors_small_details_page_all_extra_data_and_keep_age_clear_of_pager()
+        local t = setup(); local entry = t.add(t.id)
+        t.machine.details["1,0,0"].EnergyEmitted, t.machine.details["1,0,0"].EnergySunken = 1234567, 0
+        t.bus.advance(3)
+        assert(t.api.placeWindow(t.id, 1, 1, 14, 8)); t.paint()
+        local all, count = {}, 0
+        while true do
+            local lines, nextHit = t.content(t.id), nil
+            all[#all + 1], count = table.concat(lines, "\n"), count + 1
+            for _, hit in ipairs(lines.hits) do if hit.action == "page" and hit.value.key == "metrics" and hit.value.delta == 1
+                and hit.enabled ~= false then nextHit = hit end end
+            if not nextHit then break end
+            local win = t.window(t.id)
+            t.bus.queue(t.display, {"monitor_touch", "top", win.x + nextHit.x1, win.y + nextHit.y}); t.bus.pump()
+            assert(count < 30, "Detail pages did not end")
+        end
+        local text = table.concat(all, "\n")
+        for _, expected in ipairs({"M+*: 1 264", "Max+: 9 964", "Emit: 1.2MEU", "In: 0EU", "S: sensor_14", "At: 1,0,0"}) do
+            assert(text:find(expected, 1, true), expected)
+        end
+        assert(count > 1)
+        assert(t.api.placeWindow(t.id, 1, 1, 32, 12)); t.paint()
+        local lines = t.content(t.id)
+        assert(lines[8]:find("Data", 1, true))
+        assert(lines[7]:find("<", 1, true) and lines[7]:find(">", 1, true))
+        equal(t.api.getSensorReading(entry.sensor).status, "ok")
+    end
+
+    function tests.reactors_raw_readings_expand_nested_fields_and_wrap_long_values()
+        local t = setup(); t.add(t.id)
+        t.machine.details["1,0,0"].Components = {{Name = "Uranium", DamageValue = 42}, {Name = "Vent", DamageValue = 0}}
+        t.bus.advance(3); t.click(t.id, "edit"); t.click(t.id, "raw")
+        local text = table.concat(t.content(t.id), "\n")
+        assert(text:find("Components[1].Name: Uranium", 1, true))
+        assert(text:find("Components[1].DamageValue: 42", 1, true))
+        assert(not text:find("Components: [table]", 1, true))
+        t.machine.details["1,0,0"].RemainingTime = nil; t.bus.advance(3)
+        equal(t.api.getSensorReading(t.state.reactors[1].sensor).reactor.remaining, nil)
+    end
 end

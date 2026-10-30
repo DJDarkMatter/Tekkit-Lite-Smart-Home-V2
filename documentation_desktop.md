@@ -65,6 +65,12 @@ All views of Coffee share one timer. Resizing, hiding, moving, closing or reopen
 
 Snap modes are recalculated after resolution/text-scale changes. Free rectangles retain relative coordinates, with app size limits applied. The bridge polls resolution once a second so older CC versions do not need `monitor_resize` events.
 
+## Text scale and individual elements
+
+The monitor client defaults to `textScale = 0.5` in `configs_monitor.txt`; an existing configuration takes precedence. This setting applies to every monitor attached to that client. Increasing it by 0.5 would change the default from 0.5 to 1.0, roughly doubling character width and height, halving columns/rows and leaving about one quarter of the logical cells. Borders and rounding affect the exact dimensions. Apps would reflow/page more often and some small windows or grid positions would no longer fit. Larger physical cells/buttons may be easier to touch, but this cannot guarantee a repair for the observed player-position-dependent native hitbox offset. Saved calibration offsets are measured in cells and would need reassessing at a different scale.
+
+Individual buttons, cards, bars and clocks can instead occupy more cells while the monitor scale stays fixed. Drawing and hit regions must use the same geometry. Native text has one scale for the entire monitor; differently sized text within one area needs custom glyphs drawn over multiple cells, as with Coffee's clock. Keeping ordinary text consistent and enlarging selected controls is possible without giving each element a different font. No text-scale, monitor, calibration or taskbar-coordinate changes are made in bundled-v18.
+
 ## Touch reliability and calibration
 
 The renderer and hit tester use the same title-button rectangles. App content starts at `(window.x + 1, window.y + 1)`, and both drawing and touches use that origin. Coloured button backgrounds show the full clickable character cell, including padding.

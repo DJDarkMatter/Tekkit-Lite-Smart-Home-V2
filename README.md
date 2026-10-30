@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v17`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v18`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -77,6 +77,8 @@ The startup messages show each computer's **listening** channel, so different nu
 For distant devices, put wireless relay computers along a path and install `inst relay --startup`. Chains have no fixed software hop-count limit. Update the OS and endpoints that will use relays to bundled-v16; apps stay installed. The OS `clients` list shows every relay and each original device separately, with a `via=relay_...` path. See [relay setup, upgrades and range](documentation_relay.md).
 
 Bundled-v17 fixes a sensor-catalog failure where one empty machine name could make the OS reject the whole side after a sensor connected. Native OCS `Name`/`RawName` fields are retained, including raw reactor identities when display names are localized. Update the OS and sensor roles; relays and apps need no update. The sensor picker shows waiting/rejection information and known incompatible sides as disabled. Run `sensors` or `sensors sensor_ID` on the OS to inspect received sides, target/reactor counts, missing catalog parts and the last validation error.
+
+Bundled-v18 updates the server role and optional Reactors app: output buttons read ON/OFF; detail views show heat headroom, supplied energy counters and source information, with two columns on wide windows and paged/wrapped fields on small ones. Raw readings expand nested fields. More explicit time aliases are recognized, but the stock old IC2 card supplies no fuel lifetime/inventory, even on the core, so Remaining stays unavailable for that card. No chamber targets are added automatically. Upload the new app, run `inst server --startup`, `inst app reactors`, then reboot the OS. Other roles need no update. Monitor scale stays at its configured value (default 0.5); see [scale and individual element sizing](documentation_desktop.md).
 
 On the **OS console**, substitute the IO computer's actual client ID:
 

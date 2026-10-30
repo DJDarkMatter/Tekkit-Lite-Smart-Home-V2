@@ -4,7 +4,7 @@
 
 ## Install and add reactors
 
-Upload the current package files to the V2 repository root. Replace your installer paste with bundled-v17 `install.lua`, download a fresh `inst`, and quit the central OS to CraftOS:
+Upload the current package files to the V2 repository root. Replace your installer paste with bundled-v18 `install.lua`, download a fresh `inst`, and quit the central OS to CraftOS:
 
 ```text
 cd /
@@ -31,6 +31,8 @@ The entry opens immediately. Repeat to add more reactors from the **same card/cl
 
 The home screen displays multiple reactor cards side by side when the window is wide enough, with Add and Settings below. It pages on smaller windows/monitors. Touch a card to open its full readout; small readouts page the metrics. Back returns to the overview. The same saved reactor can appear on several monitors; settings/outputs are shared, navigation remains per window.
 
+Bundled-v18 expands the detail view with heat headroom to melting/MaxHeat, supplied EnergyEmitted/EnergySunken counters, sensor ID, peripheral side, target key and native target type. Wide content areas (50 characters or more) use two columns. Long fields wrap and small windows page all fields; the pager no longer shares the data-age row. The heat bar shows the precise calculated percentage. Native energy counters use compact EU units and are not app-maintained lifetime totals. Negative headroom means the reported heat is above that threshold. No chamber or secondary sensor is added automatically; the selected core remains the only source.
+
 ## Readings
 
 | Field | Meaning |
@@ -43,9 +45,11 @@ The home screen displays multiple reactor cards side by side when the window is 
 | Remaining | Card-reported remaining duration, formatted as hours:minutes:seconds |
 | On / Off | Actual `Active` reading from the sensor, independent of the manual switch |
 
-**Remaining time is not fabricated.** The old OpenCCSensors IC2 reactor target exposes core operating fields but does not necessarily expose fuel lifetime. This app displays **Unavailable** (`n/a` on compact pages) if there is no supported remaining-time reading. The screenshot is a reference for the layout; it does not establish that every field is available through this mod API. Edit → **Raw readings** lists the fields received on your actual server, helping identify additional supported data for later adapters.
+**The stock old IC2 card does not supply fuel lifetime or reactor inventory.** Its [reactor-target source](https://github.com/Cloudhunter/OpenCCSensors/blob/6a8c39407ebfde0d2ccfb049b7f9ff7108dd5b62/src/openccsensors/common/sensors/targets/industrialcraft/ReactorTarget.java) reports heat, maximum heat, output, activity and percentage; the [IC2 card implementation](https://github.com/Cloudhunter/OpenCCSensors/blob/6a8c39407ebfde0d2ccfb049b7f9ff7108dd5b62/src/openccsensors/common/sensors/IndustrialCraftSensor.java) offers no extra lifetime method. Selecting the core instead of a chamber does not add that missing field. Adding chamber views cannot repair it. A real fuel countdown needs another source that exposes fuel wear/lifetime. The original reference panel uses a different data interface; it cannot establish that OCS supplies the same fields. This app therefore still shows **Unavailable** (`n/a` on compact pages) for the stock card, without guessing from heat/output or creating a manual countdown.
 
-Supported time fields include numeric `RemainingTime`, `TimeRemaining`, `Remaining`, `remainingTime`, `FuelRemainingSeconds` (seconds), explicit `RemainingTicks` (Minecraft ticks, divided by 20), or an hours:minutes:seconds string. Unknown data is `?`/Unavailable, not zero. Genuine zero remaining and actual Off are preserved.
+For adapters that do supply time, supported seconds fields are `RemainingTime`, `TimeRemaining`, `Remaining`, `remainingTime`, `FuelRemainingSeconds`, `RemainingSeconds`, `remainingSeconds`, `RemainingTimeSeconds`, `TimeLeft` and `timeLeft`. Numeric strings and hours:minutes:seconds are accepted. Explicit `RemainingTicks`, `remainingTicks` and `TimeLeftTicks` accept numbers/numeric strings and are divided by 20. Invalid, negative, nonfinite or oversized durations are ignored; genuine zero is retained. The detail view names the recognized time field. This expanded parsing does not create missing data on the stock card.
+
+Edit → **Raw readings** now expands nested fields to four levels, wraps long values and pages the output, with a 256-line display bound. This can reveal server-specific fields for future adapters without pretending they are available on every installation.
 
 Data age is shown in roomy readouts. Missing cards/targets, a changed card/type, request errors, stale readings and offline clients are labelled; last available values may appear gray but never claim to be live. Replacing a same-type machine at the same mod target address cannot be identified uniquely by these sensors.
 
@@ -53,7 +57,7 @@ Data age is shown in roomy readouts. Missing cards/targets, a changed card/type,
 
 Press **Set IO** on a card/readout, or Edit → **Control output**. Select **IO client → physical side → Digital or bundled colour → Use**. Each reactor can use any available output on any IO client; its sensor and control computer need not be the same. Previously unused wires start OFF; shared routes adopt their existing state.
 
-The control reads **Switch ON/OFF**, showing saved requested output intent. Orange/dots mean acknowledgement is pending; offline output status is red. The reactor's separate **On/Off** indicator reflects observed activity. The app never assumes that a commanded output successfully started the reactor, and it does not add automatic shutdown or restart logic. ON means energize the selected output; wire the reactor accordingly.
+The control reads **ON** or **OFF**, showing saved requested output intent rather than naming the next action. Orange/dots mean acknowledgement is pending; offline output status is red. The reactor's separate **On/Off** indicator reflects observed activity. The app never assumes that a commanded output successfully started the reactor, and it does not add automatic shutdown or restart logic. ON means energize the selected output; wire the reactor accordingly.
 
 Each Edit menu offers **Rename**, **Sensor target**, **Control output**, **Raw readings** and confirmed **Delete reactor**. Names use a touch keyboard with letter pages, case/digit modes, Space, Del, Clear, Save and Back. Changing or deleting an output reference releases only that reference; an unused old wire turns OFF after a successful checkpoint, while other shared references retain their state. Every copy controls the same shared desired value.
 

@@ -67,22 +67,36 @@ function Data.reactor(data)
     local heat = numeric(data, {"Heat", "heat", "Temperature"})
     local maximum = numeric(data, {"MaxHeat", "maxHeat", "MaximumHeat"})
     if not heat or not maximum or maximum <= 0 or heat > 1000000000000 or maximum > 1000000000000 then return nil end
-    local result = {heat = heat, maxHeat = maximum, output = numeric(data, {"Output", "output", "EUOutput"})}
+    local result = {heat = heat, maxHeat = maximum, output = numeric(data, {"Output", "output", "EUOutput"}),
+        energyEmitted = numeric(data, {"EnergyEmitted", "energyEmitted"}),
+        energySunken = numeric(data, {"EnergySunken", "EnergySunk", "energySunken"})}
     for _, key in ipairs({"Active", "active", "IsActive"}) do
         if type(data[key]) == "boolean" then result.active = data[key]; break end
     end
     result.melting = numeric(data, {"Melting", "MeltingPoint", "MeltingTemperature"})
     if not result.melting then result.melting, result.meltingDerived = math.floor(maximum * 0.85), true end
-    result.remaining = numeric(data, {"RemainingTime", "TimeRemaining", "Remaining", "remainingTime", "FuelRemainingSeconds"})
-    if not result.remaining and Data.number(data.RemainingTicks) and data.RemainingTicks >= 0 then result.remaining = data.RemainingTicks / 20 end
-    if not result.remaining then
-        for _, key in ipairs({"RemainingTime", "TimeRemaining", "Remaining"}) do
-            if type(data[key]) == "string" then
-                local h, m, s = data[key]:match("^(%d+):(%d%d):(%d%d)$")
-                if h and tonumber(m) < 60 and tonumber(s) < 60 then result.remaining = tonumber(h) * 3600 + tonumber(m) * 60 + tonumber(s); break end
-            end
+    local function duration(value, ticks)
+        if type(value) == "string" then
+            value = value:match("^%s*(.-)%s*$")
+            local h, m, s = value:match("^(%d+):(%d%d):(%d%d)$")
+            if not ticks and h and tonumber(m) < 60 and tonumber(s) < 60 then
+                value = tonumber(h) * 3600 + tonumber(m) * 60 + tonumber(s)
+            else value = tonumber(value) end
+        end
+        if Data.number(value) and value >= 0 and value <= 1000000000000 then return value end
+    end
+    for _, key in ipairs({"RemainingTime", "TimeRemaining", "Remaining", "remainingTime", "FuelRemainingSeconds",
+        "RemainingSeconds", "remainingSeconds", "RemainingTimeSeconds", "TimeLeft", "timeLeft"}) do
+        local value = duration(data[key])
+        if value ~= nil then result.remaining, result.remainingField = value, key; break end
+    end
+    if result.remaining == nil then
+        for _, key in ipairs({"RemainingTicks", "remainingTicks", "TimeLeftTicks"}) do
+            local value = duration(data[key], true)
+            if value ~= nil then result.remaining, result.remainingField = value / 20, key; break end
         end
     end
+    result.heatToMelting, result.heatToMax = result.melting - heat, maximum - heat
     result.percent = heat / maximum * 100
     return result
 end
