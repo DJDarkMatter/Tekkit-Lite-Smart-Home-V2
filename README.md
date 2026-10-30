@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v16`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v17`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -75,6 +75,8 @@ The IO computer prints its ID, e.g. `io_11`, then `Connected to OS computer 10`.
 The startup messages show each computer's **listening** channel, so different numbers are expected. The OS listens on `45231`; an IO computer with ID `19621` listens for replies on `20621` and sends requests to `45231`. The OS's computer ID is a separate identifier, not its channel. Keep the shared `channel` setting in `configs_network.txt` the same on both computers.
 
 For distant devices, put wireless relay computers along a path and install `inst relay --startup`. Chains have no fixed software hop-count limit. Update the OS and endpoints that will use relays to bundled-v16; apps stay installed. The OS `clients` list shows every relay and each original device separately, with a `via=relay_...` path. See [relay setup, upgrades and range](documentation_relay.md).
+
+Bundled-v17 fixes a sensor-catalog failure where one empty machine name could make the OS reject the whole side after a sensor connected. Native OCS `Name`/`RawName` fields are retained, including raw reactor identities when display names are localized. Update the OS and sensor roles; relays and apps need no update. The sensor picker shows waiting/rejection information and known incompatible sides as disabled. Run `sensors` or `sensors sensor_ID` on the OS to inspect received sides, target/reactor counts, missing catalog parts and the last validation error.
 
 On the **OS console**, substitute the IO computer's actual client ID:
 

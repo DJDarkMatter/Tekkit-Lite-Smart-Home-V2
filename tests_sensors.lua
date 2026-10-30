@@ -6,7 +6,8 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local central = bus.computer(10, "server", {apps = {["apps_reactors.lua"] = source}}):start()
         local ioClient = bus.computer(11, "io", {modemSide = "right"}):start()
         local machine = {card = "openccsensors.item.industrialcraftsensor", async = options.async, yielding = options.yielding,
-            targets = {["1,0,0"] = {Type = "Nuclear Reactor"}, ["-1,0,0"] = {Type = "Nuclear Reactor"}},
+            targets = {["1,0,0"] = {Name = "Nuclear Reactor", RawName = "ic2.blockreactor"},
+                ["-1,0,0"] = {Name = "Nuclear Reactor", RawName = "ic2.blockreactor"}},
             details = {["1,0,0"] = {Heat = 48036, MaxHeat = 58000, Active = true, Output = 30, RemainingTime = 9705},
                 ["-1,0,0"] = {Heat = 7, MaxHeat = 10000, Active = false, Output = 0, RemainingTime = 0}}}
         local ae = {card = "openccsensors.item.appliedenergisticssensor", targets = {["0,0,1"] = {Type = "ME Controller"}},
@@ -72,6 +73,16 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         end
         bus.advance(2); t.id = t.open()
         return t
+    end
+    function tests.sensor_target_names_fall_back_safely_and_raw_ids_identify_localized_reactors()
+        local Data = assert(loadfile("lib_sensor_data.lua"))()
+        local target = Data.target("1,0,0", {Type = "", Name = " \n ", RawName = "ic2.blockreactor"})
+        equal(target.type, "ic2.blockreactor"); equal(target.kind, "reactor")
+        target = Data.target("2,0,0", {Name = "Reaktor", RawName = "ic2.blockreactor"})
+        equal(target.type, "Reaktor"); equal(target.rawName, "ic2.blockreactor"); equal(target.kind, "reactor")
+        target = Data.target("3,0,0", {Type = false, Name = "", RawName = ""})
+        equal(target.type, "Unknown"); equal(target.label, "Unknown")
+        equal(Data.target("4,0,0", {Name = "Cable", RawName = "ic2.blockcable"}).kind, "other")
     end
     function tests.sensor_generic_client_detects_multiple_ports_and_dedicated_ae_card_without_inventory_assumptions()
         local t = setup()
@@ -342,5 +353,73 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             end
         end end
         equal(checked, 560)
+    end
+
+    function tests.sensor_server_accepts_blank_names_from_older_catalogs_without_hiding_the_side()
+        local t = setup()
+        local client = t.central.server.sensorClients.sensor_14
+        client.ports = {}
+        local message = {type = "sensorCatalog", clientId = "sensor_14", sender = 14, serverSession = t.central.server.session,
+            bootId = client.bootId, sequence = t.sensor.client.sequence + 1, side = "top", card = t.machine.card,
+            part = 1, parts = 1, status = "ok", targets = {{key = "1,0,0", type = ""},
+                {key = "-1,0,0", type = "Nuclear Reactor"}}}
+        t.central.server.handle(message, 1014, t.bus.now)
+        local clients = t.api.getSensorClients()
+        equal(#clients[1].ports, 1); equal(#clients[1].ports[1].targets, 2)
+        local found
+        for _, target in ipairs(clients[1].ports[1].targets) do if target.key == "1,0,0" then found = target end end
+        equal(found.type, "Unknown"); equal(clients[1].catalogError, nil)
+    end
+
+    function tests.sensor_catalog_rejections_are_visible_in_picker_and_os_diagnostics()
+        local t = setup()
+        local client = t.central.server.sensorClients.sensor_14
+        client.ports = {}
+        t.central.server.handle({type = "sensorCatalog", clientId = "sensor_14", sender = 14,
+            serverSession = t.central.server.session, bootId = client.bootId, sequence = t.sensor.client.sequence + 1,
+            side = "top", card = t.machine.card, part = 1, parts = 1, status = "ok", targets = {{key = "1,0,0", type = {}}}}, 1014, t.bus.now)
+        local clients = t.api.getSensorClients()
+        equal(clients[1].catalogError, "Invalid target metadata"); equal(clients[1].catalogRejected, 1)
+        local Picker = t.central.env.dofile("lib_sensor_picker.lua")
+        local dialog = Picker.new("test", {clientId = "sensor_14"}, "reactor"); dialog.stage = 2
+        assert(table.concat(Picker.render(dialog, 30, 10, clients), "\n"):find("Catalog rejected", 1, true))
+        local listing = table.concat(t.central.server.command("sensors sensor_14"), "\n")
+        assert(listing:find("Invalid target metadata", 1, true))
+        assert(listing:find("protocol=1", 1, true)); assert(listing:find("Waiting for sensor catalog", 1, true))
+        t.bus.advance(6); equal(t.api.getSensorClients()[1].catalogError, nil)
+        assert(table.concat(t.central.server.command("sensors sensor_14"), "\n"):find("targets=2 reactors=2", 1, true))
+    end
+
+    function tests.sensor_picker_explains_waiting_and_shows_unusable_known_sides_as_disabled()
+        local t = setup()
+        local Picker = t.central.env.dofile("lib_sensor_picker.lua")
+        local dialog = Picker.new("test", {clientId = "sensor_14"}, "reactor"); dialog.stage = 2
+        local clients = t.api.getSensorClients()
+        Picker.render(dialog, 40, 10, clients)
+        local top, bottom
+        for _, hit in ipairs(dialog.hits) do if hit.action == "select" then
+            if hit.value.value == "top" then top = hit elseif hit.value.value == "bottom" then bottom = hit end
+        end end
+        assert(top and top.enabled ~= false); assert(bottom and bottom.enabled == false)
+        Picker.touch(dialog, bottom.x1, bottom.y1 or bottom.y); equal(dialog.stage, 2)
+        clients[1].ports = {}
+        assert(table.concat(Picker.render(dialog, 30, 10, clients), "\n"):find("Waiting for catalog", 1, true))
+        clients[1].online = false
+        assert(table.concat(Picker.render(dialog, 30, 10, clients), "\n"):find("Sensor client offline", 1, true))
+    end
+
+    function tests.sensor_diagnostics_show_missing_catalog_parts_and_recovery()
+        local t = setup()
+        for i = 1, 70 do t.machine.targets["extra_" .. i] = {Name = "IC2 machine", RawName = "ic2.machine"} end
+        t.bus.drop = function(packet) return packet.message.type == "sensorCatalog" and packet.message.parts > 1 and packet.message.part == 2 end
+        t.bus.advance(7)
+        local clients = t.api.getSensorClients()
+        equal(#clients[1].pending, 1); equal(clients[1].pending[1].received, 1); equal(clients[1].pending[1].parts, 2)
+        assert(table.concat(t.central.server.command("sensors sensor_14"), "\n"):find("catalog parts=1/2", 1, true))
+        t.bus.drop = nil; t.bus.advance(6)
+        equal(#t.api.getSensorClients()[1].pending, 0)
+        local listing = table.concat(t.central.server.command("sensors sensor_14"), "\n")
+        assert(listing:find("targets=72 reactors=2", 1, true))
+        equal(t.central.server.command("sensors unknown")[1], "No matching sensor clients")
     end
 end

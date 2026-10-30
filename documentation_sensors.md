@@ -18,6 +18,14 @@ Use the same `networkId`/`channel` in `configs_network.txt` as the central OS. O
 
 Bundled-v16 adds [wireless relays](documentation_relay.md). For a distant sensor, update the OS and sensor role to v16, then put `inst relay --startup` computers along a path. Chains have no fixed software hop-count limit. The sensor stays separately listed in OS `clients` and remains selectable by its original ID. Other endpoints need the new network library only when they will also use relays; app code and sensor-card adapters are unchanged. Preserve automatically maintained `configs_transport.txt` on every updated role.
 
+## Connected sensor but no available side
+
+Bundled-v17 fixes a reproduced failure: a sensor discovered 62 targets before a five-relay path connected, but one blank machine name caused the OS to reject its entire catalog and offer no sides. Empty names now fall back to the native OCS `RawName`, or `Unknown`; raw identities also identify reactors behind localized display names. Native OCS tile targets normally supply `Name`, `RawName` and `Position`, rather than the `Type` field used by some adapters. The hub retains raw identities and accepts blank types from older catalogs without discarding the whole side. This reproduces the reported symptom; the user's exact native metadata has not been captured.
+
+Update the **OS and sensor roles** with the bundled-v17 installer, then reboot both. Relays and app files need no update. The picker now says `Waiting for catalog`, `Catalog rejected` or `Sensor client offline` as appropriate, and shows known but unusable sides as disabled instead of hiding them.
+
+Run `sensors` or `sensors sensor_20020` on the OS console to inspect protocol/boot, card name, side status, accepted target/reactor counts, incomplete catalog parts and validation errors. This distinguishes a missing catalog from a rejected one without assuming that wireless connection alone proves telemetry arrived. If a side is visible but a target is absent, check card range and the returned names/raw identities.
+
 ## Configuration
 
 `configs_sensor.txt` preserves:

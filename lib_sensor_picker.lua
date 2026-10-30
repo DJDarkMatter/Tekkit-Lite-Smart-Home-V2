@@ -5,7 +5,7 @@ function Picker.new(key, current, kind)
     return {kind = "sensor", key = key, chosen = current or {}, filter = kind, stage = 1, page = 1}
 end
 function Picker.render(dialog, width, height, clients)
-    local list, chosen = {}, dialog.chosen
+    local list, chosen, selectedClient, selectedPort = {}, dialog.chosen
     local function compatible(port)
         if port.status ~= "ok" or not port.card then return false end
         if not dialog.filter then return true end
@@ -18,13 +18,18 @@ function Picker.render(dialog, width, height, clients)
         for _, client in ipairs(clients) do list[#list + 1] = {label = client.id .. (client.online and " +" or " -"), value = client.id} end
     elseif dialog.stage == 2 then
         for _, client in ipairs(clients) do if client.id == chosen.clientId then
+            selectedClient = client
             for _, port in ipairs(client.ports) do
-                if compatible(port) then list[#list + 1] = {label = port.side .. " / " .. port.cardKind, value = port.side, card = port.card} end
+                local enabled = compatible(port)
+                local detail = port.status ~= "ok" and port.status or port.cardKind
+                list[#list + 1] = {label = port.side .. " / " .. detail .. (not enabled and port.status == "ok" and " (other card)" or ""),
+                    value = port.side, card = port.card, enabled = enabled}
             end
         end end
     elseif dialog.stage == 3 then
         for _, client in ipairs(clients) do if client.id == chosen.clientId then
             for _, port in ipairs(client.ports) do if port.side == chosen.side then
+                selectedPort = port
                 for _, target in ipairs(port.targets) do
                     if not dialog.filter or dialog.filter == "reactor" and (target.kind == "reactor" or target.type == "Unknown")
                         or dialog.filter ~= "reactor" and port.cardKind == dialog.filter then
@@ -51,9 +56,21 @@ function Picker.render(dialog, width, height, clients)
         ui.heading(({"Sensor client", "Sensor side", "Select target"})[dialog.stage], 2048)
         for row = 1, slots do
             local item = list[(dialog.page - 1) * slots + row]
-            if item then ui.button(row + 1, item.label, "select", nil, nil, true, nil, nil, item) end
+            if item then ui.button(row + 1, item.label, "select", nil, nil, item.enabled ~= false, nil, nil, item) end
         end
-        if #list == 0 then ui.text(2, dialog.stage == 3 and "No targets yet" or "None available") end
+        if #list == 0 then
+            local message = "No sensor clients yet"
+            if dialog.stage == 2 then
+                message = selectedClient and selectedClient.online and "Waiting for catalog" or "Sensor client offline"
+                if selectedClient and selectedClient.catalogError then
+                    message = "Catalog rejected"
+                    ui.text(3, selectedClient.catalogError)
+                end
+            elseif dialog.stage == 3 then
+                message = selectedPort and #selectedPort.targets > 0 and "No matching targets" or "No targets yet"
+            end
+            ui.text(2, message)
+        end
         if pages > 1 then
             ui.button(height - 1, "< Prev", "prev", 1, math.floor(width / 2), dialog.page > 1)
             ui.button(height - 1, "Next >", "next", math.floor(width / 2) + 1, width, dialog.page < pages, nil, nil, pages)

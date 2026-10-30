@@ -4,7 +4,7 @@
 
 ## Install and add reactors
 
-Upload the current package files to the V2 repository root. Replace your installer paste with bundled-v16 `install.lua`, download a fresh `inst`, and quit the central OS to CraftOS:
+Upload the current package files to the V2 repository root. Replace your installer paste with bundled-v17 `install.lua`, download a fresh `inst`, and quit the central OS to CraftOS:
 
 ```text
 cd /
@@ -16,6 +16,8 @@ reboot
 Install `inst sensor --startup` on the sensor computer. Existing monitor/IO clients need no update. Apps are not bundled or enabled by a role install; only `inst app reactors` downloads/enables this app. Coffee and Switchboard remain unchanged.
 
 For out-of-range computers, see [wireless relays](documentation_relay.md). Update the OS and each endpoint that should use relays to v16, then install relay computers along the path. Reactors itself needs no app update for relaying. Its sensor and IO selections continue to show the actual devices, including devices reached through several relays.
+
+If a connected sensor reports targets locally but the selector has no available side, update the OS and sensor roles to v17. It fixes blank machine names rejecting the whole catalog and preserves OCS raw reactor identities behind localized names. The selector now explains waiting/rejected data. `sensors sensor_ID` on the OS shows received sides, counts and catalog errors. Reactors, relays and saved bindings need no change for this repair.
 
 Open **Reactors** through the monitor's `[+]` launcher:
 

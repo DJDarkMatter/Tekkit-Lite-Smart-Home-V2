@@ -1123,7 +1123,8 @@ function Server.new(net, storage, config, logger)
         local cmd = args[1]
         if not cmd then return {} end
         if cmd == "help" then return {
-            "clients | inputs <client> | outputs | apps",
+            "clients | sensors [client] | inputs <client>",
+            "outputs | apps",
             "map <name> <client> <side> <color|digital>",
             "set <name> <on|off> | toggle <name>",
             "open <app> <monitor> | close <windowId>",
@@ -1140,6 +1141,29 @@ function Server.new(net, storage, config, logger)
                     .. (item.type == "relay" and " forwarded=" .. tostring(item.forwarded or 0) or "")
             end
             if #lines == 0 then lines[1] = "No clients connected yet" end
+            return lines
+        elseif cmd == "sensors" then
+            local lines = {}
+            for _, client in ipairs(api.getSensorClients()) do
+                if not args[2] or args[2] == client.id then
+                    lines[#lines + 1] = client.id .. " " .. (client.online and "ONLINE" or "offline")
+                        .. " protocol=" .. tostring(client.sensorProtocol or "legacy") .. " boot=" .. tostring(client.bootId or "unknown")
+                    if #client.ports == 0 then lines[#lines + 1] = "  Waiting for sensor catalog" end
+                    for _, port in ipairs(client.ports) do
+                        local reactors = 0
+                        for _, target in ipairs(port.targets) do if target.kind == "reactor" then reactors = reactors + 1 end end
+                        lines[#lines + 1] = "  " .. port.side .. ": " .. port.status .. " / " .. port.cardKind
+                            .. " / targets=" .. #port.targets .. " reactors=" .. reactors
+                        lines[#lines + 1] = "    card=" .. tostring(port.card or "none")
+                        if port.error then lines[#lines + 1] = "    " .. port.error end
+                    end
+                    for _, pending in ipairs(client.pending) do
+                        lines[#lines + 1] = "  " .. pending.side .. " catalog parts=" .. pending.received .. "/" .. pending.parts
+                    end
+                    if client.catalogError then lines[#lines + 1] = "  Catalog rejected: " .. client.catalogError end
+                end
+            end
+            if #lines == 0 then lines[1] = "No matching sensor clients" end
             return lines
         elseif cmd == "outputs" then
             local lines = {}

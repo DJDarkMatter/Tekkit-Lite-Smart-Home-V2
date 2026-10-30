@@ -337,4 +337,40 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(ok, false); assert(tostring(err):find("Cannot checkpoint network startup", 1, true))
         equal(#bus.wire, 0); equal(unserialize(comp.disk.files["configs_transport.txt"]).bootCounter, 23)
     end
+
+    function tests.relay_five_hops_at_thirty_block_range_publish_62_pre_discovered_targets_with_empty_names()
+        local bus = newBus()
+        local central = bus.computer(19623, "server", {range = 30, position = {0, 0, 0}}):start()
+        local machine = {card = "openccsensors.item.industrialcraftsensor", targets = {},
+            details = {["1,0,0"] = {Heat = 48036, MaxHeat = 58000, Active = true, Output = 30}}}
+        for i = 1, 62 do machine.targets[tostring(i) .. ",0,0"] = {Name = "IC2 machine", RawName = "ic2.machine"} end
+        machine.targets["1,0,0"] = {Name = "Reaktor", RawName = "ic2.blockreactor", Position = {X = 1, Y = 0, Z = 0}}
+        machine.targets["61,0,0"] = {Name = ""}
+        machine.targets["62,0,0"] = {Name = "", RawName = "ic2.blockcable"}
+        local sensor = bus.computer(20020, "sensor", {range = 30, position = {6, 120, 0}, sensors = {top = machine}}):start()
+        bus.advance(6)
+        equal(sensor.client.connected, false); equal(#sensor.client.ports.top.targets, 62)
+        for i = 1, 5 do bus.computer(20020 + i, "relay", {range = 30, position = {0, i * 20, 0}}):start() end
+        bus.advance(12); equal(sensor.client.connected, true)
+        local clients = central.server.api.getSensorClients()
+        equal(#clients[1].ports, 1); equal(clients[1].ports[1].side, "top")
+        equal(#clients[1].ports[1].targets, 62)
+        local Picker = central.env.dofile("lib_sensor_picker.lua")
+        local dialog = Picker.new("test", {clientId = "sensor_20020"}, "reactor"); dialog.stage = 2
+        Picker.render(dialog, 40, 10, clients)
+        local chosen
+        for _, hit in ipairs(dialog.hits) do if hit.action == "select" and hit.value.value == "top" then chosen = hit end end
+        assert(chosen and chosen.enabled ~= false)
+        Picker.touch(dialog, chosen.x1, chosen.y1 or chosen.y); equal(dialog.stage, 3)
+        Picker.render(dialog, 40, 10, clients)
+        chosen = nil
+        for _, hit in ipairs(dialog.hits) do if hit.action == "select" and hit.value.value == "1,0,0" then chosen = hit end end
+        assert(chosen, "Localized reactor must remain selectable by its RawName identity")
+        Picker.touch(dialog, chosen.x1, chosen.y1 or chosen.y)
+        equal(dialog.chosen.targetType, "Reaktor")
+        assert(central.server.api.watchSensor("regression", dialog.chosen)); bus.advance(3)
+        local reading = central.server.api.getSensorReading(dialog.chosen)
+        equal(reading.status, "ok"); equal(reading.reactor.heat, 48036)
+        assert(table.concat(central.server.command("sensors sensor_20020"), "\n"):find("targets=62 reactors=1", 1, true))
+    end
 end

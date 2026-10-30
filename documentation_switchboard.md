@@ -4,7 +4,7 @@
 
 ## Install
 
-Put the current app and core files on the V2 repository's `main` branch. Replace your one installer paste with the current `install.lua` (banner **bundled-v16**), then download that paste again as `inst` on the **central OS computer**. Quit the running OS first. From the CraftOS shell:
+Put the current app and core files on the V2 repository's `main` branch. Replace your one installer paste with the current `install.lua` (banner **bundled-v17**), then download that paste again as `inst` on the **central OS computer**. Quit the running OS first. From the CraftOS shell:
 
 ```text
 cd /

@@ -15,6 +15,7 @@ function Hub.new(net, clients, session)
         if message.sensorProtocol ~= Data.protocol or not Data.string(message.bootId, 96) then return end
         if reconnect or client.bootId ~= message.bootId then
             client.ports, client.catalogParts, client.readings, client.sampleParts, client.sensorSent = {}, {}, {}, {}, nil
+            client.catalogError, client.catalogRejected = nil, 0
         end
         client.bootId, client.sensorProtocol = message.bootId, Data.protocol
         client.sensorMaxAge = Data.number(message.pollInterval) and message.pollInterval >= 0.5 and message.pollInterval <= 60
@@ -34,15 +35,26 @@ function Hub.new(net, clients, session)
         return false
     end
     function hub.catalog(client, message, now)
+        local function reject(reason)
+            client.catalogError = reason
+            client.catalogRejected = math.min((client.catalogRejected or 0) + 1, 2147483647)
+            return false, reason
+        end
         if client.sensorProtocol ~= Data.protocol or client.bootId ~= message.bootId or not sides[message.side]
             or not Data.integer(message.sequence, 1, 2147483647) or not Data.integer(message.parts, 1, 64)
             or not Data.integer(message.part, 1, message.parts) or type(message.targets) ~= "table" or #message.targets > 64
             or message.card ~= nil and not Data.string(message.card, 128)
-            or not ({ok = true, scanning = true, error = true, no_card = true, detached = true})[message.status] then return end
+            or not ({ok = true, scanning = true, error = true, no_card = true, detached = true})[message.status] then
+            return reject("Invalid catalog header or sensor version")
+        end
         local targets = {}
         for _, entry in ipairs(message.targets) do
-            if type(entry) ~= "table" or not Data.string(entry.key, 128) or not Data.string(entry.type, 96) then return end
-            targets[#targets + 1] = Data.target(entry.key, {Type = entry.type, Position = entry.position})
+            if type(entry) ~= "table" or not Data.string(entry.key, 128)
+                or entry.type ~= nil and (type(entry.type) ~= "string" or #entry.type > 96)
+                or entry.rawName ~= nil and (type(entry.rawName) ~= "string" or #entry.rawName > 128) then
+                return reject("Invalid target metadata")
+            end
+            targets[#targets + 1] = Data.target(entry.key, {Type = entry.type, RawName = entry.rawName, Position = entry.position})
         end
         local current = client.ports[message.side]
         if current and message.sequence <= current.sequence then return end
@@ -52,14 +64,16 @@ function Hub.new(net, clients, session)
             pending = {sequence = message.sequence, parts = message.parts, card = message.card, status = message.status, chunks = {}, time = now}
             client.catalogParts[message.side] = pending
         end
-        if pending.parts ~= message.parts or pending.card ~= message.card or pending.status ~= message.status then return end
+        if pending.parts ~= message.parts or pending.card ~= message.card or pending.status ~= message.status then
+            return reject("Conflicting catalog parts")
+        end
         pending.chunks[message.part] = targets
         if current and current.card ~= message.card then current.status = "card_changed" end
         local all, seen = {}, {}
         for part = 1, pending.parts do
             if not pending.chunks[part] then return end
             for _, target in ipairs(pending.chunks[part]) do
-                if seen[target.key] then return end
+                if seen[target.key] then return reject("Duplicate target address") end
                 seen[target.key], all[#all + 1] = true, target
             end
         end
@@ -68,6 +82,7 @@ function Hub.new(net, clients, session)
             status = message.status, error = type(message.error) == "string" and message.error:sub(1, 160) or nil,
             sequence = message.sequence, targets = all, time = now, truncated = message.truncated == true}
         client.catalogParts[message.side] = nil
+        client.catalogError = nil
         client.lastSeen = now
         if not current or current.card ~= message.card or message.status ~= "ok" then
             client.readings[message.side], client.sampleParts[message.side], client.sensorSent = {}, {}, nil
@@ -117,7 +132,15 @@ function Hub.new(net, clients, session)
             local client = clients[id]
             local ports = {}
             for _, side in ipairs(keys(client.ports or {})) do ports[#ports + 1] = copy(client.ports[side]) end
-            result[#result + 1] = {id = id, online = client.online, computerId = client.computerId, ports = ports}
+            local pending = {}
+            for _, side in ipairs(keys(client.catalogParts or {})) do
+                local part, received = client.catalogParts[side], 0
+                for _ in pairs(part.chunks) do received = received + 1 end
+                pending[#pending + 1] = {side = side, received = received, parts = part.parts}
+            end
+            result[#result + 1] = {id = id, online = client.online, computerId = client.computerId, ports = ports,
+                sensorProtocol = client.sensorProtocol, bootId = client.bootId,
+                catalogError = client.catalogError, catalogRejected = client.catalogRejected or 0, pending = pending}
         end
         return result
     end

@@ -42,8 +42,19 @@ function Data.cardKind(card)
 end
 function Data.target(key, basic)
     basic = type(basic) == "table" and basic or {}
-    local kind = tostring(basic.Type or basic.type or basic.Name or "Unknown"):gsub("[%c]", " "):sub(1, 96)
-    local result = {key = tostring(key), label = kind, type = kind, kind = kind:lower():find("reactor", 1, true) and "reactor" or "other"}
+    local function name(value, limit)
+        if type(value) ~= "string" then return nil end
+        value = value:gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):sub(1, limit)
+        if #value > 0 then return value end
+    end
+    -- OCS 1.4.7 normally supplies Name/RawName, rather than Type. An empty
+    -- display name must not poison an otherwise valid whole-side catalog.
+    local raw = name(basic.RawName or basic.rawName, 128)
+    local display = name(basic.Type, 96) or name(basic.type, 96) or name(basic.Name, 96)
+        or raw and raw:sub(1, 96) or "Unknown"
+    local identity = (display .. " " .. (raw or "")):lower()
+    local result = {key = tostring(key), label = display, type = display, rawName = raw,
+        kind = identity:find("reactor", 1, true) and "reactor" or "other"}
     local p = basic.Position or basic.position
     if type(p) == "table" and Data.number(p.X) and Data.number(p.Y) and Data.number(p.Z) then result.position = {X = p.X, Y = p.Y, Z = p.Z} end
     return result

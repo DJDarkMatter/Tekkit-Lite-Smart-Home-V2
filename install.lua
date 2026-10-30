@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v16
+-- SmartHome OS installer: bundled-v17
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -2157,7 +2157,8 @@ function Server.new(net, storage, config, logger)
         local cmd = args[1]
         if not cmd then return {} end
         if cmd == "help" then return {
-            "clients | inputs <client> | outputs | apps",
+            "clients | sensors [client] | inputs <client>",
+            "outputs | apps",
             "map <name> <client> <side> <color|digital>",
             "set <name> <on|off> | toggle <name>",
             "open <app> <monitor> | close <windowId>",
@@ -2174,6 +2175,29 @@ function Server.new(net, storage, config, logger)
                     .. (item.type == "relay" and " forwarded=" .. tostring(item.forwarded or 0) or "")
             end
             if #lines == 0 then lines[1] = "No clients connected yet" end
+            return lines
+        elseif cmd == "sensors" then
+            local lines = {}
+            for _, client in ipairs(api.getSensorClients()) do
+                if not args[2] or args[2] == client.id then
+                    lines[#lines + 1] = client.id .. " " .. (client.online and "ONLINE" or "offline")
+                        .. " protocol=" .. tostring(client.sensorProtocol or "legacy") .. " boot=" .. tostring(client.bootId or "unknown")
+                    if #client.ports == 0 then lines[#lines + 1] = "  Waiting for sensor catalog" end
+                    for _, port in ipairs(client.ports) do
+                        local reactors = 0
+                        for _, target in ipairs(port.targets) do if target.kind == "reactor" then reactors = reactors + 1 end end
+                        lines[#lines + 1] = "  " .. port.side .. ": " .. port.status .. " / " .. port.cardKind
+                            .. " / targets=" .. #port.targets .. " reactors=" .. reactors
+                        lines[#lines + 1] = "    card=" .. tostring(port.card or "none")
+                        if port.error then lines[#lines + 1] = "    " .. port.error end
+                    end
+                    for _, pending in ipairs(client.pending) do
+                        lines[#lines + 1] = "  " .. pending.side .. " catalog parts=" .. pending.received .. "/" .. pending.parts
+                    end
+                    if client.catalogError then lines[#lines + 1] = "  Catalog rejected: " .. client.catalogError end
+                end
+            end
+            if #lines == 0 then lines[1] = "No matching sensor clients" end
             return lines
         elseif cmd == "outputs" then
             local lines = {}
@@ -2945,8 +2969,19 @@ function Data.cardKind(card)
 end
 function Data.target(key, basic)
     basic = type(basic) == "table" and basic or {}
-    local kind = tostring(basic.Type or basic.type or basic.Name or "Unknown"):gsub("[%c]", " "):sub(1, 96)
-    local result = {key = tostring(key), label = kind, type = kind, kind = kind:lower():find("reactor", 1, true) and "reactor" or "other"}
+    local function name(value, limit)
+        if type(value) ~= "string" then return nil end
+        value = value:gsub("[%c]", " "):gsub("^%s+", ""):gsub("%s+$", ""):sub(1, limit)
+        if #value > 0 then return value end
+    end
+    -- OCS 1.4.7 normally supplies Name/RawName, rather than Type. An empty
+    -- display name must not poison an otherwise valid whole-side catalog.
+    local raw = name(basic.RawName or basic.rawName, 128)
+    local display = name(basic.Type, 96) or name(basic.type, 96) or name(basic.Name, 96)
+        or raw and raw:sub(1, 96) or "Unknown"
+    local identity = (display .. " " .. (raw or "")):lower()
+    local result = {key = tostring(key), label = display, type = display, rawName = raw,
+        kind = identity:find("reactor", 1, true) and "reactor" or "other"}
     local p = basic.Position or basic.position
     if type(p) == "table" and Data.number(p.X) and Data.number(p.Y) and Data.number(p.Z) then result.position = {X = p.X, Y = p.Y, Z = p.Z} end
     return result
@@ -3199,6 +3234,7 @@ function Hub.new(net, clients, session)
         if message.sensorProtocol ~= Data.protocol or not Data.string(message.bootId, 96) then return end
         if reconnect or client.bootId ~= message.bootId then
             client.ports, client.catalogParts, client.readings, client.sampleParts, client.sensorSent = {}, {}, {}, {}, nil
+            client.catalogError, client.catalogRejected = nil, 0
         end
         client.bootId, client.sensorProtocol = message.bootId, Data.protocol
         client.sensorMaxAge = Data.number(message.pollInterval) and message.pollInterval >= 0.5 and message.pollInterval <= 60
@@ -3218,15 +3254,26 @@ function Hub.new(net, clients, session)
         return false
     end
     function hub.catalog(client, message, now)
+        local function reject(reason)
+            client.catalogError = reason
+            client.catalogRejected = math.min((client.catalogRejected or 0) + 1, 2147483647)
+            return false, reason
+        end
         if client.sensorProtocol ~= Data.protocol or client.bootId ~= message.bootId or not sides[message.side]
             or not Data.integer(message.sequence, 1, 2147483647) or not Data.integer(message.parts, 1, 64)
             or not Data.integer(message.part, 1, message.parts) or type(message.targets) ~= "table" or #message.targets > 64
             or message.card ~= nil and not Data.string(message.card, 128)
-            or not ({ok = true, scanning = true, error = true, no_card = true, detached = true})[message.status] then return end
+            or not ({ok = true, scanning = true, error = true, no_card = true, detached = true})[message.status] then
+            return reject("Invalid catalog header or sensor version")
+        end
         local targets = {}
         for _, entry in ipairs(message.targets) do
-            if type(entry) ~= "table" or not Data.string(entry.key, 128) or not Data.string(entry.type, 96) then return end
-            targets[#targets + 1] = Data.target(entry.key, {Type = entry.type, Position = entry.position})
+            if type(entry) ~= "table" or not Data.string(entry.key, 128)
+                or entry.type ~= nil and (type(entry.type) ~= "string" or #entry.type > 96)
+                or entry.rawName ~= nil and (type(entry.rawName) ~= "string" or #entry.rawName > 128) then
+                return reject("Invalid target metadata")
+            end
+            targets[#targets + 1] = Data.target(entry.key, {Type = entry.type, RawName = entry.rawName, Position = entry.position})
         end
         local current = client.ports[message.side]
         if current and message.sequence <= current.sequence then return end
@@ -3236,14 +3283,16 @@ function Hub.new(net, clients, session)
             pending = {sequence = message.sequence, parts = message.parts, card = message.card, status = message.status, chunks = {}, time = now}
             client.catalogParts[message.side] = pending
         end
-        if pending.parts ~= message.parts or pending.card ~= message.card or pending.status ~= message.status then return end
+        if pending.parts ~= message.parts or pending.card ~= message.card or pending.status ~= message.status then
+            return reject("Conflicting catalog parts")
+        end
         pending.chunks[message.part] = targets
         if current and current.card ~= message.card then current.status = "card_changed" end
         local all, seen = {}, {}
         for part = 1, pending.parts do
             if not pending.chunks[part] then return end
             for _, target in ipairs(pending.chunks[part]) do
-                if seen[target.key] then return end
+                if seen[target.key] then return reject("Duplicate target address") end
                 seen[target.key], all[#all + 1] = true, target
             end
         end
@@ -3252,6 +3301,7 @@ function Hub.new(net, clients, session)
             status = message.status, error = type(message.error) == "string" and message.error:sub(1, 160) or nil,
             sequence = message.sequence, targets = all, time = now, truncated = message.truncated == true}
         client.catalogParts[message.side] = nil
+        client.catalogError = nil
         client.lastSeen = now
         if not current or current.card ~= message.card or message.status ~= "ok" then
             client.readings[message.side], client.sampleParts[message.side], client.sensorSent = {}, {}, nil
@@ -3301,7 +3351,15 @@ function Hub.new(net, clients, session)
             local client = clients[id]
             local ports = {}
             for _, side in ipairs(keys(client.ports or {})) do ports[#ports + 1] = copy(client.ports[side]) end
-            result[#result + 1] = {id = id, online = client.online, computerId = client.computerId, ports = ports}
+            local pending = {}
+            for _, side in ipairs(keys(client.catalogParts or {})) do
+                local part, received = client.catalogParts[side], 0
+                for _ in pairs(part.chunks) do received = received + 1 end
+                pending[#pending + 1] = {side = side, received = received, parts = part.parts}
+            end
+            result[#result + 1] = {id = id, online = client.online, computerId = client.computerId, ports = ports,
+                sensorProtocol = client.sensorProtocol, bootId = client.bootId,
+                catalogError = client.catalogError, catalogRejected = client.catalogRejected or 0, pending = pending}
         end
         return result
     end
@@ -3374,7 +3432,7 @@ function Picker.new(key, current, kind)
     return {kind = "sensor", key = key, chosen = current or {}, filter = kind, stage = 1, page = 1}
 end
 function Picker.render(dialog, width, height, clients)
-    local list, chosen = {}, dialog.chosen
+    local list, chosen, selectedClient, selectedPort = {}, dialog.chosen
     local function compatible(port)
         if port.status ~= "ok" or not port.card then return false end
         if not dialog.filter then return true end
@@ -3387,13 +3445,18 @@ function Picker.render(dialog, width, height, clients)
         for _, client in ipairs(clients) do list[#list + 1] = {label = client.id .. (client.online and " +" or " -"), value = client.id} end
     elseif dialog.stage == 2 then
         for _, client in ipairs(clients) do if client.id == chosen.clientId then
+            selectedClient = client
             for _, port in ipairs(client.ports) do
-                if compatible(port) then list[#list + 1] = {label = port.side .. " / " .. port.cardKind, value = port.side, card = port.card} end
+                local enabled = compatible(port)
+                local detail = port.status ~= "ok" and port.status or port.cardKind
+                list[#list + 1] = {label = port.side .. " / " .. detail .. (not enabled and port.status == "ok" and " (other card)" or ""),
+                    value = port.side, card = port.card, enabled = enabled}
             end
         end end
     elseif dialog.stage == 3 then
         for _, client in ipairs(clients) do if client.id == chosen.clientId then
             for _, port in ipairs(client.ports) do if port.side == chosen.side then
+                selectedPort = port
                 for _, target in ipairs(port.targets) do
                     if not dialog.filter or dialog.filter == "reactor" and (target.kind == "reactor" or target.type == "Unknown")
                         or dialog.filter ~= "reactor" and port.cardKind == dialog.filter then
@@ -3420,9 +3483,21 @@ function Picker.render(dialog, width, height, clients)
         ui.heading(({"Sensor client", "Sensor side", "Select target"})[dialog.stage], 2048)
         for row = 1, slots do
             local item = list[(dialog.page - 1) * slots + row]
-            if item then ui.button(row + 1, item.label, "select", nil, nil, true, nil, nil, item) end
+            if item then ui.button(row + 1, item.label, "select", nil, nil, item.enabled ~= false, nil, nil, item) end
         end
-        if #list == 0 then ui.text(2, dialog.stage == 3 and "No targets yet" or "None available") end
+        if #list == 0 then
+            local message = "No sensor clients yet"
+            if dialog.stage == 2 then
+                message = selectedClient and selectedClient.online and "Waiting for catalog" or "Sensor client offline"
+                if selectedClient and selectedClient.catalogError then
+                    message = "Catalog rejected"
+                    ui.text(3, selectedClient.catalogError)
+                end
+            elseif dialog.stage == 3 then
+                message = selectedPort and #selectedPort.targets > 0 and "No matching targets" or "No targets yet"
+            end
+            ui.text(2, message)
+        end
         if pages > 1 then
             ui.button(height - 1, "< Prev", "prev", 1, math.floor(width / 2), dialog.page > 1)
             ui.button(height - 1, "Next >", "next", math.floor(width / 2) + 1, width, dialog.page < pages, nil, nil, pages)
@@ -3555,7 +3630,7 @@ end
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v16")
+print("SmartHome installer: bundled-v17")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")

@@ -2,11 +2,11 @@
 
 Bundled-v16 adds `inst relay --startup`. A relay computer needs one wireless modem on any side. It carries SmartHome traffic in both directions for sensors, IO clients, monitors and other relays. Relays discover paths automatically; no parent, child or per-device routing configuration is needed.
 
-Chains may contain as many relays as the installation needs: OS → relay → relay → … → device. There is **no fixed software hop-count limit**. Every radio hop must remain within the server's wireless range, in the same dimension, with all participating chunks loaded. Chunk loading across a tall vertical area does not extend modem range. For the user's roughly 120-block vertical gap, one relay about halfway gives two roughly 60-block hops, assuming the server's usable range is at least that far.
+Chains may contain as many relays as the installation needs: OS → relay → relay → … → device. There is **no fixed software hop-count limit**. Every radio hop must remain within the server's wireless range, in the same dimension, with all participating chunks loaded. Chunk loading across a tall vertical area does not extend modem range. The user observed a practical vertical range of about **30 blocks** on this server; use roughly **20–25 blocks per hop** for margin. The 120-block gap therefore needs a chain, rather than assuming the stock range.
 
 ## Install or upgrade
 
-Upload this package's root files to the V2 repository and replace the one installer paste with bundled-v16 `install.lua`. Download a fresh `inst` on each computer being updated. Quit its running program to CraftOS first.
+Upload this package's root files to the V2 repository and replace the one installer paste with bundled-v17 `install.lua`. Download a fresh `inst` on each computer being updated. Quit its running program to CraftOS first. Existing v16 relays need no update for v17's sensor-catalog fix; update the OS and affected sensor roles instead.
 
 On the central OS:
 
