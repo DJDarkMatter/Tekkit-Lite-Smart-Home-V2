@@ -39,7 +39,7 @@ Size limits describe **content** character dimensions. The OS adds a one-charact
 
 An app may attach `styles` to its returned array of text rows. Each style is `{x, y, width, height = 1, fg, bg}` in content coordinates, with numeric CC colour constants. Styles affect foreground/background without replacing text and are clipped to the content area. For example, `return {"Settings", styles = {{x = 1, y = 1, width = width, fg = 1, bg = 2048}}}` paints a blue heading. Old plain-text apps remain supported. Coffee's button helper generates its text, colour rectangle and hit rectangle from the same geometry. `lib_gui.lua` composes and encodes surfaces centrally; app code never draws on a peripheral.
 
-Bundled-v9 adds optional `app.title` (1–64 characters) for launcher, taskbar and title-bar display; the filename/app identifier remains unchanged. **Every future app Settings menu should include UI colour** and use `api.getAppColour(context.appName)` for its heading/primary controls. Call `api.pickColour(context.windowId)` from that setting; the OS handles the palette, validates/saves the accent and returns to the underlying page. No app-specific colour callback or duplicate colour state is needed. Use `api.ui.contrast(accent)` for text on the accent.
+Bundled-v9 adds optional `app.title` (1–64 characters) for launcher, taskbar and title-bar display; the filename/app identifier remains unchanged. **Every future app Settings menu should include UI colour** and use `api.getAppColour(context.appName)` for its heading/primary controls. Call `api.pickColour(context.windowId)` from that setting; the OS handles the palette, validates/saves the accent and returns to the underlying page. No app-specific colour callback or duplicate colour state is needed. Switchboard instead composes `api.ui.palette` with a draft preview and Apply/Cancel, committing its accent through `api.setAppColour`; the shared saved accent remains OS-owned. Use `api.ui.contrast(accent)` for text on the accent.
 
 `api.ui.content(width, height)` supplies `lines`, `hits`, `text`, `heading`, `style`, and `button`; the returned `lines.hits` aliases the same rectangles used for interaction. `api.ui.menu(width, height, title, items, page, backAction, accent)` returns `lines, hits, page, pages`, with pagination only when needed. Items use `{label, action, enabled}`. `api.ui.hit(hit, x, y)` supports both one-row and rectangular controls. These helpers are pure layout functions and do not touch peripherals. Coffee is the reference for responsive action placement and parent navigation.
 
@@ -47,8 +47,8 @@ Hooks must return promptly and must not call `sleep`, `read`, `os.pullEvent`, HT
 
 | API | Result |
 | --- | --- |
-| `api.mapOutput(name, clientId, side, color, initialValue)` | `ok, error`; nil colour means ordinary/digital redstone; otherwise one CC colour bit. Optional boolean sets mapping and initial intent in one checkpoint, useful for safely binding a new wire OFF |
-| `api.setOutput(name, boolean)` | `ok, error`; saves desired state before sending it |
+| `api.mapOutput(name, clientId, side, color, initialValue)` | `ok, error`; nil colour means ordinary/digital redstone; otherwise one CC colour bit. Optional boolean sets initial intent for a previously unused wire; new references to an existing wire adopt its state. Rebinding an unchanged address with an explicit boolean sets shared intent |
+| `api.setOutput(name, boolean)` | `ok, error`; saves the shared desired state for every reference to that wire before sending it |
 | `api.updateOutputs(changes)` | `ok, error`; bundled-v13 atomic batch of mappings, removals and desired values; see below |
 | `api.getOutput(name)` | Desired boolean; false if unknown |
 | `api.getOutputs()` | Sorted array of `{name, clientId, side, color, value, online, confirmed}` |
@@ -102,15 +102,15 @@ OS checkpoints include all app states and window position/size/order/minimized s
 
 ```lua
 api.updateOutputs({
-    {name = "panel_1", clientId = "io_11", side = "left", color = 1, value = false},
+    {name = "panel_1", clientId = "io_11", side = "left", color = 1, initialValue = false},
     {name = "panel_2", value = false}, -- Existing mapping, new desired value.
     {name = "old_panel_3", remove = true},
 })
 ```
 
-A mapping includes `clientId`, `side` and optional bundled `color`; nil colour means Digital. Optional `value` is boolean; omitted values retain previous intent. Value-only operations need existing mappings. Removal clears the mapping and desired value. Empty arrays checkpoint caller app-state edits without changing IO. New mappings are checked against online client capabilities. All final mappings are checked for duplicate wires, including other apps; swapping two routes in one batch is permitted.
+A mapping includes `clientId`, `side` and optional bundled `color`; nil colour means Digital. Multiple logical names may reference one wire. An explicit boolean `value` sets the shared desired state for every reference, even names outside the batch. Mapping-only `initialValue` supplies an initial intent for a previously unused wire; it adopts the current state when linking an existing wire. Do not combine `value` and `initialValue`. If neither is supplied, existing physical state takes precedence, then previous logical intent (default OFF). Contradictory explicit values for one wire in one batch are rejected. Value-only operations need existing mappings. Removal clears only this reference and its named value. Empty arrays checkpoint caller app-state edits without changing IO. New mappings are checked against online client capabilities. Duplicate logical names in one batch remain invalid.
 
-The group and caller's current app state save before hardware sync. Validation/save failure changes no mappings, intent or hardware; apps must restore their own edited state on failure, as Switchboard does. Released sides remain in the snapshots so old wires clear. Each affected client receives one new revision after the checkpoint, with normal cooldown/retry/ACK semantics. This is an atomic central checkpoint, not simultaneous switching across computers. Switchboard uses it for presets, route changes, grid shrink, disconnect/delete and All OFF. Existing `mapOutput`/`setOutput` remain compatible with Coffee.
+The group and caller's current app state save before hardware sync. Validation/save failure changes no mappings, intent or hardware; apps must restore their own edited state on failure, as Switchboard does. Released sides remain in the snapshots so unused old wires clear; shared wires remain driven by their surviving references. Physical snapshot changes receive one new revision per affected client after the checkpoint. Unchanged snapshots retain their revision and confirmation. Normal cooldown/retry/ACK semantics apply. Routine announcements preserve known ACKs; reconnects, restarted announcement counters and changed capabilities invalidate confirmation. Changed capabilities get a fresh revision so clients cannot acknowledge an obsolete snapshot. This is an atomic central checkpoint, not simultaneous switching across computers. Switchboard uses it for presets, route changes, grid shrink, disconnect/delete and All OFF. Existing `mapOutput`/`setOutput` remain compatible with Coffee.
 
 ## Transport
 

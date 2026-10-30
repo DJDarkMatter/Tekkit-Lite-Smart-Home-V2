@@ -130,21 +130,22 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(count, 16, "Large windows display the entire 4x4 board")
     end
 
-    function tests.switchboard_presets_exclude_modems_and_reject_conflicts_with_coffee_atomically()
+    function tests.switchboard_presets_exclude_modems_and_share_existing_coffee_wire_without_resetting_it()
         local t = setup(nil, nil, true)
         local coffee = t.central.server.apps.coffee
         assert(coffee.handleIOSelection("outputAddress", {clientId = "io_11", side = "left", color = 16384},
             t.central.server.state.appStates.coffee, t.api))
+        assert(t.api.setOutput("coffee_harvest", true))
         t.click(t.id, "add"); t.click(t.id, "client", "io_11")
         for _, hit in ipairs(t.content(t.id).hits) do assert(hit.action ~= "side" or hit.value ~= "right") end
         t.click(t.id, "side", "left")
-        local before, revision = serialize(mappings(t)), t.central.server.ioClients.io_11.revision
         t.click(t.id, "create")
-        equal(#t.state.boards, 0); equal(serialize(mappings(t)), before)
-        equal(t.central.server.ioClients.io_11.revision, revision)
-        assert(t.view(t.id).message:find("Wire already mapped", 1, true))
-        t.click(t.id, "messageBack"); t.click(t.id, "sides"); t.click(t.id, "side", "front"); t.click(t.id, "create")
         equal(#t.state.boards, 1)
+        local board = t.state.boards[1]
+        equal(t.api.getOutput(logical(board.buttons[15])), true)
+        equal(t.api.getOutput("coffee_harvest"), true)
+        t.click(t.id, "open", board.id); t.click(t.id, "toggle", board.buttons[15].id)
+        equal(t.api.getOutput("coffee_harvest"), false, "Both names control the same wire")
     end
 
     function tests.switchboard_switches_share_across_monitors_close_normally_and_restore_on_restart()
@@ -375,9 +376,9 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(t.id, "open", b.id); t.click(t.id, "edit"); t.click(t.id, "reorder", -1)
         equal(t.state.boards[1].id, b.id)
         t.click(t.id, "board"); t.click(t.id, "home"); t.click(t.id, "settings")
-        t.click(t.id, "accent"); t.click(t.id, "colour", 8192)
+        t.click(t.id, "accent"); t.click(t.id, "colour", 8192); t.click(t.id, "applyColour")
         for key, value in pairs({background = 4096, border = 256, unbound = 512}) do
-            t.click(t.id, "palette", key); t.click(t.id, "colour", value)
+            t.click(t.id, "palette", key); t.click(t.id, "colour", value); t.click(t.id, "applyColour")
         end
         t.click(t.id, "density"); equal(t.state.settings.density, "compact")
         t.click(t.id, "home"); t.click(t.id, "open", a.id)
@@ -454,11 +455,11 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(checked, 588)
     end
 
-    function tests.switchboard_batch_rejects_invalid_or_duplicate_wires_and_rolls_back_whole_group()
+    function tests.switchboard_batch_rejects_invalid_changes_and_contradictory_values_for_one_shared_wire()
         local t = setup()
         local before = serialize(mappings(t))
         equal(t.api.updateOutputs({{name = "a", clientId = "io_11", side = "left", color = 1, value = true},
-            {name = "b", clientId = "io_11", side = "left", color = 1, value = true}}), false)
+            {name = "b", clientId = "io_11", side = "left", color = 1, value = false}}), false)
         equal(t.api.updateOutputs({{name = "a", clientId = "io_11", side = "right", color = 1}}), false)
         equal(t.api.updateOutputs({{name = "a", clientId = "io_11", side = "left", color = 3}}), false)
         equal(t.api.updateOutputs({[2] = {name = "a", clientId = "io_11", side = "left", color = 1}}), false)
@@ -476,5 +477,145 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.central.disk.failWrite = false
         assert(t.api.updateOutputs({{name = "a", remove = true}, {name = "b", remove = true}}))
         t.bus.advance(1); equal(t.io.bundled.left, 0); equal(t.other.bundled.left, 0)
+    end
+
+    function tests.switchboard_distinct_views_on_two_monitors_share_state_and_remove_only_their_reference()
+        local t = setup()
+        local a = t.preset(t.id)
+        t.click(t.id, "open", a.id); t.click(t.id, "toggle", a.buttons[1].id); t.bus.advance(1)
+        local id2 = t.open("left")
+        local b = t.preset(id2) -- Same client/side, a different saved view.
+        equal(t.api.getOutput(logical(b.buttons[1])), true, "Adding a copy must not turn a live wire OFF")
+        equal(t.io.bundled.left, 1)
+        t.click(id2, "open", b.id); t.click(id2, "toggle", b.buttons[1].id); t.bus.advance(1)
+        equal(t.api.getOutput(logical(a.buttons[1])), false); equal(t.io.bundled.left, 0)
+        t.click(t.id, "toggle", a.buttons[1].id); t.bus.advance(1)
+        equal(t.api.getOutput(logical(b.buttons[1])), true)
+        t.reboot()
+        equal(t.api.getOutput(logical(a.buttons[1])), true)
+        equal(t.api.getOutput(logical(b.buttons[1])), true)
+        t.click(id2, "open", b.id); t.click(id2, "edit"); t.click(id2, "askDelete"); t.click(id2, "confirm")
+        t.bus.advance(1)
+        equal(t.io.bundled.left, 1, "Deleting a duplicate view preserves the remaining live switch")
+        equal(mappings(t)[logical(b.buttons[1])], nil)
+        t.click(t.id, "open", a.id); t.click(t.id, "edit"); t.click(t.id, "askDelete"); t.click(t.id, "confirm")
+        t.bus.advance(1); equal(t.io.bundled.left, 0, "Removing the last reference releases its wire")
+    end
+
+    function tests.switchboard_shared_reroutes_and_failed_saves_preserve_all_other_references()
+        local t = setup()
+        assert(t.api.mapOutput("a", "io_11", "left", 1, true))
+        assert(t.api.mapOutput("b", "io_11", "left", 1, false))
+        assert(t.api.mapOutput("target", "io_12", "left", 4, true))
+        t.bus.advance(1)
+        equal(t.api.getOutput("a"), true); equal(t.api.getOutput("b"), true)
+        local before, revision = serialize(t.central.server.state.outputs), t.central.server.ioClients.io_11.revision
+        t.central.disk.failWrite = true
+        equal(t.api.setOutput("b", false), false)
+        equal(serialize(t.central.server.state.outputs), before)
+        equal(t.central.server.ioClients.io_11.revision, revision)
+        t.central.disk.failWrite = false
+        assert(t.api.mapOutput("a", "io_12", "left", 4, false)); t.bus.advance(1)
+        equal(t.api.getOutput("a"), true, "Linking another existing wire adopts its current state")
+        equal(t.io.bundled.left, 1, "The other old reference remains active")
+        assert(t.api.updateOutputs({{name = "b", remove = true}})); t.bus.advance(1)
+        equal(t.io.bundled.left, 0); equal(t.other.bundled.left, 4)
+        assert(t.api.setOutput("a", false)); t.bus.advance(1)
+        equal(t.api.getOutput("target"), false); equal(t.other.bundled.left, 0)
+    end
+
+    function tests.switchboard_routine_announcements_never_flash_pending_but_real_lost_acks_still_do()
+        local t = setup()
+        local board = t.preset(t.id)
+        t.click(t.id, "open", board.id); t.bus.advance(1)
+        local revision, writes = t.central.server.ioClients.io_11.revision, #t.io.redstoneWrites
+        local original, unconfirmed = t.api.getOutputs, 0
+        t.api.getOutputs = function()
+            local values = original()
+            for _, wire in ipairs(values) do if wire.clientId == "io_11" and not wire.confirmed then unconfirmed = unconfirmed + 1 end end
+            return values
+        end
+        t.bus.drop = function(packet) return packet.sender == t.io and packet.message.type == "ioAck" end
+        t.bus.advance(20) -- Check every intermediate repaint, with health ACKs lost.
+        equal(unconfirmed, 0, "A routine announcement must never revoke known confirmation")
+        equal(t.central.server.ioClients.io_11.revision, revision)
+        equal(#t.io.redstoneWrites, writes)
+        t.click(t.id, "toggle", board.buttons[1].id); t.bus.advance(1)
+        equal(t.io.bundled.left, 1)
+        assert(unconfirmed > 0, "An actual unacknowledged change must still show pending")
+        for _, wire in ipairs(original()) do equal(wire.confirmed, false) end
+        t.bus.drop = nil; t.bus.advance(2)
+        for _, wire in ipairs(original()) do equal(wire.confirmed, true) end
+    end
+
+    function tests.switchboard_actual_io_restart_invalidates_confirmation_until_restore_is_acknowledged()
+        local t = setup()
+        local board = t.preset(t.id)
+        t.click(t.id, "open", board.id); t.click(t.id, "toggle", board.buttons[1].id); t.bus.advance(1)
+        local revision = t.central.server.ioClients.io_11.revision
+        local restarted = t.bus.computer(11, "io", {disk = t.io.disk, modemSide = "right"})
+        t.bus.drop = function(packet) return packet.sender == restarted and packet.message.type == "ioAck" end
+        restarted:start(); t.bus.advance(3)
+        assert(t.central.server.ioClients.io_11.revision > revision)
+        for _, wire in ipairs(t.api.getOutputs()) do equal(wire.confirmed, false) end
+        equal(restarted.bundled.left, 1)
+        t.bus.drop = nil; t.bus.advance(2)
+        for _, wire in ipairs(t.api.getOutputs()) do equal(wire.confirmed, true) end
+    end
+
+    function tests.switchboard_every_colour_setting_previews_before_apply_and_persists_after_reboot()
+        local t = setup()
+        t.click(t.id, "settings")
+        for _, entry in ipairs({{"accent", 1024}, {"background", 4096}, {"border", 4}, {"unbound", 512}, {"active", 16384}, {"inactive", 2}}) do
+            local field, value = entry[1], entry[2]
+            local previous = field == "accent" and t.api.getAppColour("switchboard") or t.state.settings[field]
+            if field == "accent" then t.click(t.id, "accent") else t.click(t.id, "palette", field) end
+            t.click(t.id, "colour", value)
+            equal(field == "accent" and t.api.getAppColour("switchboard") or t.state.settings[field], previous, "Selecting only changes the draft")
+            local lines, found = t.content(t.id), false
+            assert(table.concat(lines, "\n"):find("Preview", 1, true))
+            for _, style in ipairs(lines.styles) do
+                if style.y >= 10 and style.y + style.height - 1 <= t.window(t.id).height - 4 and style.bg == value then found = true end
+            end
+            assert(found, field .. " is absent from the live preview")
+            t.click(t.id, "cancel")
+            equal(field == "accent" and t.api.getAppColour("switchboard") or t.state.settings[field], previous)
+            if field == "accent" then t.click(t.id, "accent") else t.click(t.id, "palette", field) end
+            t.click(t.id, "colour", value); t.click(t.id, "applyColour")
+            equal(field == "accent" and t.api.getAppColour("switchboard") or t.state.settings[field], value)
+        end
+        t.reboot()
+        equal(t.api.getAppColour("switchboard"), 1024)
+        equal(t.state.settings.background, 4096); equal(t.state.settings.border, 4)
+        equal(t.state.settings.unbound, 512); equal(t.state.settings.active, 16384); equal(t.state.settings.inactive, 2)
+        -- The preview fits exactly at 24x15 and disappears below either limit.
+        for _, size in ipairs({{24,15,true}, {24,14,false}, {23,18,false}, {12,6,false}}) do
+            for _, field in ipairs({"accent", "background", "border", "unbound", "active", "inactive"}) do
+                local view = {screen = "palette", colourField = field, colourDraft = 32}
+                local lines = t.app.render(size[1], size[2], t.state, t.api, {appName = "switchboard", view = view})
+                equal(table.concat(lines, "\n"):find("Preview", 1, true) ~= nil, size[3])
+                equal(#lines.hits, 18, "Preview adds no touch targets over the palette")
+                for _, style in ipairs(lines.styles) do
+                    assert(style.x >= 1 and style.y >= 1 and style.x + style.width - 1 <= size[1] and style.y + style.height - 1 <= size[2])
+                end
+            end
+        end
+    end
+
+    function tests.switchboard_v13_colours_migrate_and_failed_palette_saves_leave_original_settings()
+        local t = setup()
+        t.state.settings.active, t.state.settings.inactive, t.state.settings.border = nil, nil, 256
+        assert(t.api.save()); t.reboot()
+        equal(t.state.settings.active, 32); equal(t.state.settings.inactive, 256)
+        t.click(t.id, "settings"); t.click(t.id, "palette", "active"); t.click(t.id, "colour", 16384)
+        t.central.disk.failWrite = true; t.click(t.id, "applyColour")
+        equal(t.state.settings.active, 32)
+        t.central.disk.failWrite = false; t.click(t.id, "messageBack"); t.click(t.id, "applyColour")
+        equal(t.state.settings.active, 16384)
+        t.click(t.id, "accent"); t.click(t.id, "colour", 2)
+        t.central.disk.failWrite = true; t.click(t.id, "applyColour")
+        equal(t.api.getAppColour("switchboard"), 2048)
+        t.central.disk.failWrite = false; t.click(t.id, "messageBack"); t.click(t.id, "cancel")
+        equal(t.api.getAppColour("switchboard"), 2048)
     end
 end

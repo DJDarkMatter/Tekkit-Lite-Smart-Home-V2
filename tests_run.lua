@@ -368,7 +368,10 @@ function tests.bundled_off_preserves_other_colors_and_routes_to_one_client()
     bus.advance(0.7)
     equal(io.digital.front, true)
     local ok = os.server.api.mapOutput("duplicate", "io_11", "front", nil)
-    equal(ok, false)
+    equal(ok, true)
+    equal(os.server.api.getOutput("duplicate"), true, "A second reference adopts the existing wire state")
+    assert(os.server.api.setOutput("duplicate", false)); bus.advance(0.7)
+    equal(os.server.api.getOutput("lamp"), false); equal(io.digital.front, false)
 end
 function tests.packet_loss_retry_ack_and_stale_revision()
     local bus, os, io = pair()
@@ -869,7 +872,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v13", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v14", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()

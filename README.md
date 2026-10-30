@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all thirteen runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v13`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all thirteen runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v14`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -64,7 +64,7 @@ The installer decodes the API's base64 content using Lua 5.1, checks the filenam
 
 These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
 
-Optional apps are [Coffee](documentation_coffee.md) and [Switchboard](documentation_switchboard.md). Run `inst app coffee` or `inst app switchboard` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers Menu → Settings for its IO, durations and UI colour. Switchboard starts when opened from the monitor launcher and offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and app appearance. Install the bundled-v13 **server** role before Switchboard; keep the current app files on GitHub. Coffee code, window resizing, calibration and IO/monitor clients are unchanged in this update. No client update is needed for Switchboard.
+Optional apps are [Coffee](documentation_coffee.md) and [Switchboard](documentation_switchboard.md). Run `inst app coffee` or `inst app switchboard` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers Menu → Settings for its IO, durations and UI colour. Switchboard starts when opened from the monitor launcher and offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and app appearance. Install the bundled-v14 **server** role and current Switchboard for shared routes, steady health status, and previewable colours; keep the current app files on GitHub. Coffee code, window resizing, calibration and IO/monitor clients are unchanged in this update. No client update is needed for Switchboard.
 
 ### Confirm connection and test a wire
 
@@ -85,7 +85,7 @@ set test off
 
 Connect a bundled cable on the IO computer's **left** side, and observe its white channel. `outputs` should show `confirmed` after the IO client acknowledges each state. `inputs io_11` displays bundled masks and ordinary redstone, including zero/false readings. For ordinary redstone, use `map lamp io_11 front digital`.
 
-The OS owns the complete output mask of every mapped cable side: unmapped colours on that side are OFF. Do not drive the same side with a second program. Mapping a logical output to a new side/client clears its previous wires and retains its desired state. A logical output is independent of the IO computer's identity and physical wire address.
+The OS owns the complete output mask of every mapped cable side: unmapped colours on that side are OFF. Do not drive the same side with a second program. Multiple logical names can reference the same physical wire and share its desired state. Toggling any copy updates them all. Adding a reference adopts an existing wire's current state; removing/rerouting a reference clears its old wire only when no references remain. A newly bound, previously unused wire starts with the requested initial intent. A logical output is independent of the IO computer's identity and physical wire address.
 
 The OS console keeps its command prompt on the bottom row and displays messages above it. Connection/status messages preserve your current draft and insertion cursor. Left/Right, Home/End, Backspace/Delete and Up/Down command history are supported. Long input scrolls horizontally. Type `clear` to clear the console messages; apps, outputs, monitor windows and saved state keep running. `quit` saves and returns to CraftOS. App code should use `api.log(...)` for messages instead of writing to the local terminal directly.
 

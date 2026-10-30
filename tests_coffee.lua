@@ -289,8 +289,10 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         assert(central.server.api.mapOutput("other", "io_11", "back", 1))
         local ok = app.handleIOSelection("outputAddress", {clientId = "io_11", side = "back", color = 1},
             state, central.server.api)
-        equal(ok, false)
-        equal(state.outputAddress.side, "bottom", "Conflicting selections preserve existing app wiring")
+        equal(ok, true)
+        equal(state.outputAddress.side, "back", "Shared wire selections are allowed")
+        equal(state.paused, true)
+        equal(central.server.api.getOutput(state.outputName), central.server.api.getOutput("other"))
     end
 
     function tests.coffee_settings_views_are_independent_on_different_monitors()

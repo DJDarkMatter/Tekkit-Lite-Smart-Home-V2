@@ -31,6 +31,30 @@ local function copy(value)
     return result
 end
 
+local function wireGroup(groups, mapping)
+    groups[mapping.clientId] = groups[mapping.clientId] or {}
+    local sides = groups[mapping.clientId]
+    sides[mapping.side] = sides[mapping.side] or {}
+    local key = mapping.color or "digital"
+    sides[mapping.side][key] = sides[mapping.side][key] or {}
+    return sides[mapping.side][key]
+end
+local function currentWires(mappings, values)
+    local groups = {}
+    for name, mapping in pairs(mappings) do
+        local group = wireGroup(groups, mapping)
+        group.value = group.value == true or values[name] == true
+    end
+    return groups
+end
+local function sameSnapshot(a, b)
+    for side, value in pairs(a) do
+        if not b[side] or value.bundled ~= b[side].bundled or value.digital ~= b[side].digital then return false end
+    end
+    for side in pairs(b) do if not a[side] then return false end end
+    return true
+end
+
 local function validState(value)
     for _, key in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
         if value[key] ~= nil and type(value[key]) ~= "table" then return false end
@@ -67,6 +91,10 @@ function Server.new(net, storage, config, logger)
     for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
         if type(state[name]) ~= "table" then state[name] = {} end
     end
+    -- Older/manual saves may contain aliases with separate values. Retain the
+    -- previously powered mask, then keep every reference to each wire in sync.
+    local restoredWires = currentWires(state.outputMap, state.outputs)
+    for name, mapping in pairs(state.outputMap) do state.outputs[name] = wireGroup(restoredWires, mapping).value end
     state.appearance = type(state.appearance) == "table" and state.appearance or {}
     if not colour(state.appearance.backgroundColour) then state.appearance.backgroundColour = 2048 end
     if not colour(state.appearance.windowBorderColour) then state.appearance.windowBorderColour = 128 end
@@ -81,7 +109,7 @@ function Server.new(net, storage, config, logger)
         lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}}
     local api, errors = {}, {}
     server.api = api
-    api.ui, api.log = Gui, log
+    api.ui, api.log, api.sharedOutputs = Gui, log, true
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
         local monitor = server.monitors[id]
@@ -242,51 +270,6 @@ function Server.new(net, storage, config, logger)
         client.lastSent = os.clock()
     end
 
-    function api.mapOutput(name, clientId, side, color, initialValue)
-        if type(name) ~= "string" or not name:match("^[%w_-]+$")
-            or type(clientId) ~= "string" or clientId == "" or not sideSet[side]
-            or (color ~= nil and not colour(color))
-            or (initialValue ~= nil and type(initialValue) ~= "boolean") then return false, "Invalid output mapping" end
-        local client = server.ioClients[clientId]
-        if client and client.online and not client.capabilities[side] then
-            return false, "That side is unavailable (possibly occupied by the modem)"
-        end
-        for other, mapping in pairs(state.outputMap) do
-            if other ~= name and mapping.clientId == clientId and mapping.side == side
-                and mapping.color == color then return false, "Wire already mapped to " .. other end
-        end
-        local previous, oldManaged, previousValue = state.outputMap[name], copy(state.managedSides), state.outputs[name]
-        state.outputMap[name] = {clientId = clientId, side = side, color = color}
-        if initialValue ~= nil then state.outputs[name] = initialValue end
-        state.managedSides[clientId] = state.managedSides[clientId] or {}
-        state.managedSides[clientId][side] = true
-        if previous then
-            state.managedSides[previous.clientId] = state.managedSides[previous.clientId] or {}
-            state.managedSides[previous.clientId][previous.side] = true
-        end
-        local ok, err = server.save()
-        if not ok then
-            state.outputMap[name], state.managedSides, state.outputs[name] = previous, oldManaged, previousValue
-            return false, err
-        end
-        if previous and previous.clientId ~= clientId then server.syncIO(previous.clientId, true) end
-        server.syncIO(clientId, true)
-        return true
-    end
-
-    function api.setOutput(name, value)
-        local mapping = state.outputMap[name]
-        if not mapping then return false, "Unknown output: " .. tostring(name) end
-        if type(value) ~= "boolean" then return false, "Output value must be boolean" end
-        local previous = state.outputs[name]
-        state.outputs[name] = value
-        -- Commit desired state before commanding hardware; failed writes are visible.
-        local ok, err = server.save()
-        if not ok then state.outputs[name] = previous; return false, err end
-        server.syncIO(mapping.clientId, true)
-        return true
-    end
-
     function api.getOutput(name) return state.outputs[name] == true end
     -- One checkpoint for a whole panel, reroute, removal or group action. App
     -- state changed by the caller is included in that same durable checkpoint.
@@ -300,6 +283,7 @@ function Server.new(net, storage, config, logger)
         if count ~= #changes then return false, "Expected a dense array of output changes" end
         local mappings, values, managed = copy(state.outputMap), copy(state.outputs), copy(state.managedSides)
         local seen, affected = {}, {}
+        local oldWires = currentWires(state.outputMap, state.outputs)
         local function remember(mapping)
             if not mapping then return end
             affected[mapping.clientId] = true
@@ -310,8 +294,10 @@ function Server.new(net, storage, config, logger)
             if type(change) ~= "table" or type(change.name) ~= "string" or not change.name:match("^[%w_-]+$")
                 or seen[change.name] then return false, "Invalid or repeated output name" end
             if change.remove ~= nil and type(change.remove) ~= "boolean"
-                or change.clientId == nil and (change.side ~= nil or change.color ~= nil) then return false, "Invalid output change" end
-            seen[change.name] = true
+                or change.clientId == nil and (change.side ~= nil or change.color ~= nil or change.initialValue ~= nil)
+                or change.initialValue ~= nil and type(change.initialValue) ~= "boolean"
+                or change.initialValue ~= nil and change.value ~= nil then return false, "Invalid output change" end
+            seen[change.name] = change
             remember(mappings[change.name])
             if change.remove == true then
                 mappings[change.name], values[change.name] = nil, nil
@@ -330,21 +316,38 @@ function Server.new(net, storage, config, logger)
                 if not mapping then return false, "Unknown output: " .. change.name end
                 if change.value ~= nil then
                     if type(change.value) ~= "boolean" then return false, "Output value must be boolean" end
-                    values[change.name] = change.value
                 end
                 remember(mapping)
             end
         end
-        local wires = {}
+        local wires, groups = {}, {}
         for _, name in ipairs(sortedKeys(mappings)) do
             local mapping = mappings[name]
-            wires[mapping.clientId] = wires[mapping.clientId] or {}
-            local sides = wires[mapping.clientId]
-            sides[mapping.side] = sides[mapping.side] or {}
-            local key = mapping.color or "digital"
-            if sides[mapping.side][key] then return false, "Wire already mapped to " .. sides[mapping.side][key] end
-            sides[mapping.side][key] = name
+            local group = wireGroup(wires, mapping)
+            if not group.names then
+                group.names, group.previous = {}, wireGroup(oldWires, mapping).value
+                groups[#groups + 1] = group
+            end
+            group.names[#group.names + 1] = name
+            local change = seen[name]
+            if change and change.value ~= nil then
+                if group.wanted ~= nil and group.wanted ~= change.value then return false, "Conflicting values for a shared wire" end
+                group.wanted = change.value
+            elseif change and change.initialValue ~= nil and group.previous == nil then
+                if group.initial ~= nil and group.initial ~= change.initialValue then return false, "Conflicting initial values for a shared wire" end
+                group.initial = change.initialValue
+            end
+            group.fallback = group.fallback == true or values[name] == true
         end
+        for _, group in ipairs(groups) do
+            local wanted = group.wanted
+            if wanted == nil then wanted = group.previous end
+            if wanted == nil then wanted = group.initial end
+            if wanted == nil then wanted = group.fallback end
+            for _, name in ipairs(group.names) do values[name] = wanted end
+        end
+        local before = {}
+        for id in pairs(affected) do before[id] = outputSnapshot(id) end
         local previousMap, previousValues, previousManaged = state.outputMap, state.outputs, state.managedSides
         state.outputMap, state.outputs, state.managedSides = mappings, values, managed
         local ok, err = server.save()
@@ -352,8 +355,23 @@ function Server.new(net, storage, config, logger)
             state.outputMap, state.outputs, state.managedSides = previousMap, previousValues, previousManaged
             return false, err
         end
-        for _, id in ipairs(sortedKeys(affected)) do server.syncIO(id, true) end
+        for _, id in ipairs(sortedKeys(affected)) do server.syncIO(id, not sameSnapshot(before[id], outputSnapshot(id))) end
         return true
+    end
+    function api.mapOutput(name, clientId, side, color, initialValue)
+        -- Binding another reference adopts an existing wire's state. An
+        -- explicit rebind to the same address can still set its initial intent.
+        if clientId == nil then return false, "Invalid output mapping" end
+        local old = state.outputMap[name]
+        local change = {name = name, clientId = clientId, side = side, color = color, initialValue = initialValue}
+        if old and old.clientId == clientId and old.side == side and old.color == color then
+            change.initialValue, change.value = nil, initialValue
+        end
+        return api.updateOutputs({change})
+    end
+    function api.setOutput(name, value)
+        if type(value) ~= "boolean" then return false, "Output value must be boolean" end
+        return api.updateOutputs({{name = name, value = value}})
     end
     function api.getOutputs()
         local result = {}
@@ -919,6 +937,7 @@ function Server.new(net, storage, config, logger)
             local client = group[id]
             local reconnect = not client or not client.online or client.computerId ~= message.sender
             client = client or {inputs = {}, values = {}, revision = 0, ackedRevision = -1}
+            local ioReset, ioChanged = false, false
             client.computerId, client.channel, client.lastSeen, client.online = message.sender, replyChannel, now, true
             if reconnect then client.inputs, client.values = {}, {} end
             group[id] = client
@@ -928,6 +947,8 @@ function Server.new(net, storage, config, logger)
                 client.touchProtocol = message.touchProtocol == 1
                 client.lastRender = nil -- Periodic full repaint also recovers a lost frame.
             elseif message.clientType == "io" then
+                ioReset = reconnect or client.announceNonce ~= nil and message.nonce <= client.announceNonce
+                local previousCapabilities = client.capabilities
                 client.capabilities = {}
                 if type(message.capabilities) == "table" then
                     for side, flags in pairs(message.capabilities) do
@@ -936,12 +957,22 @@ function Server.new(net, storage, config, logger)
                         end
                     end
                 end
+                if previousCapabilities then
+                    for side in pairs(sideSet) do
+                        if previousCapabilities[side] ~= client.capabilities[side] then ioChanged = true end
+                    end
+                end
+                ioChanged = ioChanged or ioReset and not reconnect
+                ioReset = ioReset or ioChanged
+                client.announceNonce = message.nonce
             end
             net.toClient(client, {type = "welcome", clientId = id, nonce = message.nonce, serverSession = server.session})
             if reconnect then log(message.clientType .. " connected: " .. id .. " (computer " .. message.sender .. ")") end
             if message.clientType == "io" then
-                client.ackedRevision = -1
-                server.syncIO(id, false)
+                -- Routine announcements resend the same snapshot as a health
+                -- check. They do not revoke an acknowledgement already earned.
+                if ioReset then client.ackedRevision = -1 end
+                server.syncIO(id, ioChanged)
             end
             server.refreshMonitors(false)
         elseif message.type == "inputData" then

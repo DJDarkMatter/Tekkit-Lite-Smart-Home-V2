@@ -69,20 +69,25 @@ local function newButton(state, index, api, route)
 end
 local function mapping(button, value)
     local route = button.route
-    return {name = outputName(button), clientId = route.clientId, side = route.side, color = route.color, value = value}
+    return {name = outputName(button), clientId = route.clientId, side = route.side, color = route.color, initialValue = value}
 end
 
 function app.init(state, api, context)
     ready = false
-    assert(api.updateOutputs and api.ui and api.pickIO and api.pickColour, "Switchboard requires the bundled-v13 OS update")
+    assert(api.sharedOutputs and api.ui and api.pickIO and api.setAppColour, "Switchboard requires the bundled-v14 OS update")
     appName = context and context.appName or "switchboard"
     if state.version == nil then
         state.version, state.boards, state.nextBoardId, state.nextButtonId = 1, {}, 1, 1
         state.settings = {background = 32768, border = 128, unbound = 128, density = "roomy"}
     end
+    if type(state.settings) == "table" then
+        if state.settings.active == nil then state.settings.active = 32 end
+        if state.settings.inactive == nil then state.settings.inactive = state.settings.border end
+    end
     assert(state.version == 1 and type(state.boards) == "table" and #state.boards <= MAX_VIEWS, "Invalid saved switchboard")
     assert(type(state.settings) == "table" and colour(state.settings.background) and colour(state.settings.border)
-        and colour(state.settings.unbound) and (state.settings.density == "roomy" or state.settings.density == "compact"), "Invalid saved switchboard style")
+        and colour(state.settings.unbound) and colour(state.settings.active) and colour(state.settings.inactive)
+        and (state.settings.density == "roomy" or state.settings.density == "compact"), "Invalid saved switchboard style")
     local boardIds, buttonIds, maxBoard, maxButton = {}, {}, 0, 0
     for _, board in ipairs(state.boards) do
         assert(type(board) == "table" and integer(board.id, 1, 2147483000) and not boardIds[board.id]
@@ -165,9 +170,9 @@ local function build(width, height, state, api, context)
         pager(key, page, pages, height - 1)
         footer("Back", back)
     end
-    local function tile(rect, title, status, action, value, fill, statusColour)
+    local function tile(rect, title, status, action, value, fill, statusColour, previewTheme)
         local x, y, w, h = rect.x, rect.y, rect.w, rect.h
-        local border = theme.border
+        local border = previewTheme and previewTheme.border or theme.border
         ui.style(x, y, w, h, api.ui.contrast(border), border)
         local insetX, insetY = w >= 7 and 1 or 0, h >= 5 and 1 or 0
         local innerX, innerY, innerW, innerH = x + insetX, y + insetY, w - 2 * insetX, h - 2 * insetY
@@ -179,7 +184,7 @@ local function build(width, height, state, api, context)
             ui.style(innerX, row, innerW, 1, api.ui.contrast(statusColour or fill), statusColour or fill)
             text(innerX, row, fit(status, innerW), innerW, true)
         end
-        ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + w - 1, y1 = y, y2 = y + h - 1, action = action, value = value}
+        if action then ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + w - 1, y1 = y, y2 = y + h - 1, action = action, value = value} end
     end
     local function grid(count, wantedColumns, wantedRows, key, bottom, minWidth, minHeight, draw)
         local gap = theme.density == "roomy" and width >= 20 and height >= 10 and 1 or 0
@@ -252,7 +257,7 @@ local function build(width, height, state, api, context)
                 local status = not switch.route and "SET IO" or not wire and "ROUTE!" or not wire.online and (wire.value and "ON offline" or "OFF offline")
                     or not wire.confirmed and (wire.value and "ON ..." or "OFF ...") or wire.value and "ON" or "OFF"
                 local statusColour = not switch.route and theme.unbound or (not wire or not wire.online) and 16384
-                    or not wire.confirmed and 2 or wire.value and 32 or theme.border
+                    or not wire.confirmed and 2 or wire.value and theme.active or theme.inactive
                 -- Keep bundled colours identifiable even when the switch is OFF.
                 local fill = switch.route and switch.route.color or theme.unbound
                 tile(rect, switch.name, screen == "switches" and ("#" .. index .. " Edit") or status,
@@ -307,12 +312,32 @@ local function build(width, height, state, api, context)
     elseif screen == "settings" then
         menu("App settings", {{label = "UI colour", action = "accent"}, {label = "Background", action = "palette", value = "background"},
             {label = "Button borders", action = "palette", value = "border"}, {label = "Unwired tiles", action = "palette", value = "unbound"},
+            {label = "Active colour", action = "palette", value = "active"}, {label = "Inactive colour", action = "palette", value = "inactive"},
             {label = "Density: " .. theme.density, action = "density"}, {label = "All switches OFF", action = "askAllOff"}}, "settings", "home")
     elseif screen == "palette" then
-        local lines, hits = api.ui.palette(width, height, theme[view.colourField], "App colour")
-        -- Palette selection changes only this app, never OS window chrome.
-        lines.styles[#lines.styles + 1] = {x = 1, y = 1, width = width, height = 1, fg = api.ui.contrast(accent), bg = accent}
-        return lines, hits
+        local titles = {accent = "UI colour", background = "Background", border = "Button borders", unbound = "Unwired tiles",
+            active = "Active colour", inactive = "Inactive colour"}
+        local draft = view.colourDraft or (view.colourField == "accent" and accent or theme[view.colourField])
+        ui.lines, ui.hits = api.ui.palette(width, height, draft, titles[view.colourField])
+        table.remove(ui.hits) -- Replace the stock Back action with Apply/Cancel.
+        ui.lines.hits = ui.hits
+        local preview = copy(theme)
+        local previewAccent = view.colourField == "accent" and draft or accent
+        if view.colourField ~= "accent" then preview[view.colourField] = draft end
+        ui.style(1, 1, width, 1, api.ui.contrast(previewAccent), previewAccent)
+        if width >= 24 and height >= 15 then
+            local ph = math.min(5, height - 12)
+            local py = height - ph - 1
+            ui.style(1, py - 1, width, ph + 1, api.ui.contrast(preview.background), preview.background)
+            ui.text(py - 1, "Preview", true)
+            ui.style(2, py - 1, width - 2, 1, api.ui.contrast(previewAccent), previewAccent)
+            local half = math.floor((width - 3) / 2)
+            tile({x = 2, y = py, w = half, h = ph}, "Bundled", "ON", nil, nil, 8, preview.active, preview)
+            tile({x = half + 3, y = py, w = width - half - 3, h = ph}, "Digital", "OFF", nil, nil, preview.unbound, preview.inactive, preview)
+        end
+        local half = math.floor(width / 2)
+        button(height, "Apply", "applyColour", nil, 1, half, true, previewAccent)
+        button(height, "Cancel", "cancel", nil, half + 1, width)
     elseif screen == "keyboard" then
         local keyboard = view.keyboard
         local letters = keyboard.bank == "123" and "1234567890-_/.:!?+()@#&=,%*'\"" or "qwertyuiopasdfghjklzxcvbnm"
@@ -361,7 +386,7 @@ local function build(width, height, state, api, context)
         local labels = {delete = "Delete view?", clear = "Disconnect?", shrink = "Remove cells?", off = "All OFF?", allOff = "All OFF?"}
         ui.heading(labels[view.confirm] or "Confirm?", accent)
         ui.text(2, view.confirm == "shrink" and "Last cells removed" or view.confirm == "allOff" and "Every view" or board and board.name or "Switchboard", true)
-        ui.text(3, (view.confirm == "off" or view.confirm == "allOff") and "Saved and sent" or "Old wires OFF", true)
+        ui.text(3, (view.confirm == "off" or view.confirm == "allOff") and "Saved and sent" or width >= 22 and "Unused wires turn OFF" or "Unshared OFF", true)
         button(height - 1, "Confirm", "confirm", nil, nil, nil, true, 16384)
         footer("Cancel", "cancelConfirm")
     elseif screen == "message" then
@@ -523,11 +548,16 @@ function app.handleTouch(x, y, width, height, state, api, context)
             if ok then view.screen, view.keyboard = keyboard.back, nil end
         end
     elseif action == "accent" then
-        local ok, err = api.pickColour(context.windowId)
-        if not ok then notify(view, err) end
-    elseif action == "palette" then view.colourField, view.screen = value, "palette"
-    elseif action == "colour" then
-        if commit(state, api, view, function() state.settings[view.colourField] = value end) then view.screen = "settings" end
+        view.colourField, view.colourDraft, view.screen = "accent", api.getAppColour(context.appName or appName), "palette"
+    elseif action == "palette" then view.colourField, view.colourDraft, view.screen = value, state.settings[value], "palette"
+    elseif action == "colour" then view.colourDraft = value
+    elseif action == "applyColour" then
+        local ok, err
+        if view.colourField == "accent" then
+            ok, err = api.setAppColour(context.appName or appName, view.colourDraft)
+            if not ok then notify(view, "Could not save: " .. tostring(err)) end
+        else ok = commit(state, api, view, function() state.settings[view.colourField] = view.colourDraft end) end
+        if ok then view.screen = "settings" end
     elseif action == "cancel" then view.screen = "settings"
     elseif action == "density" then
         commit(state, api, view, function() state.settings.density = state.settings.density == "roomy" and "compact" or "roomy" end)
