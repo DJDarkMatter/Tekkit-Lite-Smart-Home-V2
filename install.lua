@@ -1,7 +1,7 @@
--- SmartHome OS installer: bundled-v15
+-- SmartHome OS installer: bundled-v16
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
--- Usage: inst server|io|monitor|sensor [--startup]
+-- Usage: inst server|io|monitor|sensor|relay [--startup]
 -- User apps: inst app NAME [--ref BRANCH_OR_COMMIT] (GitHub)
 -- Alternatives: inst app NAME PASTE_ID   or   inst app NAME --file PATH
 -- OS/client installation is offline. Apps are fetched only on request.
@@ -71,10 +71,75 @@ return storage
 local Network = {}
 local sides = {"top", "bottom", "left", "right", "front", "back"}
 local protocol = "SmartHomeOS/1"
+local relayChannel = 65533
 
 local function integer(value, low, high)
     return type(value) == "number" and value == math.floor(value)
         and value >= low and value <= high
+end
+
+local function replyFor(id, serverChannel)
+    local channel = 1000 + (id % 40000)
+    return channel == serverChannel and 41001 or channel
+end
+
+local function validPath(path)
+    if type(path) ~= "table" then return false end
+    local seen, count = {}, 0
+    for index, hop in pairs(path) do
+        count = count + 1
+        if not integer(index, 1, #path) or type(hop) ~= "table"
+            or not integer(hop.computerId, 0, 2147483647)
+            or type(hop.id) ~= "string" or #hop.id < 1 or #hop.id > 64
+            or seen[hop.computerId] then return false end
+        seen[hop.computerId] = true
+    end
+    return count == #path
+end
+
+local function transportValid(packet, reply, config)
+    local t = packet._transport
+    if type(t) ~= "table" or t.version ~= 1 or t.serverChannel ~= config.channel
+        or not integer(t.boot, 1, 2147483647) or not integer(t.sequence, 1, 2147483647)
+        or not integer(t.channel, 1, 65532) or not validPath(t.path) then return false end
+    for _, hop in ipairs(t.path) do if hop.computerId == packet.sender then return false end end
+    if t.channel == config.channel then
+        return reply == replyFor(packet.sender, config.channel)
+            and (config.serverId == nil or packet.recipient == nil or packet.recipient == config.serverId)
+    end
+    return packet.recipient ~= nil and t.channel == replyFor(packet.recipient, config.channel)
+        and reply == config.channel and (config.serverId == nil or packet.sender == config.serverId)
+end
+
+local function packetKey(packet)
+    local t = packet._transport
+    return tostring(packet.sender) .. ":" .. t.boot .. ":" .. t.sequence
+end
+
+-- A bounded FIFO suppresses copies, not retries: every new send has a new ID.
+function Network.newCache(limit, lifetime)
+    local entries, queue, head, tail = {}, {}, 1, 0
+    return function(key, now)
+        while head <= tail and now - queue[head].at >= lifetime do
+            local entry = queue[head]
+            if entries[entry.key] == entry then entries[entry.key] = nil end
+            queue[head], head = nil, head + 1
+        end
+        if entries[key] then return false end
+        if tail - head + 1 >= limit then
+            local entry = queue[head]
+            if entries[entry.key] == entry then entries[entry.key] = nil end
+            queue[head], head = nil, head + 1
+        end
+        local entry = {key = key, at = now}
+        tail, queue[tail + 1], entries[key] = tail + 1, entry, entry
+        if head > limit then
+            local compact = {}
+            for i = head, tail do compact[#compact + 1] = queue[i] end
+            queue, head, tail = compact, 1, #compact
+        end
+        return true
+    end
 end
 
 function Network.new(config, isServer, logger)
@@ -84,11 +149,19 @@ function Network.new(config, isServer, logger)
     assert(integer(config.channel, 1, 65532), "Invalid network channel")
     assert(config.serverId == nil or integer(config.serverId, 0, 2147483647),
         "serverId must be a computer ID")
+    assert(config.relayEnabled == nil or type(config.relayEnabled) == "boolean", "Invalid relayEnabled setting")
+    local storage = dofile("lib_storage.lua")
+    local path = "configs_transport.txt"
+    local boot = storage.config(path, {bootCounter = 0})
+    assert(integer(boot.bootCounter, 0, 2147483646), "Invalid transport boot counter")
+    boot.bootCounter = boot.bootCounter + 1
+    assert(storage.save(path, boot), "Cannot checkpoint network startup")
     local net = {id = os.getComputerID(), config = config, isServer = isServer}
     -- Destination IDs still disambiguate computers if reply channels collide.
-    net.replyChannel = 1000 + (net.id % 40000)
-    if net.replyChannel == config.channel then net.replyChannel = 41001 end
+    net.replyChannel = replyFor(net.id, config.channel)
     net.listenChannel = isServer and config.channel or net.replyChannel
+    net.relayChannel, net.sequence = relayChannel, 0
+    local remember = Network.newCache(4096, 60)
 
     function net.ensureModem()
         if net.modem then return true end
@@ -98,7 +171,10 @@ function Network.new(config, isServer, logger)
                 -- isWireless is absent in some early versions; channels are required.
                 if modem and modem.transmit and modem.open
                     and (not modem.isWireless or modem.isWireless()) then
-                    local ok = pcall(modem.open, net.listenChannel)
+                    local ok = pcall(function()
+                        modem.open(net.listenChannel)
+                        if config.relayEnabled ~= false then modem.open(relayChannel) end
+                    end)
                     if ok then
                         net.modem, net.side = modem, side
                         log("Wireless modem: " .. side .. ", channel " .. net.listenChannel)
@@ -117,12 +193,22 @@ function Network.new(config, isServer, logger)
 
     function net.send(channel, targetId, message)
         if not net.ensureModem() then return false end
+        if net.sequence >= 2147483647 then return false end
+        net.sequence = net.sequence + 1
         local packet = {}
         for key, value in pairs(message) do packet[key] = value end
         packet.protocol, packet.networkId = protocol, config.networkId
         packet.sender, packet.recipient = net.id, targetId
-        local ok = pcall(net.modem.transmit, channel, net.listenChannel,
-            textutils.serialize(packet))
+        packet._route = nil
+        packet._transport = {version = 1, boot = boot.bootCounter, sequence = net.sequence,
+            serverChannel = config.channel, channel = channel, path = {}}
+        local raw = textutils.serialize(packet)
+        -- Leave headroom for routes; forwarding still checks CC's 64 KiB wire cap.
+        if #raw > 61440 then return false end
+        local ok = pcall(function()
+            net.modem.transmit(channel, net.listenChannel, raw)
+            if config.relayEnabled ~= false then net.modem.transmit(relayChannel, net.listenChannel, raw) end
+        end)
         if not ok then net.modem, net.side = nil, nil end
         return ok
     end
@@ -135,23 +221,59 @@ function Network.new(config, isServer, logger)
         return net.send(client.channel, client.computerId, message)
     end
 
-    function net.receive(side, channel, replyChannel, raw)
-        if side ~= net.side or channel ~= net.listenChannel then return nil end
+    local function decode(side, channel, replyChannel, raw)
+        if side ~= net.side then return nil end
         if not integer(replyChannel, 1, 65532) or type(raw) ~= "string"
             or #raw > 65536 then return nil end
         local ok, packet = pcall(textutils.unserialize, raw)
         if not ok or type(packet) ~= "table" or packet.protocol ~= protocol
             or packet.networkId ~= config.networkId
             or not integer(packet.sender, 0, 2147483647)
-            or packet.sender == net.id or type(packet.type) ~= "string" then return nil end
+            or packet.sender == net.id or type(packet.type) ~= "string"
+            or packet.recipient ~= nil and not integer(packet.recipient, 0, 2147483647) then return nil end
+        if packet._transport ~= nil and not transportValid(packet, replyChannel, config) then return nil end
+        if channel == relayChannel then
+            if config.relayEnabled == false or packet._transport == nil then return nil end
+        elseif channel ~= net.listenChannel then return nil end
+        return packet
+    end
+
+    function net.readRelay(side, channel, replyChannel, raw)
+        if channel ~= relayChannel then return nil end
+        return decode(side, channel, replyChannel, raw)
+    end
+
+    function net.forward(packet, replyChannel, id)
+        if not net.ensureModem() then return false end
+        local t = packet._transport
+        if not t then return false end
+        for _, hop in ipairs(t.path) do if hop.computerId == net.id then return false end end
+        t.path[#t.path + 1] = {id = id, computerId = net.id}
+        packet._route = nil
+        local raw = textutils.serialize(packet)
+        if #raw > 65536 then return false end
+        local ok = pcall(net.modem.transmit, relayChannel, replyChannel, raw)
+        if not ok then net.modem, net.side = nil, nil end
+        return ok
+    end
+
+    function net.receive(side, channel, replyChannel, raw)
+        local packet = decode(side, channel, replyChannel, raw)
+        if not packet then return nil end
+        local t = packet._transport
+        if t and t.channel ~= net.listenChannel then return nil end
         if packet.recipient ~= nil and packet.recipient ~= net.id then return nil end
         if not isServer then
             if packet.recipient ~= net.id or replyChannel ~= config.channel then return nil end
             if config.serverId and packet.sender ~= config.serverId then return nil end
         else
-            local expected = 1000 + (packet.sender % 40000)
-            if expected == config.channel then expected = 41001 end
+            local expected = replyFor(packet.sender, config.channel)
             if replyChannel ~= expected then return nil end
+        end
+        if t and not remember(packetKey(packet), os.clock()) then return nil end
+        packet._route = {}
+        for _, hop in ipairs(t and t.path or {}) do
+            packet._route[#packet._route + 1] = {id = hop.id, computerId = hop.computerId}
         end
         return packet
     end
@@ -161,6 +283,7 @@ end
 
 Network.sides = sides
 Network.integer = integer
+Network.packetKey, Network.relayChannel = packetKey, relayChannel
 return Network
 ]=],
     ["lib_console.lua"] = [=[-- Local CC 1.5 terminal: log output above an independently edited bottom line.
@@ -1017,9 +1140,10 @@ function Server.new(net, storage, config, logger)
         if type(name) ~= "string" or not colour(value) then state.appearance.appColours[name] = nil end
     end
     state.appStates["@settings"] = type(state.appStates["@settings"]) == "table" and state.appStates["@settings"] or {}
-    local server = {state = state, monitors = {}, ioClients = {}, sensorClients = {}, apps = {},
+    local server = {state = state, monitors = {}, ioClients = {}, sensorClients = {}, relayClients = {}, apps = {},
         systemApps = {["@settings"] = Settings}, gameTime = "?:??", playerOnline = false,
         lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}}
+    local clientGroups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients, relay = server.relayClients}
     local api, errors = {}, {}
     server.api = api
     api.ui, api.log, api.sharedOutputs = Gui, log, true
@@ -1370,9 +1494,12 @@ function Server.new(net, storage, config, logger)
     end
     function api.getClients()
         local result = {}
-        for kind, group in pairs({io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients}) do
+        for kind, group in pairs(clientGroups) do
             for id, client in pairs(group) do
-                result[#result + 1] = {id = id, type = kind, online = client.online, computerId = client.computerId}
+                local via = {}
+                for _, hop in ipairs(client.route or {}) do via[#via + 1] = hop.id end
+                result[#result + 1] = {id = id, type = kind, online = client.online, computerId = client.computerId,
+                    via = via, hops = #via, route = copy(client.route or {}), forwarded = client.forwarded}
             end
         end
         table.sort(result, function(a, b) return a.id < b.id end)
@@ -1859,7 +1986,7 @@ function Server.new(net, storage, config, logger)
         local id = message.clientId
         if message.type == "announce" then
             if not integer(message.nonce, 1, 2147483647) then return end
-            local groups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients}
+            local groups = clientGroups
             local group = groups[message.clientType]
             if not group then return end
             for _, otherGroup in pairs(groups) do
@@ -1871,11 +1998,15 @@ function Server.new(net, storage, config, logger)
             end
             if message.clientType == "monitor" and (not integer(message.width, 1, 256)
                 or not integer(message.height, 2, 128)) then return end
+            if message.clientType == "relay" and (message.relayProtocol ~= 1
+                or not integer(message.forwarded, 0, 2147483647)) then return end
             local client = group[id]
             local reconnect = not client or not client.online or client.computerId ~= message.sender
             client = client or {inputs = {}, values = {}, revision = 0, ackedRevision = -1}
             local ioReset, ioChanged = false, false
             client.computerId, client.channel, client.lastSeen, client.online = message.sender, replyChannel, now, true
+            client.route = copy(message._route or {})
+            if message.clientType == "relay" then client.forwarded = message.forwarded end
             if reconnect then client.inputs, client.values = {}, {} end
             group[id] = client
             if message.clientType == "monitor" then
@@ -1994,7 +2125,7 @@ function Server.new(net, storage, config, logger)
 
     function server.tick(now)
         net.ensureModem()
-        for _, group in ipairs({server.ioClients, server.monitors, server.sensorClients}) do
+        for _, group in pairs(clientGroups) do
             for id, client in pairs(group) do
                 if client.online and now - client.lastSeen >= config.clientTimeout then
                     client.online = false
@@ -2039,6 +2170,8 @@ function Server.new(net, storage, config, logger)
             for _, item in ipairs(api.getClients()) do
                 lines[#lines + 1] = item.id .. " " .. item.type .. " " .. (item.online and "ONLINE" or "offline")
                     .. " computer=" .. item.computerId
+                    .. (#item.via > 0 and " via=" .. table.concat(item.via, ">") or " direct")
+                    .. (item.type == "relay" and " forwarded=" .. tostring(item.forwarded or 0) or "")
             end
             if #lines == 0 then lines[1] = "No clients connected yet" end
             return lines
@@ -3354,14 +3487,78 @@ while true do
     client.handleEvent(unpack(event))
 end
 ]=],
+    ["lib_relay.lua"] = [=[-- Stateless forwarding never replaces the original endpoint identity/session.
+local Network = dofile("lib_network.lua")
+local Relay = {}
+
+function Relay.new(net, config)
+    assert(net.config.relayEnabled ~= false, "Relay requires relayEnabled in network settings")
+    local client = {connected = false, nonce = 0, forwarded = 0, lastAnnounce = -math.huge}
+    local remember = Network.newCache(4096, 60)
+
+    function client.handleModem(side, channel, replyChannel, raw, now)
+        local message = net.receive(side, channel, replyChannel, raw)
+        if message and message.type == "welcome" and message.clientId == config.clientId
+            and message.nonce == client.nonce and type(message.serverSession) == "string"
+            and (not client.connected or message.sender == client.serverId) then
+            local changed = not client.connected or client.serverSession ~= message.serverSession
+            client.connected, client.serverId, client.serverSession, client.lastServer = true, message.sender, message.serverSession, now
+            if changed then print("Connected to OS computer " .. client.serverId) end
+        end
+        local packet = net.readRelay(side, channel, replyChannel, raw)
+        if not packet or packet.recipient == net.id then return end
+        for _, hop in ipairs(packet._transport.path) do if hop.computerId == net.id then return end end
+        if not remember(Network.packetKey(packet), now) then return end
+        if net.forward(packet, replyChannel, config.clientId) then client.forwarded = client.forwarded + 1 end
+    end
+
+    function client.tick(now)
+        if not net.ensureModem() or client.connected and now - client.lastServer >= config.timeout then
+            if client.connected then print("OS connection lost; waiting for a route") end
+            client.connected = false
+        end
+        if net.modem and now - client.lastAnnounce >= config.announceInterval then
+            client.nonce, client.lastAnnounce = client.nonce + 1, now
+            net.toServer({type = "announce", clientType = "relay", clientId = config.clientId,
+                nonce = client.nonce, relayProtocol = 1, forwarded = math.min(client.forwarded, 2147483647)})
+        end
+    end
+    return client
+end
+
+return Relay
+]=],
+    ["clients_relay_client.lua"] = [=[-- A single wireless modem bridges all updated SmartHome roles in both directions.
+local storage = dofile("lib_storage.lua")
+local Network = dofile("lib_network.lua")
+local Relay = dofile("lib_relay.lua")
+local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
+local config = storage.config("configs_relay.txt", {clientId = "relay_" .. os.getComputerID(), announceInterval = 5, timeout = 15})
+assert(type(config.clientId) == "string" and #config.clientId > 0 and #config.clientId <= 64, "Invalid relay client ID")
+assert(type(config.announceInterval) == "number" and config.announceInterval >= 0.5 and config.announceInterval <= 60,
+    "Invalid relay announce interval")
+assert(type(config.timeout) == "number" and config.timeout > config.announceInterval, "Invalid relay timeout")
+local net = Network.new(networkConfig, false)
+local client = Relay.new(net, config)
+print("Relay client: " .. config.clientId .. " (computer " .. net.id .. ")")
+print("Relay channel " .. net.relayChannel .. "; automatic multi-hop forwarding")
+client.tick(os.clock())
+local timer = os.startTimer(0.1)
+while true do
+    local event, p1, p2, p3, p4 = os.pullEvent()
+    if event == "modem_message" then client.handleModem(p1, p2, p3, p4, os.clock())
+    elseif event == "timer" and p1 == timer then client.tick(os.clock()); timer = os.startTimer(0.1)
+    elseif event == "peripheral" or event == "peripheral_detach" then net.peripheralChanged(p1) end
+end
+]=],
 }
 local args = {...}
 local role, autorun = args[1], false
-local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua"}
-print("SmartHome installer: bundled-v15")
+local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
+print("SmartHome installer: bundled-v16")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
-    print("Usage: inst server|io|monitor|sensor [--startup]")
+    print("Usage: inst server|io|monitor|sensor|relay [--startup]")
     print(appUsage)
     return
 end
@@ -3498,7 +3695,7 @@ if role == "app" then
     files = {path, configPath}
 else
     for index = 2, #args do
-        assert(args[index] == "--startup", "Usage: inst server|io|monitor|sensor [--startup]")
+        assert(args[index] == "--startup", "Usage: inst server|io|monitor|sensor|relay [--startup]")
         autorun = true
     end
     files = {"lib_storage.lua", "lib_network.lua"}
@@ -3514,6 +3711,7 @@ else
         files[#files + 1] = "lib_sensor_picker.lua"
     elseif role == "io" then files[#files + 1] = "lib_io.lua"
     elseif role == "sensor" then files[#files + 1] = "lib_sensor_data.lua"; files[#files + 1] = "lib_sensor.lua"
+    elseif role == "relay" then files[#files + 1] = "lib_relay.lua"
     else files[#files + 1] = "lib_monitor.lua" end
     files[#files + 1] = entry[role]
     if autorun then
@@ -3551,6 +3749,7 @@ if role ~= "app" then
     migrate("configs_network.txt", "Configs/network.txt")
     if role == "io" then migrate("configs_io.txt", "Configs/io.txt")
     elseif role == "sensor" then migrate("configs_sensor.txt", "Configs/sensor.txt")
+    elseif role == "relay" then migrate("configs_relay.txt", "Configs/relay.txt")
     elseif role == "monitor" then migrate("configs_monitor.txt", "Configs/monitor.txt")
     else
         local settings, migrated = migrate("configs_os.txt", "Configs/os.txt")

@@ -63,7 +63,7 @@ Hooks must return promptly and must not call `sleep`, `read`, `os.pullEvent`, HT
 | `api.unwatchSensor(key)` | Removes this subscription; shared addresses continue if other subscriptions exist |
 | `api.getSensorReading(address)` | Structured status, raw `data`, age, error, target info and optional normalized `reactor` reading; never restores saved telemetry as live |
 | `api.getSystem()` | `{gameTime, clockSource, playerOnline}`; Minecraft time is read locally through `os.time()`, with sensor fallback |
-| `api.getClients()` | Sorted array of `{id, type, online, computerId}` |
+| `api.getClients()` | Sorted `{id, type, online, computerId, via, hops, route, forwarded}` records; includes relays and every original endpoint separately. `via` lists relay IDs from device towards OS; `route` also includes their computer IDs; relay-only `forwarded` is its last reported count |
 | `api.openApp(name, monitorId, x, y, width, height)` | `windowId, error`; geometry optional, outer dimensions |
 | `api.closeWindow(windowId)` | `ok, error`; closes only this view and stops a normal app after its last view |
 | `api.placeWindow(windowId, x, y, width, height)` | `ok, error`; nil fields retain the old values |
@@ -137,6 +137,7 @@ The bridge announces `sensorProtocol = 1` and persisted `bootId`; every catalog/
 - Clients announce to the server channel with their own channel as `replyChannel`.
 - Server replies to that channel with its server channel as `replyChannel`.
 - Every message is `textutils.serialize(packet)`; receivers use protected `textutils.unserialize`.
+- Bundled-v16 also opens relay channel `65533` on updated roles by default. `relayEnabled = false` keeps an endpoint direct-only.
 
 Every envelope has these fields:
 
@@ -153,9 +154,19 @@ Every envelope has these fields:
 
 Multiple logical monitor endpoints can share a computer/reply channel. The recipient computer ID and the logical client ID are checked separately. Packets for another household, computer, channel, modem side, pinned OS ID or protocol are discarded. Packets are limited to 65536 encoded characters; monitor resolutions are bounded to 256x128 characters.
 
+### Relay transport (bundled-v16)
+
+Install the OS, participating endpoints and any number of relay computers with the current role installer. Full setup is in [the relay guide](documentation_relay.md). Relays are registered clients of type `relay`; they never replace IO/sensor/monitor identities or app bindings. The `clients` command includes their ONLINE/offline status and every endpoint's observed `via` path. Directly connected old clients remain compatible, but relaying requires the new endpoint network library.
+
+New sends retain the normal envelope and attach `_transport = {version = 1, boot, sequence, serverChannel, channel, path = {}}`. The boot counter is checkpointed once per network start in `configs_transport.txt`, and the sequence increases per send. Each send goes to its normal destination channel and to `65533`; copies share `(sender, boot, sequence)`. `channel` names the original destination, not the relay channel. The physical modem reply channel always remains the original source's reply channel. Existing OS registration/session/recipient checks therefore still see the real endpoint.
+
+Relays forward only valid packets on `65533`, append `{id, computerId}` to `path`, and never forward a packet containing their own computer ID. Repeated IDs and malformed/sparse paths are rejected. There is no fixed hop-count cutoff. A bounded 4096-packet/60-second FIFO additionally suppresses duplicates, and endpoints suppress copies before application/handshake handling. Fresh retries have new IDs. The received `_route` is produced by the network library from validated path records; the OS keeps it only in runtime client metadata. `via` follows the device-to-OS announcement path and updates on later announcements, rather than reserving a route.
+
+Sources allow 61440 encoded characters to leave route headroom; forwards still must fit the modem's 65536-character wire limit. Every radio hop must be within range in loaded chunks of the same dimension. Relay chains add traffic/delay and do not bypass hardware packet limits. The relay's own handshake is independent of forwarding, so forwarding can recover an OS/endpoint before the relay is welcomed. Existing message sessions, revisions, sensor reassembly/freshness and IO cooldown/ACK rules remain in force.
+
 ## Handshake and output state
 
-1. Client sends `announce` with `clientType` (`io`, `monitor`, `sensor`), an increasing `nonce`, and capabilities/resolution.
+1. Client sends `announce` with `clientType` (`io`, `monitor`, `sensor`, `relay`), an increasing `nonce`, and capabilities/resolution. Relays include `relayProtocol = 1` and a bounded integer `forwarded` count.
 2. OS registers the logical endpoint and returns `welcome`, echoing `nonce` and including its persisted per-boot `serverSession`.
 3. Client accepts a welcome only for its current nonce. IO reports all inputs, including zero values.
 4. OS sends the IO client `ioCommand`, with `command = "syncOutputs"`, `serverSession`, integer `revision`, and `outputs` indexed by physical side.

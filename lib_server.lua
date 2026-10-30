@@ -106,9 +106,10 @@ function Server.new(net, storage, config, logger)
         if type(name) ~= "string" or not colour(value) then state.appearance.appColours[name] = nil end
     end
     state.appStates["@settings"] = type(state.appStates["@settings"]) == "table" and state.appStates["@settings"] or {}
-    local server = {state = state, monitors = {}, ioClients = {}, sensorClients = {}, apps = {},
+    local server = {state = state, monitors = {}, ioClients = {}, sensorClients = {}, relayClients = {}, apps = {},
         systemApps = {["@settings"] = Settings}, gameTime = "?:??", playerOnline = false,
         lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}}
+    local clientGroups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients, relay = server.relayClients}
     local api, errors = {}, {}
     server.api = api
     api.ui, api.log, api.sharedOutputs = Gui, log, true
@@ -459,9 +460,12 @@ function Server.new(net, storage, config, logger)
     end
     function api.getClients()
         local result = {}
-        for kind, group in pairs({io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients}) do
+        for kind, group in pairs(clientGroups) do
             for id, client in pairs(group) do
-                result[#result + 1] = {id = id, type = kind, online = client.online, computerId = client.computerId}
+                local via = {}
+                for _, hop in ipairs(client.route or {}) do via[#via + 1] = hop.id end
+                result[#result + 1] = {id = id, type = kind, online = client.online, computerId = client.computerId,
+                    via = via, hops = #via, route = copy(client.route or {}), forwarded = client.forwarded}
             end
         end
         table.sort(result, function(a, b) return a.id < b.id end)
@@ -948,7 +952,7 @@ function Server.new(net, storage, config, logger)
         local id = message.clientId
         if message.type == "announce" then
             if not integer(message.nonce, 1, 2147483647) then return end
-            local groups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients}
+            local groups = clientGroups
             local group = groups[message.clientType]
             if not group then return end
             for _, otherGroup in pairs(groups) do
@@ -960,11 +964,15 @@ function Server.new(net, storage, config, logger)
             end
             if message.clientType == "monitor" and (not integer(message.width, 1, 256)
                 or not integer(message.height, 2, 128)) then return end
+            if message.clientType == "relay" and (message.relayProtocol ~= 1
+                or not integer(message.forwarded, 0, 2147483647)) then return end
             local client = group[id]
             local reconnect = not client or not client.online or client.computerId ~= message.sender
             client = client or {inputs = {}, values = {}, revision = 0, ackedRevision = -1}
             local ioReset, ioChanged = false, false
             client.computerId, client.channel, client.lastSeen, client.online = message.sender, replyChannel, now, true
+            client.route = copy(message._route or {})
+            if message.clientType == "relay" then client.forwarded = message.forwarded end
             if reconnect then client.inputs, client.values = {}, {} end
             group[id] = client
             if message.clientType == "monitor" then
@@ -1083,7 +1091,7 @@ function Server.new(net, storage, config, logger)
 
     function server.tick(now)
         net.ensureModem()
-        for _, group in ipairs({server.ioClients, server.monitors, server.sensorClients}) do
+        for _, group in pairs(clientGroups) do
             for id, client in pairs(group) do
                 if client.online and now - client.lastSeen >= config.clientTimeout then
                     client.online = false
@@ -1128,6 +1136,8 @@ function Server.new(net, storage, config, logger)
             for _, item in ipairs(api.getClients()) do
                 lines[#lines + 1] = item.id .. " " .. item.type .. " " .. (item.online and "ONLINE" or "offline")
                     .. " computer=" .. item.computerId
+                    .. (#item.via > 0 and " via=" .. table.concat(item.via, ">") or " direct")
+                    .. (item.type == "relay" and " forwarded=" .. tostring(item.forwarded or 0) or "")
             end
             if #lines == 0 then lines[1] = "No clients connected yet" end
             return lines

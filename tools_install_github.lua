@@ -1,11 +1,11 @@
--- Optional GitHub bootstrapper: inst server|io|monitor|sensor [ref] [--startup]
+-- Optional GitHub bootstrapper: inst server|io|monitor|sensor|relay [ref] [--startup]
 -- Fetches the flat, self-contained installer from the V2 repository.
 local args = {...}
 local role = args[1]
 local ref = (args[2] ~= "--startup" and args[2]) or "main"
 local autorun = args[2] == "--startup" or args[3] == "--startup"
-if role ~= "server" and role ~= "io" and role ~= "monitor" and role ~= "sensor" then
-    print("Usage: inst server|io|monitor|sensor [ref] [--startup]")
+if role ~= "server" and role ~= "io" and role ~= "monitor" and role ~= "sensor" and role ~= "relay" then
+    print("Usage: inst server|io|monitor|sensor|relay [ref] [--startup]")
     return
 end
 assert(ref:match("^[%w_./-]+$"), "Invalid branch or commit")

@@ -2,7 +2,7 @@
 
 Repository: [DJDarkMatter/Tekkit-Lite-Smart-Home-V2](https://github.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2). Every distributed file lives in the root; see the [complete filename map](documentation_file_map.md).
 
-A central ComputerCraft computer owns apps, saved state and output decisions. Remote computers are reusable IO or monitor bridges. See [the target design](documentation_design.md), [the review](documentation_review.md) and [the app/protocol reference](documentation_api.md).
+A central ComputerCraft computer owns apps, saved state and output decisions. Remote computers are reusable IO, monitor, sensor or wireless relay clients. See [the target design](documentation_design.md), [the review](documentation_review.md) and [the app/protocol reference](documentation_api.md).
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all eighteen runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v15`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v16`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -23,7 +23,7 @@ inst server --startup
 reboot
 ```
 
-Use `inst io --startup`, `inst monitor --startup`, or `inst sensor --startup` on the other computers, with the same paste ID. To replace an older downloaded installer, delete only that copy with `delete inst` before downloading the updated paste again. If it still says `Downloading lib_storage.lua`, the old HTTP installer is still being run.
+Use `inst io --startup`, `inst monitor --startup`, `inst sensor --startup`, or `inst relay --startup` on the other computers, with the same paste ID. To replace an older downloaded installer, delete only that copy with `delete inst` before downloading the updated paste again. If it still says `Downloading lib_storage.lua`, the old HTTP installer is still being run.
 
 The installer checks and stages all selected Lua files before replacing programs, preserves existing configuration and saved data, and backs up replaced program files as `.pre_update`. `--startup` explicitly configures the role's boot script and backs up an existing one. Omit the flag to preserve `startup`.
 
@@ -31,7 +31,7 @@ Downloading the installer itself through Pastebin still requires access to Paste
 
 For an existing installation, run the new `inst server --startup`, `inst io --startup`, or `inst monitor --startup` for that computer's role. The installer imports old `Configs` settings, saved OS/app/window state, and explicitly enabled old `Apps` into the new root filenames. It keeps the old files as recovery copies and never overwrites newer flat data with an old copy. Use `--startup` so the boot script points to the renamed client. Keep the legacy saved files until the migration succeeds.
 
-Filename prefixes replace folders: `apps_coffee.lua`, `clients_io_client.lua`, `lib_server.lua`, `documentation_design.md`, `tools_build_installer.py`, and `tests_run.lua`. App files follow `apps_NAME.lua`; the enabled app name remains `NAME`. `main_os.lua`, `install.lua`, `startup`, and `README.md` retain their established root names. Runtime data is `configs_network.txt`, `configs_io.txt`, `configs_monitor.txt`, `configs_os.txt`, and `configs_os_state.txt`.
+Filename prefixes replace folders: `apps_coffee.lua`, `clients_io_client.lua`, `lib_server.lua`, `documentation_design.md`, `tools_build_installer.py`, and `tests_run.lua`. App files follow `apps_NAME.lua`; the enabled app name remains `NAME`. `main_os.lua`, `install.lua`, `startup`, and `README.md` retain their established root names. Runtime data includes `configs_network.txt`, `configs_transport.txt`, `configs_io.txt`, `configs_monitor.txt`, `configs_sensor.txt`, `configs_relay.txt`, `configs_os.txt`, and `configs_os_state.txt`.
 
 
 For direct file copying instead, preserve these paths:
@@ -43,6 +43,7 @@ For direct file copying instead, preserve these paths:
 | IO client | Also `clients_io_client.lua`, `lib_io.lua` |
 | Monitor client | Also `clients_monitor_client.lua`, `lib_monitor.lua` |
 | Sensor client | Also `clients_sensor_client.lua`, `lib_sensor.lua`, `lib_sensor_data.lua` |
+| Relay client | Also `clients_relay_client.lua`, `lib_relay.lua` |
 
 Both the OS and monitor roles also require `lib_gui.lua` for colour surfaces and drawing.
 
@@ -65,13 +66,15 @@ The installer decodes the API's base64 content using Lua 5.1, checks the filenam
 
 These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
 
-Optional apps are [Coffee](documentation_coffee.md), [Switchboard](documentation_switchboard.md), and [Reactors](documentation_reactors.md). Run `inst app coffee` or `inst app switchboard` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers Menu → Settings for its IO, durations and UI colour. Switchboard starts when opened from the monitor launcher and offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and app appearance. Install the bundled-v14 **server** role and current Switchboard for shared routes, steady health status, and previewable colours; keep the current app files on GitHub. Coffee code, window resizing, calibration and IO/monitor clients are unchanged in this update. No client update is needed for Switchboard. For the new Reactor panel, install the bundled-v15 server role and `inst app reactors`; put `inst sensor --startup` on a sensor computer. See the [sensor setup](documentation_sensors.md) and [reactor guide](documentation_reactors.md), including which remaining-time data depends on the card.
+Optional apps are [Coffee](documentation_coffee.md), [Switchboard](documentation_switchboard.md), and [Reactors](documentation_reactors.md). Use `inst app coffee`, `inst app switchboard` or `inst app reactors` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers IO, durations and colour settings. Switchboard offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and appearance settings. Reactors selects sensor targets and separate IO switches; see [sensor setup](documentation_sensors.md) and [the reactor guide](documentation_reactors.md), including card-dependent remaining-time data. All three app sources stay unchanged in bundled-v16. Update the OS and endpoint roles to use [wireless relays](documentation_relay.md); existing direct clients remain compatible. Apps, calibration and desktop geometry need no changes for relaying.
 
 ### Confirm connection and test a wire
 
 The IO computer prints its ID, e.g. `io_11`, then `Connected to OS computer 10`. The OS prints `io connected: io_11`. Either computer may start first; retries happen every five seconds.
 
 The startup messages show each computer's **listening** channel, so different numbers are expected. The OS listens on `45231`; an IO computer with ID `19621` listens for replies on `20621` and sends requests to `45231`. The OS's computer ID is a separate identifier, not its channel. Keep the shared `channel` setting in `configs_network.txt` the same on both computers.
+
+For distant devices, put wireless relay computers along a path and install `inst relay --startup`. Chains have no fixed software hop-count limit. Update the OS and endpoints that will use relays to bundled-v16; apps stay installed. The OS `clients` list shows every relay and each original device separately, with a `via=relay_...` path. See [relay setup, upgrades and range](documentation_relay.md).
 
 On the **OS console**, substitute the IO computer's actual client ID:
 
@@ -105,7 +108,7 @@ The first run creates `configs_network.txt`:
 }
 ```
 
-Choose your own `networkId` and use the same value and channel on all your computers. On clients, add `serverId = 10` with your central computer's actual ID if you want to pin them to it. Restart the program after editing settings.
+Choose your own `networkId` and use the same value and channel on all your computers. On clients, add `serverId = 10` with your central computer's actual ID if you want to pin them to it. Restart the program after editing settings. Relaying is enabled by default; `relayEnabled = false` selects direct-only operation on an endpoint. Keep automatically maintained `configs_transport.txt` so packet IDs remain distinct across restarts.
 
 IO settings are in `configs_io.txt`: `clientId`, enabled `sides`, `announceInterval`, `timeout`, and `safeOff`. By default the client clears outputs at startup and switches them OFF if it loses the OS for 15 seconds. When it reconnects, the OS restores the saved desired state. `safeOff = false` keeps the last commanded outputs during a network timeout instead; startup still clears them. An enabled side is a side the client may read and drive.
 
@@ -181,4 +184,4 @@ From the repository root:
 lua5.1 tests_run.lua
 ```
 
-The tests include installing and booting all three roles with HTTP absent, plus exercising the optional GitHub installer. App-install tests cover GitHub downloads that yield like CC 1.5 HTTP, optional older response handles without status methods, branch/commit selection, failed/invalid responses, preservation of saved progress, and deferred execution until boot. They run the actual entry points as separate computers with independent disks and event queues, using string-only virtual modems. Every simulated output write enforces a shared 0.5-second per-side cooldown, including unchanged values and cooldowns across program restarts. They cover startup order, two clients sharing a reply channel, dropped commands/handshakes/acks/frames, stale and queued commands, OS and client restarts, safe-off, modem relocation, remapping, zero inputs, monitor touches/layout restoration, corrupt/interrupted checkpoints, failed saves, malformed packets, sensor isolation and background timing. The root `github_workflows_lua.yml` is an optional GitHub Actions template; it is inactive in this strictly flat repository because GitHub requires workflows in `.github/workflows/`. The root build and test commands above work locally.
+The tests include installing and booting all five roles with HTTP absent, plus exercising the optional GitHub installer. App-install tests cover GitHub downloads that yield like CC 1.5 HTTP, optional older response handles without status methods, branch/commit selection, failed/invalid responses, preservation of saved progress, and deferred execution until boot. They run the actual entry points as separate computers with independent disks and event queues, using string-only virtual modems and three-dimensional radio distance. Every simulated output write enforces a shared 0.5-second per-side cooldown, including unchanged values and cooldowns across program restarts. They cover startup order, reply-channel collisions, dropped traffic, sessions/restarts, safe-off, modem relocation, remapping, zero inputs, touch/layout restoration, interrupted checkpoints, failed saves, malformed packets, sensor isolation and background timing. Relay coverage includes the 120-block vertical gap, 16/17-relay chains, overlapping paths without repeated actions, independent client listings, alternate routes, outages/recovery, large packets and legacy direct compatibility. The root `github_workflows_lua.yml` is an optional workflow template; GitHub requires workflows in `.github/workflows/`, so run the root test/build commands locally for this flat package.

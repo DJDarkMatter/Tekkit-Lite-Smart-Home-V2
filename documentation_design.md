@@ -42,6 +42,10 @@ The implemented [generic sensor role](documentation_sensors.md) discovers all at
 
 Sensor clients forward raw readings to the OS, which converts them to system state (e.g. "playerOnline" boolean, "gameTime" string).
 
+### Relay Clients, implemented in bundled-v16
+
+[Wireless relay computers](documentation_relay.md) extend communication for all endpoint types. An installation can chain OS → relay → relay → … → endpoint with no fixed software hop-count cutoff. Each radio hop must be within range and all involved chunks must stay loaded. Packet IDs and visited-relay paths suppress copies and prevent cycles. The OS lists relays as their own clients and retains every relayed sensor, IO client and monitor as a separate selectable endpoint, including an observed `via` path. Relaying preserves original IDs, sessions, acknowledgements and output semantics. Paths recover automatically without app rebinding. Updated endpoints retain legacy direct communication; install the new network library on endpoints that will use relays.
+
 ## 3. Component Roles
 
 ### Central OS Computer

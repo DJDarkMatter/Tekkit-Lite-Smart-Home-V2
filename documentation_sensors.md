@@ -12,9 +12,11 @@ inst sensor --startup
 reboot
 ```
 
-Attach a wireless modem and an OpenCCSensors Sensor Peripheral on any free side. Put the appropriate card in the peripheral. Reactors need the IC2/IndustrialCraft card and must be within its detection range. Additional sensor peripherals/cards can share this computer on other sides. A single suitable card can detect several reactors.
+Attach a wireless modem and an OpenCCSensors Sensor Peripheral on any free side. Reactors need OpenCCSensors' **IndustrialCraft 2 Sensor Card**, not Nuclear Control's **Reactor Sensor Location Card**, and must be within its detection range. Additional sensor peripherals/cards can share this computer on other sides. A single suitable card can detect several reactors.
 
 Use the same `networkId`/`channel` in `configs_network.txt` as the central OS. Optional `serverId` pins the OS computer. The client prints its logical ID, modem location/channel, detected sensor sides, card names, target counts and connection status. Existing monitor/IO programs do not need updating. Update the **server** role to v15 before using the new sensor picker/app.
+
+Bundled-v16 adds [wireless relays](documentation_relay.md). For a distant sensor, update the OS and sensor role to v16, then put `inst relay --startup` computers along a path. Chains have no fixed software hop-count limit. The sensor stays separately listed in OS `clients` and remains selectable by its original ID. Other endpoints need the new network library only when they will also use relays; app code and sensor-card adapters are unchanged. Preserve automatically maintained `configs_transport.txt` on every updated role.
 
 ## Configuration
 

@@ -2,6 +2,9 @@
 -- Executes the real entry points in separate Lua 5.1 environments. The virtual
 -- modem accepts strings only; computers have independent disks and event queues.
 local hostLoadfile, hostPrint = loadfile, print
+local roleEntries = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua",
+    sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
+local roleNames = {"server", "io", "monitor", "sensor", "relay"}
 local function equal(actual, expected, message)
     assert(actual == expected, (message or "Values differ") .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
 end
@@ -83,6 +86,9 @@ local function newBus()
             disk = options.disk or {files = {}, dirs = {[""] = true}}, bundled = {}, digital = {},
             bundledInputs = {}, digitalInputs = {}, monitors = options.monitors or {}, started = bus.now,
             sensors = options.sensors or {}, sensorCalls = {}, sensorDevices = {},
+            position = options.position or previous and previous.position or {0, 0, 0},
+            range = options.range or previous and previous.range or 64,
+            dimension = options.dimension or previous and previous.dimension or "overworld",
             appSources = options.apps or previous and previous.appSources or {}, timerId = 0, active = true,
             redstoneWrites = {}, lastRedstoneWrite = previous and previous.lastRedstoneWrite or {}}
         for _, side in ipairs({"top", "bottom", "left", "right", "front", "back"}) do
@@ -227,9 +233,26 @@ local function newBus()
                 assert(#raw <= 65536, "Oversized packet")
                 local packet = {sender = comp, channel = channel, reply = reply, raw = raw, message = unserialize(raw)}
                 bus.wire[#bus.wire + 1] = packet
-                if bus.drop and bus.drop(packet) then return end
+                if bus.dropPhysical and bus.dropPhysical(packet) then return end
+                if bus.drop then
+                    -- Existing loss tests drop a logical send, including both
+                    -- physical copies. Per-channel loss uses dropPhysical.
+                    if bus.lossFunction ~= bus.drop then bus.lossFunction, bus.logicalLoss = bus.drop, {} end
+                    local t = packet.message and packet.message._transport
+                    local key = t and comp.id .. ":" .. packet.message.sender .. ":" .. t.boot .. ":" .. t.sequence
+                    local dropped = key and bus.logicalLoss[key]
+                    if dropped == nil then
+                        dropped = bus.drop(packet) == true
+                        if key then bus.logicalLoss[key] = dropped end
+                    end
+                    if dropped then return end
+                end
                 for _, receiver in pairs(bus.computers) do
-                    if receiver ~= comp and receiver.active and receiver.open[channel] then
+                    local distance = 0
+                    for axis = 1, 3 do distance = distance + (receiver.position[axis] - comp.position[axis]) ^ 2 end
+                    if receiver ~= comp and receiver.active and receiver.open[channel]
+                        and receiver.dimension == comp.dimension and distance <= math.max(receiver.range, comp.range) ^ 2
+                        and (not bus.canHear or bus.canHear(comp, receiver, packet)) then
                         bus.queue(receiver, {"modem_message", receiver.modemSide, channel, reply, raw, 12})
                     end
                 end
@@ -282,7 +305,7 @@ local function newBus()
         end
         env.dofile = function(path)
             local value = assert(env.loadfile(path))()
-            if path == "lib_server.lua" or path == "lib_io.lua" or path == "lib_monitor.lua" or path == "lib_console.lua" or path == "lib_sensor.lua" then
+            if path == "lib_server.lua" or path == "lib_io.lua" or path == "lib_monitor.lua" or path == "lib_console.lua" or path == "lib_sensor.lua" or path == "lib_relay.lua" then
                 local constructor = value.new
                 value.new = function(...)
                     local object = constructor(...)
@@ -308,7 +331,7 @@ local function newBus()
             disk.files["configs_os.txt"] = serialize(settings)
         end
         function comp.start()
-            local path = ({server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua"})[role]
+            local path = roleEntries[role]
             comp.thread = coroutine.create(function() env.dofile(path) end)
             local ok, err = coroutine.resume(comp.thread)
             assert(ok, "Boot computer " .. id .. ": " .. tostring(err))
@@ -413,7 +436,8 @@ function tests.packet_loss_retry_ack_and_stale_revision()
     bus.advance(2)
     equal(io.bundled.left, 1)
     equal(os.server.api.getOutputs()[1].confirmed, true)
-    local old = bus.wire[#bus.wire - 1]
+    local old
+    for _, packet in ipairs(bus.wire) do if packet.message.type == "ioCommand" then old = packet end end
     equal(old.message.type, "ioCommand")
     assert(os.server.api.setOutput("test", false)); bus.pump()
     bus.advance(0.7)
@@ -768,7 +792,7 @@ function tests.idt_fix_new_server_session_discards_an_old_pending_command()
     equal(os.server.api.getOutputs()[1].confirmed, true)
 end
 function tests.installer_installs_every_role_from_downloaded_files_and_keeps_configs()
-    for _, role in ipairs({"server", "io", "monitor"}) do
+    for _, role in ipairs(roleNames) do
         local bus = newBus()
         local comp = bus.computer(10, role)
         local existing = '{networkId="saved-home",channel=45231}'
@@ -782,7 +806,7 @@ function tests.installer_installs_every_role_from_downloaded_files_and_keeps_con
             local contents = file:read("*a"); file:close()
             return {readAll = function() return contents end, close = function() end}
         end}
-        local entry = ({server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"})[role]
+        local entry = roleEntries[role]
         comp.disk.files[entry] = "-- previous program"
         assert(comp.env.loadfile("tools_install_github.lua"))(role, "main")
         for path in pairs(comp.disk.files) do assert(not path:match("^apps_"), "Installer downloaded an app") end
@@ -820,7 +844,7 @@ function tests.installer_download_failure_does_not_replace_existing_programs()
     equal(comp.disk.files.startup, "-- keep previous startup")
 end
 function tests.installer_uses_only_the_v2_root_bundle_for_every_role()
-    for _, role in ipairs({"server", "io", "monitor"}) do
+    for _, role in ipairs(roleNames) do
         local bus = newBus()
         local comp = bus.computer(10, role)
         equal(comp.env.fs.getDir, nil, "Legacy CC must not expose fs.getDir")
@@ -848,7 +872,7 @@ function tests.installer_uses_only_the_v2_root_bundle_for_every_role()
     end
 end
 function tests.installer_startup_flag_selects_role_and_preserves_previous_boot_script()
-    for _, role in ipairs({"server", "io", "monitor"}) do
+    for _, role in ipairs(roleNames) do
         local bus = newBus()
         local comp = bus.computer(10, role)
         comp.disk.files.startup = "-- original startup"
@@ -867,11 +891,11 @@ function tests.installer_startup_flag_selects_role_and_preserves_previous_boot_s
         local chunk = assert(loadstring(comp.disk.files.startup))
         setfenv(chunk, comp.env); chunk()
         equal(selectedDir, "/")
-        equal(selectedProgram, ({server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"})[role])
+        equal(selectedProgram, roleEntries[role])
     end
 end
 function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
-    for _, role in ipairs({"server", "io", "monitor"}) do
+    for _, role in ipairs(roleNames) do
         local bus = newBus()
         local comp = bus.computer(10, role)
         comp.env.http = nil
@@ -880,7 +904,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp.disk.dirs.Configs = true
         comp.disk.files["configs_network.txt"] = '{networkId="saved-home",channel=45231}'
         comp.disk.files.startup = "-- old startup"
-        local expectedProgram = ({server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"})[role]
+        local expectedProgram = roleEntries[role]
         comp.disk.files[expectedProgram] = "-- old program"
         assert(comp.env.loadfile("install.lua"))(role, "--startup")
         for path in pairs(comp.disk.files) do assert(not path:match("^apps_"), "Installer bundled an app") end
@@ -899,7 +923,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v15", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v16", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -1270,7 +1294,7 @@ function tests.app_installer_failures_preserve_existing_code_and_settings()
     end
 end
 function tests.flat_installer_boots_without_creating_any_directories()
-    for _, role in ipairs({"server", "io", "monitor"}) do
+    for _, role in ipairs(roleNames) do
         local bus = newBus()
         local comp = bus.computer(10, role)
         comp.env.shell = {dir = function() return "" end}
@@ -1363,6 +1387,7 @@ assert(hostLoadfile("tests_desktop.lua"))()(tests, newBus, monitor, serialize, u
 assert(hostLoadfile("tests_appearance.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_switchboard.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_sensors.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
+assert(hostLoadfile("tests_relay.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_console.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 local names, failures = {}, {}
 for name in pairs(tests) do names[#names + 1] = name end
