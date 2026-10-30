@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v18`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v19`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -79,6 +79,10 @@ For distant devices, put wireless relay computers along a path and install `inst
 Bundled-v17 fixes a sensor-catalog failure where one empty machine name could make the OS reject the whole side after a sensor connected. Native OCS `Name`/`RawName` fields are retained, including raw reactor identities when display names are localized. Update the OS and sensor roles; relays and apps need no update. The sensor picker shows waiting/rejection information and known incompatible sides as disabled. Run `sensors` or `sensors sensor_ID` on the OS to inspect received sides, target/reactor counts, missing catalog parts and the last validation error.
 
 Bundled-v18 updates the server role and optional Reactors app: output buttons read ON/OFF; detail views show heat headroom, supplied energy counters and source information, with two columns on wide windows and paged/wrapped fields on small ones. Raw readings expand nested fields. More explicit time aliases are recognized, but the stock old IC2 card supplies no fuel lifetime/inventory, even on the core, so Remaining stays unavailable for that card. No chamber targets are added automatically. Upload the new app, run `inst server --startup`, `inst app reactors`, then reboot the OS. Other roles need no update. Monitor scale stays at its configured value (default 0.5); see [scale and individual element sizing](documentation_desktop.md).
+
+Bundled-v19 fixes the OS crash `lib_sensor_server.lua:199: invalid key to 'next'` after closing Reactors. Sensor cleanup now traverses saved key lists before deleting readings, expired subscriptions or incomplete packets. With a fresh v19 installer, run `inst server --startup` and reboot only the central OS. Existing apps and clients need no update; saved settings, bindings and output intent are retained. The full package includes every root file.
+
+Version 20 is an app-only Switchboard update. Each switch's editor adds a Colour palette with an optional saved tile colour and Auto to restore the routed wire colour. Actual routing remains visible, and appearance edits leave routing and output state alone. Upload `apps_switchboard.lua` to GitHub, quit the central OS, run `inst app switchboard` with your existing installer, then reboot. No installer paste replacement or client/core update is needed. The full v20 package includes every root file and the unchanged bundled-v19 installer.
 
 On the **OS console**, substitute the IO computer's actual client ID:
 

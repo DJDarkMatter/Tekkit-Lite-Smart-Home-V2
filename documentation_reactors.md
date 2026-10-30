@@ -4,7 +4,7 @@
 
 ## Install and add reactors
 
-Upload the current package files to the V2 repository root. Replace your installer paste with bundled-v18 `install.lua`, download a fresh `inst`, and quit the central OS to CraftOS:
+Upload the current package files to the V2 repository root. Replace your installer paste with bundled-v19 `install.lua`, download a fresh `inst`, and quit the central OS to CraftOS:
 
 ```text
 cd /
@@ -68,5 +68,7 @@ Home → **Settings** offers **UI colour**, **Panel colour** and **About reading
 Names, sensor bindings, output bindings, panel colour and stable IDs are saved in `appStates.reactors` within `configs_os_state.txt`. Desired output state remains in the OS's shared output map. Important edits and commands save before IO; failed saves roll back. Geometry is restored by the OS. Current readings are runtime data and must arrive again after restart.
 
 Reactors is a normal app: it runs while at least one window exists, including minimized/covered windows. Closing its last window releases its sensor subscriptions and stops detailed polling, while saved manual switch intent stays applied by the OS. Reopening/restoring a window subscribes again. No background alarm/history service or automatic reactor control is introduced.
+
+Bundled-v19 fixes the OS-side cleanup crash seen after closing the last window (`lib_sensor_server.lua:199: invalid key to 'next'`). If Reactors is already installed, update only the server role using a fresh v19 installer and reboot the OS; do not reinstall the app or clients for this fix. Closing one of several windows continues to leave the app and its subscriptions running.
 
 Tests use real app, server, sensor, IO and monitor entry points under simulated ComputerCraft Lua 5.1, including old asynchronous OCS replies. In-game values, sensor range, physical wiring and rendering still need verification on the user's server.

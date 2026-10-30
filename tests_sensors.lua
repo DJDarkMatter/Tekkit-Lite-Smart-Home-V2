@@ -3,7 +3,8 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     local function setup(options)
         options = options or {}
         local bus = newBus()
-        local central = bus.computer(10, "server", {apps = {["apps_reactors.lua"] = source}}):start()
+        local central = bus.computer(10, "server", {apps = {["apps_reactors.lua"] = source},
+            strictSensorIteration = options.strictSensorIteration}):start()
         local ioClient = bus.computer(11, "io", {modemSide = "right"}):start()
         local machine = {card = "openccsensors.item.industrialcraftsensor", async = options.async, yielding = options.yielding,
             targets = {["1,0,0"] = {Name = "Nuclear Reactor", RawName = "ic2.blockreactor"},
@@ -298,6 +299,73 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         for i = before + 1, #t.sensor.sensorCalls do assert(t.sensor.sensorCalls[i].method ~= "getTargetDetails") end
         t.id = t.open(); t.bus.advance(3)
         equal(t.api.getSensorReading(t.state.reactors[1].sensor).status, "ok")
+    end
+    function tests.sensor_legacy_iteration_survives_last_monitor_close_and_repeated_reopening()
+        local t = setup({strictSensorIteration = true})
+        local a, b = t.add(t.id), t.add(t.id, "-1,0,0")
+        t.route(t.id, b, 1); t.click(t.id, "toggle", b.id); t.bus.advance(2)
+        local other = t.open("left")
+        local function close(id)
+            t.paint()
+            local win, controls = t.window(id), dofile("lib_desktop.lua").controls(t.window(id))
+            for _, control in ipairs(controls) do
+                if control.action == "close" then
+                    t.bus.queue(t.display, {"monitor_touch", win.monitorId:match(":([^:]+)$"), control.x1 + 1, win.y})
+                    t.bus.pump(); return
+                end
+            end
+            error("Missing window close control")
+        end
+        close(t.id); t.bus.advance(2)
+        equal(t.central.server.running.reactors, true); equal(#t.sensor.client.watches, 2)
+        equal(t.api.getSensorReading(a.sensor).status, "ok")
+        for _ = 1, 5 do
+            close(other); t.bus.advance(2)
+            equal(t.central.active, true); equal(t.central.server.running.reactors, nil)
+            equal(#t.sensor.client.watches, 0); equal(t.io.bundled.left, 1)
+            local before = #t.sensor.sensorCalls
+            t.bus.advance(2)
+            for i = before + 1, #t.sensor.sensorCalls do assert(t.sensor.sensorCalls[i].method ~= "getTargetDetails") end
+            other = t.open("left"); t.bus.advance(3)
+            equal(t.api.getSensorReading(a.sensor).status, "ok")
+            equal(t.api.getSensorReading(b.sensor).status, "ok")
+        end
+    end
+    function tests.sensor_legacy_iteration_keeps_other_reactor_readings_when_one_entry_is_deleted()
+        local t = setup({strictSensorIteration = true})
+        local a, b = t.add(t.id), t.add(t.id, "-1,0,0")
+        t.bus.advance(2)
+        equal(t.api.getSensorReading(a.sensor).status, "ok"); equal(t.api.getSensorReading(b.sensor).status, "ok")
+        t.click(t.id, "home"); t.click(t.id, "open", a.id); t.click(t.id, "edit")
+        t.click(t.id, "delete"); t.click(t.id, "confirmDelete"); t.bus.advance(2)
+        equal(#t.state.reactors, 1); equal(#t.sensor.client.watches, 1)
+        equal(t.api.getSensorReading(b.sensor).status, "ok")
+        t.machine.details[b.sensor.target].Heat = 42; t.bus.advance(2)
+        equal(t.api.getSensorReading(b.sensor).reactor.heat, 42)
+    end
+    function tests.sensor_legacy_iteration_expires_subscriptions_and_partial_packets_without_dropping_live_entries()
+        local bus = newBus()
+        local comp = bus.computer(10, "server", {strictSensorIteration = true})
+        local sent, client = {}, {id = "sensor_14", online = true, sensorProtocol = 1, bootId = "test",
+            ports = {}, readings = {top = {old_a = {}, old_b = {}, live = {}}},
+            sampleParts = {top = {old_a = {time = 0}, old_b = {time = 0}, live = {time = 10}}},
+            catalogParts = {top = {time = 0}, bottom = {time = 0}, left = {time = 10}}}
+        local hub = assert(comp.env.loadfile("lib_sensor_server.lua"))().new({toClient = function(_, message)
+            sent[#sent + 1] = message
+        end}, {sensor_14 = client}, "session")
+        for _, target in ipairs({"old_a", "old_b", "live"}) do
+            assert(hub.watch(target, {clientId = "sensor_14", side = "top", target = target}))
+        end
+        hub.watches.live.used = 10
+        bus.now = 11
+        hub.tick(11)
+        equal(hub.watches.old_a, nil); equal(hub.watches.old_b, nil); assert(hub.watches.live)
+        equal(client.readings.top.old_a, nil); equal(client.readings.top.old_b, nil); assert(client.readings.top.live)
+        equal(client.sampleParts.top.old_a, nil); equal(client.sampleParts.top.old_b, nil); assert(client.sampleParts.top.live)
+        equal(client.catalogParts.top, nil); equal(client.catalogParts.bottom, nil); assert(client.catalogParts.left)
+        equal(#sent, 1); equal(#sent[1].watches, 1); equal(sent[1].watches[1].target, "live")
+        hub.unwatch("live"); bus.now = 12; hub.tick(12)
+        equal(next(client.readings.top), nil); equal(#sent[2].watches, 0)
     end
     function tests.sensor_compact_unchanged_heartbeats_cannot_renew_a_dropped_changed_snapshot()
         local t = setup()

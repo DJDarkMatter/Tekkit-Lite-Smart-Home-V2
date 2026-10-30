@@ -12,7 +12,8 @@ local function copy(value)
     return result
 end
 local function restore(state, old)
-    for key in pairs(state) do state[key] = nil end
+    local keys = {}; for key in pairs(state) do keys[#keys + 1] = key end
+    for _, key in ipairs(keys) do state[key] = nil end
     for key, value in pairs(old) do state[key] = value end
 end
 local function integer(value, low, high)
@@ -43,6 +44,9 @@ end
 local function wireFor(button, all)
     local wire = all[outputName(button)]
     if button.route and sameRoute(button.route, wire) then return wire end
+end
+local function buttonColour(button, theme)
+    return button.displayColour or button.route and button.route.color or theme.unbound
 end
 local function notify(view, text, back)
     view.message, view.messageBack, view.screen = tostring(text), back or view.screen or "home", "message"
@@ -96,7 +100,8 @@ function app.init(state, api, context)
         boardIds[board.id], maxBoard = true, math.max(maxBoard, board.id)
         for _, button in ipairs(board.buttons) do
             assert(type(button) == "table" and integer(button.id, 1, 2147483000) and not buttonIds[button.id]
-                and name(button.name, 24) and type(button.customName) == "boolean", "Invalid saved switch")
+                and name(button.name, 24) and type(button.customName) == "boolean"
+                and (button.displayColour == nil or colour(button.displayColour)), "Invalid saved switch")
             local route = button.route
             assert(route == nil or type(route) == "table" and type(route.clientId) == "string" and route.clientId ~= ""
                 and sideSet[route.side] and (route.color == nil or colour(route.color)), "Invalid saved routing")
@@ -118,6 +123,9 @@ local function build(width, height, state, api, context)
     if needsBoard[screen] and not board and not (screen == "confirm" and view.confirm == "allOff") then screen, view.screen = "home", "home" end
     if screen == "grid" and view.gridDraft.target ~= "new" and not board then screen, view.screen = "home", "home" end
     if screen == "button" and not buttonById(board, view.buttonId) then screen, view.screen = "edit", "edit" end
+    if screen == "palette" and view.colourField == "switch" and not buttonById(board, view.buttonId) then
+        screen, view.screen = board and "switches" or "home", board and "switches" or "home"
+    end
     if screen == "confirm" and view.confirm == "clear" and not buttonById(board, view.buttonId) then screen, view.screen = "edit", "edit" end
     local ui = api.ui.content(width, height)
     local accent = api.getAppColour(context.appName or appName)
@@ -185,6 +193,13 @@ local function build(width, height, state, api, context)
             text(innerX, row, fit(status, innerW), innerW, true)
         end
         if action then ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + w - 1, y1 = y, y2 = y + h - 1, action = action, value = value} end
+    end
+    local function switchStatus(switch, wire)
+        local status = not switch.route and "SET IO" or not wire and "ROUTE!" or not wire.online and (wire.value and "ON offline" or "OFF offline")
+            or not wire.confirmed and (wire.value and "ON ..." or "OFF ...") or wire.value and "ON" or "OFF"
+        local statusColour = not switch.route and theme.unbound or (not wire or not wire.online) and 16384
+            or not wire.confirmed and 2 or wire.value and theme.active or theme.inactive
+        return status, statusColour
     end
     local function grid(count, wantedColumns, wantedRows, key, bottom, minWidth, minHeight, draw)
         local gap = theme.density == "roomy" and width >= 20 and height >= 10 and 1 or 0
@@ -254,12 +269,9 @@ local function build(width, height, state, api, context)
             (width < 20 or theme.density == "compact") and 5 or 7, 2, function(index, rect)
                 local switch = board.buttons[index]
                 local wire = wireFor(switch, all)
-                local status = not switch.route and "SET IO" or not wire and "ROUTE!" or not wire.online and (wire.value and "ON offline" or "OFF offline")
-                    or not wire.confirmed and (wire.value and "ON ..." or "OFF ...") or wire.value and "ON" or "OFF"
-                local statusColour = not switch.route and theme.unbound or (not wire or not wire.online) and 16384
-                    or not wire.confirmed and 2 or wire.value and theme.active or theme.inactive
-                -- Keep bundled colours identifiable even when the switch is OFF.
-                local fill = switch.route and switch.route.color or theme.unbound
+                local status, statusColour = switchStatus(switch, wire)
+                -- Appearance overrides are local to this saved switch, not its wire.
+                local fill = buttonColour(switch, theme)
                 tile(rect, switch.name, screen == "switches" and ("#" .. index .. " Edit") or status,
                     screen == "switches" and "editSwitch" or "toggle", switch.id, fill, statusColour)
             end)
@@ -281,7 +293,10 @@ local function build(width, height, state, api, context)
             local wire = wireFor(switch, outputs(api))
             ui.text(4, not wire and "Routing changed" or not wire.online and "IO offline" or not wire.confirmed and "Waiting for IO" or wire.value and "ON" or "OFF", true)
         end
-        button(height - 3, "Rename", "renameSwitch")
+        local half = math.floor(width / 2)
+        button(height - 3, "Rename", "renameSwitch", nil, 1, half)
+        button(height - 3, width - half >= 13 and "Button colour" or "Colour", "switchColour", nil,
+            half + 1, width, true, buttonColour(switch, theme))
         button(height - 2, "Routing", "route")
         button(height - 1, "Disconnect", "askClear", nil, nil, nil, route ~= nil)
         footer("Back", "switches")
@@ -315,15 +330,18 @@ local function build(width, height, state, api, context)
             {label = "Active colour", action = "palette", value = "active"}, {label = "Inactive colour", action = "palette", value = "inactive"},
             {label = "Density: " .. theme.density, action = "density"}, {label = "All switches OFF", action = "askAllOff"}}, "settings", "home")
     elseif screen == "palette" then
+        local switch = view.colourField == "switch" and buttonById(board, view.buttonId)
         local titles = {accent = "UI colour", background = "Background", border = "Button borders", unbound = "Unwired tiles",
             active = "Active colour", inactive = "Inactive colour"}
-        local draft = view.colourDraft or (view.colourField == "accent" and accent or theme[view.colourField])
-        ui.lines, ui.hits = api.ui.palette(width, height, draft, titles[view.colourField])
+        local draft = switch and view.colourAuto and (switch.route and switch.route.color or theme.unbound)
+            or view.colourDraft or (view.colourField == "accent" and accent or theme[view.colourField])
+        local title = switch and (width >= 20 and "Button colour" or "Colour") or titles[view.colourField]
+        ui.lines, ui.hits = api.ui.palette(width, height, not (switch and view.colourAuto) and draft or nil, title)
         table.remove(ui.hits) -- Replace the stock Back action with Apply/Cancel.
         ui.lines.hits = ui.hits
         local preview = copy(theme)
         local previewAccent = view.colourField == "accent" and draft or accent
-        if view.colourField ~= "accent" then preview[view.colourField] = draft end
+        if not switch and view.colourField ~= "accent" then preview[view.colourField] = draft end
         ui.style(1, 1, width, 1, api.ui.contrast(previewAccent), previewAccent)
         if width >= 24 and height >= 15 then
             local ph = math.min(5, height - 12)
@@ -331,13 +349,26 @@ local function build(width, height, state, api, context)
             ui.style(1, py - 1, width, ph + 1, api.ui.contrast(preview.background), preview.background)
             ui.text(py - 1, "Preview", true)
             ui.style(2, py - 1, width - 2, 1, api.ui.contrast(previewAccent), previewAccent)
-            local half = math.floor((width - 3) / 2)
-            tile({x = 2, y = py, w = half, h = ph}, "Bundled", "ON", nil, nil, 8, preview.active, preview)
-            tile({x = half + 3, y = py, w = width - half - 3, h = ph}, "Digital", "OFF", nil, nil, preview.unbound, preview.inactive, preview)
+            if switch then
+                local status, statusColour = switchStatus(switch, wireFor(switch, outputs(api)))
+                tile({x = 2, y = py, w = width - 2, h = ph}, switch.name, status, nil, nil, draft, statusColour, preview)
+            else
+                local half = math.floor((width - 3) / 2)
+                tile({x = 2, y = py, w = half, h = ph}, "Bundled", "ON", nil, nil, 8, preview.active, preview)
+                tile({x = half + 3, y = py, w = width - half - 3, h = ph}, "Digital", "OFF", nil, nil, preview.unbound, preview.inactive, preview)
+            end
         end
-        local half = math.floor(width / 2)
-        button(height, "Apply", "applyColour", nil, 1, half, true, previewAccent)
-        button(height, "Cancel", "cancel", nil, half + 1, width)
+        if switch then
+            local third = math.floor(width / 3)
+            button(height, third >= 5 and "Apply" or "Save", "applyColour", nil, 1, third, true, previewAccent)
+            button(height, third >= 9 and "IO default" or "Auto", "autoColour", nil, third + 1, 2 * third,
+                true, view.colourAuto and previewAccent or theme.border)
+            button(height, width - 2 * third >= 6 and "Cancel" or "Back", "cancel", nil, 2 * third + 1, width)
+        else
+            local half = math.floor(width / 2)
+            button(height, "Apply", "applyColour", nil, 1, half, true, previewAccent)
+            button(height, "Cancel", "cancel", nil, half + 1, width)
+        end
     elseif screen == "keyboard" then
         local keyboard = view.keyboard
         local letters = keyboard.bank == "123" and "1234567890-_/.:!?+()@#&=,%*'\"" or "qwertyuiopasdfghjklzxcvbnm"
@@ -550,15 +581,27 @@ function app.handleTouch(x, y, width, height, state, api, context)
     elseif action == "accent" then
         view.colourField, view.colourDraft, view.screen = "accent", api.getAppColour(context.appName or appName), "palette"
     elseif action == "palette" then view.colourField, view.colourDraft, view.screen = value, state.settings[value], "palette"
-    elseif action == "colour" then view.colourDraft = value
+    elseif action == "switchColour" then
+        view.colourField, view.colourDraft, view.colourBefore = "switch", buttonColour(switch, state.settings), switch.displayColour
+        view.colourAuto, view.screen = switch.displayColour == nil, "palette"
+    elseif action == "colour" then view.colourDraft, view.colourAuto = value, false
+    elseif action == "autoColour" then view.colourAuto = true
     elseif action == "applyColour" then
         local ok, err
-        if view.colourField == "accent" then
+        if view.colourField == "switch" then
+            if switch.displayColour ~= view.colourBefore then
+                notify(view, "Button colour changed in another window; reopen Colour", "button")
+            else
+                ok = commit(state, api, view, function()
+                    if view.colourAuto then switch.displayColour = nil else switch.displayColour = view.colourDraft end
+                end)
+            end
+        elseif view.colourField == "accent" then
             ok, err = api.setAppColour(context.appName or appName, view.colourDraft)
             if not ok then notify(view, "Could not save: " .. tostring(err)) end
         else ok = commit(state, api, view, function() state.settings[view.colourField] = view.colourDraft end) end
-        if ok then view.screen = "settings" end
-    elseif action == "cancel" then view.screen = "settings"
+        if ok then view.screen = view.colourField == "switch" and "button" or "settings" end
+    elseif action == "cancel" then view.screen = view.colourField == "switch" and "button" or "settings"
     elseif action == "density" then
         commit(state, api, view, function() state.settings.density = state.settings.density == "roomy" and "compact" or "roomy" end)
     elseif action == "reorder" then

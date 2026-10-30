@@ -6,7 +6,7 @@ Chains may contain as many relays as the installation needs: OS → relay → re
 
 ## Install or upgrade
 
-Upload this package's root files to the V2 repository and replace the one installer paste with bundled-v18 `install.lua`. Download a fresh `inst` on each computer being updated. Quit its running program to CraftOS first. Existing v16 relays need no update for v17's sensor-catalog fix; update the OS and affected sensor roles instead.
+Upload this package's root files to the V2 repository and replace the one installer paste with bundled-v19 `install.lua`. Download a fresh `inst` on each computer being updated. Quit its running program to CraftOS first. Existing v16 relays need no update for v17's sensor-catalog fix; update the OS and affected sensor roles instead.
 
 On the central OS:
 

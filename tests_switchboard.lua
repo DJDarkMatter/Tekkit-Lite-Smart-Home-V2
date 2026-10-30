@@ -55,6 +55,8 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
                         end
                         if hit.action == "page" and hit.value.delta == 1 then nextPage = hit end
                         if hit.action == "page" and hit.value.delta == -1 then previousPage = hit end
+                        if hit.action == "next" then nextPage = hit end
+                        if hit.action == "previous" then previousPage = hit end
                         if action == "key" and hit.action == "keyPage" then nextKeyPage = hit end
                     end
                 end
@@ -107,6 +109,102 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     end
     local function logical(button) return "switchboard_switch_" .. button.id end
     local function mappings(t) return t.central.server.state.outputMap end
+    local function tileColour(t, id, buttonId)
+        t.paint()
+        for _, hit in ipairs(t.hits(id)) do
+            if (hit.action == "toggle" or hit.action == "editSwitch") and hit.value == buttonId then
+                local x = hit.x1 + (hit.x2 - hit.x1 + 1 >= 7 and 1 or 0)
+                local y = hit.y1 + (hit.y2 - hit.y1 + 1 >= 5 and 1 or 0)
+                local win = t.window(id)
+                local screen = win.monitorId:match(":top$") and t.top or t.left
+                return screen.bg[win.y + y][win.x + x]
+            end
+        end
+        error("Missing visible switch tile " .. buttonId)
+    end
+    local function editColour(t, id, board, index)
+        t.click(id, "open", board.id); t.click(id, "edit"); t.click(id, "switches")
+        t.click(id, "editSwitch", board.buttons[index or 1].id); t.click(id, "switchColour")
+    end
+
+    function tests.switchboard_button_colour_is_cosmetic_persistent_and_independent_of_shared_routes()
+        local t = setup()
+        local a, other = t.preset(t.id), t.open("left")
+        local b = t.preset(other)
+        t.click(t.id, "open", a.id); t.click(t.id, "toggle", a.buttons[1].id); t.bus.advance(1)
+        t.click(other, "open", b.id)
+        t.click(t.id, "edit"); t.click(t.id, "switches"); t.click(t.id, "editSwitch", a.buttons[1].id)
+        t.click(t.id, "renameSwitch"); t.click(t.id, "clearName")
+        for letter in ("pump"):gmatch(".") do t.click(t.id, "key", letter) end
+        t.click(t.id, "saveName")
+        local routes, values = serialize(mappings(t)), serialize(t.central.server.state.outputs)
+        local revision, writes = t.central.server.ioClients.io_11.revision, #t.io.redstoneWrites
+        t.click(t.id, "switchColour"); equal(t.view(t.id).colourAuto, true)
+        t.click(t.id, "colour", 8192); equal(a.buttons[1].displayColour, nil)
+        assert(table.concat(t.content(t.id), "\n"):find("Preview", 1, true))
+        t.click(t.id, "cancel"); equal(t.view(t.id).screen, "button"); equal(a.buttons[1].displayColour, nil)
+        t.click(t.id, "switchColour"); t.click(t.id, "colour", 8192); t.click(t.id, "applyColour")
+        equal(a.buttons[1].displayColour, 8192); equal(a.buttons[1].name, "pump")
+        local editor = table.concat(t.content(t.id), "\n")
+        assert(editor:find("io_11", 1, true)); assert(editor:find("left / White", 1, true))
+        equal(serialize(mappings(t)), routes); equal(serialize(t.central.server.state.outputs), values)
+        t.click(t.id, "switches"); equal(tileColour(t, t.id, a.buttons[1].id), 8192)
+        equal(tileColour(t, other, b.buttons[1].id), 1)
+        t.bus.advance(1); equal(t.central.server.ioClients.io_11.revision, revision); equal(#t.io.redstoneWrites, writes)
+        t.reboot(); a, b = t.state.boards[1], t.state.boards[2]
+        equal(a.buttons[1].displayColour, 8192); equal(b.buttons[1].displayColour, nil)
+        equal(a.buttons[1].name, "pump"); equal(t.io.bundled.left, 1)
+        editColour(t, t.id, a)
+        t.click(t.id, "autoColour"); equal(a.buttons[1].displayColour, 8192)
+        t.click(t.id, "applyColour"); equal(a.buttons[1].displayColour, nil)
+        t.click(t.id, "switches"); equal(tileColour(t, t.id, a.buttons[1].id), 1)
+        equal(t.api.getOutput(logical(a.buttons[1])), true); equal(t.api.getOutput(logical(b.buttons[1])), true)
+    end
+
+    function tests.switchboard_small_button_colour_picker_keeps_custom_fill_through_rerouting_and_disconnect()
+        local t = setup(14, 9)
+        equal(t.window(t.id).width - 2, 12); equal(t.window(t.id).height - 2, 6)
+        local board = t.empty(t.id, 2, 2)
+        editColour(t, t.id, board)
+        for i = 0, 15 do t.click(t.id, "colour", 2 ^ i) end
+        t.click(t.id, "colour", 4); t.click(t.id, "applyColour")
+        equal(board.buttons[1].displayColour, 4)
+        t.route(t.id, board, 1, "io_12", "bottom", nil)
+        t.view(t.id).screen = "board"; equal(tileColour(t, t.id, board.buttons[1].id), 4)
+        t.route(t.id, board, 1, "io_11", "left", 1024)
+        equal(board.buttons[1].route.color, 1024); equal(board.buttons[1].displayColour, 4)
+        t.click(t.id, "switchColour"); t.click(t.id, "autoColour"); t.click(t.id, "applyColour")
+        t.view(t.id).screen = "board"; equal(tileColour(t, t.id, board.buttons[1].id), 1024)
+        t.route(t.id, board, 1, "io_12", "bottom", nil)
+        t.view(t.id).screen = "board"; equal(tileColour(t, t.id, board.buttons[1].id), t.state.settings.unbound)
+        t.click(t.id, "edit"); t.click(t.id, "switches"); t.click(t.id, "editSwitch", board.buttons[1].id)
+        t.click(t.id, "switchColour"); t.click(t.id, "colour", 2); t.click(t.id, "applyColour")
+        t.click(t.id, "askClear"); t.click(t.id, "confirm")
+        equal(board.buttons[1].route, nil); equal(board.buttons[1].displayColour, 2)
+        equal(mappings(t)[logical(board.buttons[1])], nil)
+        t.click(t.id, "switches"); equal(tileColour(t, t.id, board.buttons[1].id), 2)
+    end
+
+    function tests.switchboard_button_colour_failed_saves_and_concurrent_edits_preserve_routes_and_other_changes()
+        local t = setup()
+        local board = t.preset(t.id)
+        local before = serialize(mappings(t))
+        editColour(t, t.id, board)
+        t.click(t.id, "colour", 2048); t.central.disk.failWrite = true; t.click(t.id, "applyColour")
+        equal(t.state.boards[1].buttons[1].displayColour, nil); equal(serialize(mappings(t)), before)
+        t.central.disk.failWrite = false; t.click(t.id, "messageBack"); t.click(t.id, "applyColour")
+        board = t.state.boards[1]; equal(board.buttons[1].displayColour, 2048)
+        local other = t.open("left")
+        editColour(t, other, board); t.click(other, "colour", 4)
+        t.click(t.id, "switchColour"); t.click(t.id, "colour", 2); t.click(t.id, "applyColour")
+        t.click(other, "applyColour"); equal(t.view(other).screen, "message"); equal(board.buttons[1].displayColour, 2)
+        equal(serialize(mappings(t)), before); equal(t.io.bundled.left, 0)
+        t.click(other, "messageBack"); t.click(other, "switchColour"); t.click(other, "colour", 4); t.click(other, "applyColour")
+        equal(board.buttons[1].displayColour, 4)
+        t.click(t.id, "switchColour")
+        t.view(other).screen = "edit"; t.click(other, "askDelete"); t.click(other, "confirm")
+        t.paint(); equal(t.view(t.id).screen, "home"); equal(#t.state.boards, 0)
+    end
 
     function tests.switchboard_empty_home_and_side_preset_create_all_sixteen_off_in_one_revision()
         local t = setup()
@@ -420,13 +518,15 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local t = setup()
         local board = t.empty(t.id, 16, 16)
         equal(#board.buttons, 256)
-        local screens = {"home", "sources", "sides", "create", "board", "switches", "edit", "button", "grid", "settings", "palette", "keyboard", "confirm", "message"}
+        local screens = {"home", "sources", "sides", "create", "board", "switches", "edit", "button", "grid", "settings", "palette", "switchPalette", "autoPalette", "keyboard", "confirm", "message"}
         local checked = 0
         for _, width in ipairs({12, 13, 17, 24, 31, 42, 79}) do
             for _, height in ipairs({6, 7, 9, 12, 18, 30}) do
                 for _, screen in ipairs(screens) do
-                    local view = {screen = screen, boardId = board.id, buttonId = board.buttons[1].id, newClient = "io_11", newSide = "left",
-                        gridDraft = {target = "new", columns = 16, rows = 16}, colourField = "background", confirm = "off", confirmBack = "edit",
+                    local switchPalette = screen == "switchPalette" or screen == "autoPalette"
+                    local view = {screen = switchPalette and "palette" or screen, boardId = board.id, buttonId = board.buttons[1].id, newClient = "io_11", newSide = "left",
+                        gridDraft = {target = "new", columns = 16, rows = 16}, colourField = switchPalette and "switch" or "background",
+                        colourDraft = 32, colourAuto = screen == "autoPalette", confirm = "off", confirmBack = "edit",
                         keyboard = {kind = "view", id = board.id, draft = "Name", bank = "abc", page = 1},
                         message = "Long detailed error with client and wire information requiring pagination on a very small display"}
                     local context = {view = view, appName = "switchboard", windowId = t.id}
@@ -452,7 +552,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
                 end
             end
         end
-        equal(checked, 588)
+        equal(checked, 672)
     end
 
     function tests.switchboard_batch_rejects_invalid_changes_and_contradictory_values_for_one_shared_wire()

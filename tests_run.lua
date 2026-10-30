@@ -300,7 +300,20 @@ local function newBus()
             if comp.appSources[path] then chunk, err = loadstring(comp.appSources[path], path)
             elseif disk.files[path] then chunk, err = loadstring(disk.files[path], path)
             else chunk, err = hostLoadfile(path) end
-            if chunk then setfenv(chunk, env) end
+            if chunk then
+                local chunkEnv = env
+                if options.strictSensorIteration and path == "lib_sensor_server.lua" then
+                    -- Reproduce the reported legacy runtime: next rejects a
+                    -- cursor whose entry was removed by the preceding step.
+                    chunkEnv = setmetatable({pairs = function(values)
+                        return function(values, key)
+                            if key ~= nil and rawget(values, key) == nil then error("invalid key to 'next'", 2) end
+                            return next(values, key)
+                        end, values, nil
+                    end}, {__index = env})
+                end
+                setfenv(chunk, chunkEnv)
+            end
             return chunk, err
         end
         env.dofile = function(path)
@@ -923,7 +936,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v18", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v19", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()

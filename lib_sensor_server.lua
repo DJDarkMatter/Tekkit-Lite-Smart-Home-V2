@@ -166,7 +166,10 @@ function Hub.new(net, clients, session)
     end
     function hub.tick(now)
         local requests = {}
-        for key, item in pairs(hub.watches) do
+        -- Legacy ComputerCraft next can reject a cursor after its entry was
+        -- deleted. Traverse key snapshots whenever pruning runtime tables.
+        for _, key in ipairs(keys(hub.watches)) do
+            local item = hub.watches[key]
             if now - item.used >= 10 then hub.watches[key] = nil
             else
                 local a = item.address
@@ -193,12 +196,14 @@ function Hub.new(net, clients, session)
                     client.sensorSignature, client.sensorSent = signature, now
                 end
                 for side, set in pairs(client.sampleParts or {}) do
-                    for target, part in pairs(set) do if now - part.time > 10 then set[target] = nil end end
+                    for _, target in ipairs(keys(set)) do if now - set[target].time > 10 then set[target] = nil end end
                 end
                 for side, readings in pairs(client.readings or {}) do
-                    for target in pairs(readings) do if not wanted(id, side, target) then readings[target] = nil end end
+                    for _, target in ipairs(keys(readings)) do if not wanted(id, side, target) then readings[target] = nil end end
                 end
-                for side, part in pairs(client.catalogParts or {}) do if now - part.time > 10 then client.catalogParts[side] = nil end end
+                for _, side in ipairs(keys(client.catalogParts or {})) do
+                    if now - client.catalogParts[side].time > 10 then client.catalogParts[side] = nil end
+                end
             end
         end
     end
