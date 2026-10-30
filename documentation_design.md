@@ -38,6 +38,8 @@ Computers with sensor cards (or other sensor peripherals) that read specific dat
 - Optional game-time fallback from time-exposing blocks; the OS can read its own built-in Minecraft clock without a sensor peripheral
 - Other environmental sensors
 
+The implemented [generic sensor role](documentation_sensors.md) discovers all attached OpenCCSensors sides/cards and available targets. A client may hold several sensor peripherals; a card may expose multiple reactors. Apps explicitly select client, side and target through a reusable picker. Dedicated Applied Energistics cards remain distinct from inventory cards for this server's version. Selected readings are cached centrally with freshness/status and shared subscriptions; raw data is not written into global OS structures or restored as current telemetry after a reset.
+
 Sensor clients forward raw readings to the OS, which converts them to system state (e.g. "playerOnline" boolean, "gameTime" string).
 
 ## 3. Component Roles
@@ -162,6 +164,10 @@ Sensors wired to IO clients feed data to OS:
 - Long-term and short-term production averages
 
 OS maintains averages, apps display the data. Manual reset via UI after upgrades.
+
+### Reactor overview, implemented in bundled-v15
+
+The optional [Reactors app](documentation_reactors.md) has saved overview cards, Add reactor, Settings and per-reactor details. Setup selects a sensor client/side/target; multiple entries can use one card. Each reactor separately selects an arbitrary IO client/side/Digital-or-bundled output for its manual switch. Displayed actual On/Off is independent of requested switch intent. The readout follows the supplied heat/max/melting/EU-output/remaining-time reference, using a marked 85%-of-max melting calculation when needed and showing unavailable remaining time if the sensor does not supply it. Small windows page metrics/cards, names use a touch keyboard, and both colour settings have draft previews. Bindings, names, colours, switches and OS geometry persist; live readings must arrive again. The normal app releases subscriptions after its last window closes while saved manual output intent remains applied. No automatic reactor control or ME app is introduced in this update.
 
 ## 10. Persistence
 

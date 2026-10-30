@@ -1,7 +1,7 @@
--- SmartHome OS installer: bundled-v14
+-- SmartHome OS installer: bundled-v15
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
--- Usage: inst server|io|monitor [--startup]
+-- Usage: inst server|io|monitor|sensor [--startup]
 -- User apps: inst app NAME [--ref BRANCH_OR_COMMIT] (GitHub)
 -- Alternatives: inst app NAME PASTE_ID   or   inst app NAME --file PATH
 -- OS/client installation is offline. Apps are fetched only on request.
@@ -915,6 +915,8 @@ local Picker = dofile("lib_io_picker.lua")
 local Desktop = dofile("lib_desktop.lua")
 local Gui = dofile("lib_gui.lua")
 local Settings = dofile("lib_settings.lua")
+local SensorHub = dofile("lib_sensor_server.lua")
+local SensorPicker = dofile("lib_sensor_picker.lua")
 local systemColours = {background = {field = "backgroundColour", title = "Background"},
     windowBorder = {field = "windowBorderColour", title = "Window border"}, taskbar = {field = "taskbarColour", title = "Taskbar"}}
 local sideSet = {top = true, bottom = true, left = true, right = true, front = true, back = true}
@@ -988,7 +990,7 @@ local function validApp(app)
         if app[key] ~= nil and not integer(app[key], 1, 512) then return false end
     end
     if app.backgroundService ~= nil and type(app.backgroundService) ~= "boolean" then return false end
-    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection"}) do
+    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection"}) do
         if app[key] ~= nil and type(app[key]) ~= "function" then return false end
     end
     return (not app.maxWidth or app.maxWidth >= (app.minWidth or 8))
@@ -1045,6 +1047,8 @@ function Server.new(net, storage, config, logger)
     state.desktopVersion = 2
     state.bootCounter = (tonumber(state.bootCounter) or 0) + 1
     server.session = tostring(net.id) .. ":" .. state.bootCounter
+    local sensors = SensorHub.new(net, server.sensorClients, server.session)
+    server.sensors = sensors
     if source and source ~= config.saveFile then log("Recovered state from " .. source) end
     if not loaded and fs.exists(config.saveFile) then log("Unreadable OS state; starting with defaults") end
 
@@ -1057,6 +1061,15 @@ function Server.new(net, storage, config, logger)
         return ok, err
     end
     api.save = server.save
+    function api.invalidateAppViews(name)
+        local seen = {}
+        for _, win in pairs(state.windows) do
+            if win.appName == name and not seen[win.monitorId] then
+                invalidateInput(win.monitorId)
+                seen[win.monitorId] = true
+            end
+        end
+    end
 
     function api.getOSSettings()
         return {backgroundMode = "solid", backgroundColour = state.appearance.backgroundColour,
@@ -1345,6 +1358,16 @@ function Server.new(net, storage, config, logger)
         local client = server.sensorClients[clientId]
         if client and client.online then return copy(client.values[name]) end
     end
+    api.getSensorClients, api.watchSensor, api.unwatchSensor, api.getSensorReading = sensors.getClients, sensors.watch, sensors.unwatch, sensors.read
+    function api.pickSensor(windowId, key, current, kind)
+        local win = state.windows[windowId]
+        local app = win and definition(win.appName)
+        if not win or not app or not app.handleSensorSelection or type(key) ~= "string" then return false, "Invalid sensor selector" end
+        if win.width < 14 or win.height < 8 then return false, "Sensor settings need a 12x6 content area" end
+        server.dialogs[windowId] = SensorPicker.new(key, copy(current), kind)
+        invalidateInput(win.monitorId)
+        return true
+    end
     function api.getClients()
         local result = {}
         for kind, group in pairs({io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients}) do
@@ -1546,6 +1569,7 @@ function Server.new(net, storage, config, logger)
                         dialog.current = option and state.appearance[option.field] or api.getAppColour(win.appName)
                         content, dialog.hits = Gui.palette(win.width - 2, win.height - 2, dialog.current,
                             dialog.error or (option and option.title or "UI colour"))
+                    elseif dialog.kind == "sensor" then content = SensorPicker.render(dialog, win.width - 2, win.height - 2, api.getSensorClients())
                     else content = Picker.render(dialog, win.width - 2, win.height - 2, api.getIOClients()) end
                 else
                     ok, content = appCall(win.appName, "render", win.width - 2, win.height - 2,
@@ -1802,10 +1826,12 @@ function Server.new(net, storage, config, logger)
                                 else ok, err = api.setAppColour(win.appName, address) end
                                 if ok then server.dialogs[win.id] = nil else dialog.error = tostring(err) end
                             elseif action == "cancel" then server.dialogs[win.id] = nil end
+                        elseif dialog.kind == "sensor" then action, address = SensorPicker.touch(dialog, x - win.x, y - win.y)
                         else action, address = Picker.touch(dialog, x - win.x, y - win.y) end
                         if action == "cancel" then server.dialogs[win.id] = nil
                         elseif action == "selected" then
-                            local ok, accepted, err = appCall(win.appName, "handleIOSelection", dialog.key,
+                            local hook = dialog.kind == "sensor" and "handleSensorSelection" or "handleIOSelection"
+                            local ok, accepted, err = appCall(win.appName, hook, dialog.key,
                                 address, state.appStates[win.appName], api, viewContext(win))
                             if ok and accepted ~= false then server.dialogs[win.id] = nil
                             else dialog.error = tostring(ok and err or accepted) end
@@ -1877,6 +1903,7 @@ function Server.new(net, storage, config, logger)
                 ioReset = ioReset or ioChanged
                 client.announceNonce = message.nonce
             end
+            if message.clientType == "sensor" then sensors.announce(client, message, reconnect) end
             net.toClient(client, {type = "welcome", clientId = id, nonce = message.nonce, serverSession = server.session})
             if reconnect then log(message.clientType .. " connected: " .. id .. " (computer " .. message.sender .. ")") end
             if message.clientType == "io" then
@@ -1896,6 +1923,11 @@ function Server.new(net, storage, config, logger)
             local client = registered(server.ioClients, message, replyChannel)
             if client and message.revision == client.revision then
                 client.ackedRevision, client.lastSeen = message.revision, now
+            end
+        elseif message.type == "sensorCatalog" or message.type == "sensorSample" then
+            local client = registered(server.sensorClients, message, replyChannel)
+            if client then
+                if message.type == "sensorCatalog" then sensors.catalog(client, message, now) else sensors.sample(client, message, now) end
             end
         elseif message.type == "sensorData" then
             local client = registered(server.sensorClients, message, replyChannel)
@@ -1978,6 +2010,7 @@ function Server.new(net, storage, config, logger)
         server.lastTick = now
         updateClock()
         for name in pairs(server.running) do appCall(name, "background", dt, state.appStates[name], api) end
+        sensors.tick(now)
         for id, client in pairs(server.ioClients) do
             if client.online and client.ackedRevision ~= client.revision
                 and now - (client.lastSent or -math.huge) >= config.retryInterval then server.syncIO(id, false) end
@@ -2735,14 +2768,600 @@ end, function()
     end
 end)
 ]=],
+    ["lib_sensor_data.lua"] = [=[-- Shared bounded sensor data and OCS 1.4.7 field adapters. No peripherals here.
+local Data = {protocol = 1, chunkSize = 12000, maxParts = 16, maxTargets = 4096}
+local sides = {top = true, bottom = true, left = true, right = true, front = true, back = true}
+function Data.number(v) return type(v) == "number" and v == v and math.abs(v) < math.huge end
+function Data.integer(v, lo, hi) return Data.number(v) and v == math.floor(v) and v >= lo and v <= hi end
+function Data.string(v, limit) return type(v) == "string" and #v > 0 and #v <= limit and not v:find("[%c]") end
+function Data.address(a)
+    return type(a) == "table" and Data.string(a.clientId, 64) and sides[a.side] and Data.string(a.target, 128)
+        and (a.card == nil or Data.string(a.card, 128))
+end
+function Data.clean(value)
+    local seen, count = {}, 0
+    local function walk(v, depth)
+        count = count + 1
+        if count > 12000 or depth > 8 then error("Sensor reading is too large or deeply nested", 0) end
+        if type(v) == "number" then assert(Data.number(v), "Invalid sensor number"); return v end
+        if type(v) == "boolean" or v == nil then return v end
+        if type(v) == "string" then assert(#v <= 2048, "Sensor string too long"); return v end
+        assert(type(v) == "table" and not seen[v], "Invalid sensor value")
+        seen[v] = true
+        local result = {}
+        for key, item in pairs(v) do
+            assert(type(key) == "string" and #key <= 256 or Data.integer(key, -1000000000, 1000000000), "Invalid sensor key")
+            result[key] = walk(item, depth + 1)
+        end
+        seen[v] = nil
+        return result
+    end
+    local ok, result = pcall(walk, value, 0)
+    if ok then return result end
+    return nil, tostring(result)
+end
+function Data.cardKind(card)
+    local value = tostring(card or ""):lower():gsub("[%s_-]", "")
+    if value:find("energistics", 1, true) or value:find("aesensor", 1, true) or value:find("appeng", 1, true) then return "ae" end
+    if value:find("industrial", 1, true) or value:find("ic2", 1, true) or value:find("machine", 1, true) then return "machine" end
+    if value:find("inventory", 1, true) then return "inventory" end
+    if value:find("proximity", 1, true) then return "proximity" end
+    if value:find("power", 1, true) then return "power" end
+    if value:find("world", 1, true) then return "world" end
+    return "unknown"
+end
+function Data.target(key, basic)
+    basic = type(basic) == "table" and basic or {}
+    local kind = tostring(basic.Type or basic.type or basic.Name or "Unknown"):gsub("[%c]", " "):sub(1, 96)
+    local result = {key = tostring(key), label = kind, type = kind, kind = kind:lower():find("reactor", 1, true) and "reactor" or "other"}
+    local p = basic.Position or basic.position
+    if type(p) == "table" and Data.number(p.X) and Data.number(p.Y) and Data.number(p.Z) then result.position = {X = p.X, Y = p.Y, Z = p.Z} end
+    return result
+end
+local function numeric(data, names)
+    for _, key in ipairs(names) do if Data.number(data[key]) and data[key] >= 0 then return data[key] end end
+end
+function Data.reactor(data)
+    if type(data) ~= "table" then return nil end
+    local heat = numeric(data, {"Heat", "heat", "Temperature"})
+    local maximum = numeric(data, {"MaxHeat", "maxHeat", "MaximumHeat"})
+    if not heat or not maximum or maximum <= 0 or heat > 1000000000000 or maximum > 1000000000000 then return nil end
+    local result = {heat = heat, maxHeat = maximum, output = numeric(data, {"Output", "output", "EUOutput"})}
+    for _, key in ipairs({"Active", "active", "IsActive"}) do
+        if type(data[key]) == "boolean" then result.active = data[key]; break end
+    end
+    result.melting = numeric(data, {"Melting", "MeltingPoint", "MeltingTemperature"})
+    if not result.melting then result.melting, result.meltingDerived = math.floor(maximum * 0.85), true end
+    result.remaining = numeric(data, {"RemainingTime", "TimeRemaining", "Remaining", "remainingTime", "FuelRemainingSeconds"})
+    if not result.remaining and Data.number(data.RemainingTicks) and data.RemainingTicks >= 0 then result.remaining = data.RemainingTicks / 20 end
+    if not result.remaining then
+        for _, key in ipairs({"RemainingTime", "TimeRemaining", "Remaining"}) do
+            if type(data[key]) == "string" then
+                local h, m, s = data[key]:match("^(%d+):(%d%d):(%d%d)$")
+                if h and tonumber(m) < 60 and tonumber(s) < 60 then result.remaining = tonumber(h) * 3600 + tonumber(m) * 60 + tonumber(s); break end
+            end
+        end
+    end
+    result.percent = heat / maximum * 100
+    return result
+end
+return Data
+]=],
+    ["lib_sensor.lua"] = [=[-- Generic sensor bridge. Old OCS peripherals return queue IDs followed by
+-- ocs_success/ocs_error events: no yielding through Lua 5.1 pcall is needed.
+local Data = dofile("lib_sensor_data.lua")
+local Sensor = {}
+local sides = {"top", "bottom", "left", "right", "front", "back"}
+function Sensor.new(net, config)
+    local client = {connected = false, nonce = 0, lastAnnounce = -math.huge, lastServer = 0, ports = {}, watches = {}, sequence = 0}
+    local pending, scanAt, cursor = nil, -math.huge, 0
+    local expiredIds = {} -- OCS reuses small IDs independently on each sensor.
+    local function send(message)
+        if not client.connected then return end
+        message.clientId, message.serverSession, message.bootId = config.clientId, client.serverSession, config.bootId
+        net.send(net.config.channel, client.serverId, message)
+    end
+    local function catalog(port)
+        client.sequence = client.sequence + 1
+        local count = math.max(1, math.ceil(#(port.targets or {}) / 64))
+        for part = 1, count do
+            local targets = {}
+            for i = (part - 1) * 64 + 1, math.min(part * 64, #(port.targets or {})) do targets[#targets + 1] = port.targets[i] end
+            send({type = "sensorCatalog", sequence = client.sequence, side = port.side, card = port.card,
+                status = port.status, error = port.error, part = part, parts = count, targets = targets, truncated = port.truncated == true})
+        end
+    end
+    local function sample(watch, data, err)
+        client.sequence = client.sequence + 1
+        local raw
+        if not err then
+            data, err = Data.clean(data)
+            if type(data) ~= "table" then err = err or "Target not found" end
+            if not err then raw = textutils.serialize(data); if #raw > Data.chunkSize * Data.maxParts then err = "Reading exceeds network limit"; raw = nil end end
+        end
+        raw = raw or ""
+        local port = client.ports[watch.side]
+        if not err and watch.lastRaw == raw and watch.lastFull and os.clock() - watch.lastFull < 5 then
+            send({type = "sensorSample", sequence = client.sequence, side = watch.side, target = watch.target,
+                card = port and port.card, status = "ok", part = 1, parts = 1, data = "", unchanged = true, baseSequence = watch.lastFullSequence})
+            return
+        end
+        if not err then watch.lastRaw, watch.lastFull, watch.lastFullSequence = raw, os.clock(), client.sequence else watch.lastRaw = nil end
+        local parts = math.max(1, math.ceil(#raw / Data.chunkSize))
+        for part = 1, parts do
+            send({type = "sensorSample", sequence = client.sequence, side = watch.side, target = watch.target,
+                card = port and port.card, status = err and "error" or "ok", error = err and tostring(err):sub(1, 160),
+                part = part, parts = parts, data = raw:sub((part - 1) * Data.chunkSize + 1, part * Data.chunkSize)})
+        end
+    end
+    local function complete(job, value, err)
+        local port = client.ports[job.side]
+        if not port or port.generation ~= job.generation then return end
+        if job.kind == "name" then
+            local previousCard, previousStatus = port.card, port.status
+            port.nameAt = os.clock() + config.discoveryInterval
+            if not Data.string(value, 128) or err then
+                port.card, port.targets, port.status, port.error = nil, {}, "no_card", tostring(err or "No valid sensor card"):sub(1, 160)
+            else
+                if port.card ~= value then
+                    port.card, port.targets, port.targetAt = value, {}, -math.huge
+                    for _, watch in ipairs(client.watches) do if watch.side == port.side then watch.nextRead = 0 end end
+                end
+                port.status, port.error = "ok", nil
+            end
+            if previousCard ~= port.card or previousStatus ~= port.status then print(port.side .. ": " .. (port.card or port.error or port.status)) end
+            if previousCard ~= port.card or previousStatus ~= port.status then catalog(port) end
+        elseif job.kind == "targets" then
+            local previousCount = #(port.targets or {})
+            port.targetAt = os.clock() + config.discoveryInterval
+            if type(value) ~= "table" or err then
+                port.targets, port.status, port.error = {}, "error", tostring(err or "Invalid target list"):sub(1, 160)
+            else
+                local keys = {}
+                for key in pairs(value) do if Data.string(key, 128) then keys[#keys + 1] = key end end
+                table.sort(keys)
+                port.targets, port.truncated = {}, #keys > Data.maxTargets
+                for i = 1, math.min(#keys, Data.maxTargets) do port.targets[#port.targets + 1] = Data.target(keys[i], value[keys[i]]) end
+                port.status, port.error = "ok", nil
+            end
+            if previousCount ~= #port.targets then print(port.side .. ": " .. #port.targets .. " targets") end
+            catalog(port)
+        else
+            local watch = job.watch
+            if watch and watch.card == port.card then sample(watch, value, err) end
+        end
+    end
+    local function finishCall(job, ok, value)
+        if not ok then pending = nil; complete(job, nil, value)
+        elseif coroutine.status(job.thread) ~= "dead" then job.filter = value; pending = job
+        elseif type(value) == "number" then
+            if value < 0 then pending = nil; complete(job, nil, "Sensor rejected request")
+            elseif expiredIds[value] then pending = nil; complete(job, nil, "Expired sensor response ID; retrying")
+            else job.queueId, job.thread, job.filter = value, nil, nil; pending = job end
+        else pending = nil; complete(job, value) end
+    end
+    local function start(port, kind, method, watch)
+        local job = {side = port.side, generation = port.generation, kind = kind, watch = watch, deadline = os.clock() + config.requestTimeout}
+        job.thread = coroutine.create(function()
+            if watch then return port.device[method](watch.target) end
+            return port.device[method]()
+        end)
+        finishCall(job, coroutine.resume(job.thread))
+    end
+    function client.handleEvent(event, ...)
+        local values = {...}
+        local job = pending
+        if not job then return end
+        if job.queueId ~= nil then
+            if (event == "ocs_success" or event == "ocs_error") and values[1] == job.queueId then
+                pending = nil
+                complete(job, event == "ocs_success" and values[2] or nil, event == "ocs_error" and tostring(values[2]) or nil)
+            end
+        elseif not job.filter or event == job.filter then finishCall(job, coroutine.resume(job.thread, event, unpack(values))) end
+    end
+    function client.handle(message, now)
+        if message.clientId ~= config.clientId then return end
+        if message.type == "welcome" then
+            if message.nonce ~= client.nonce or type(message.serverSession) ~= "string" then return end
+            if client.connected and message.sender ~= client.serverId then return end
+            local changed = not client.connected or client.serverSession ~= message.serverSession
+            client.connected, client.serverId, client.serverSession, client.lastServer = true, message.sender, message.serverSession, now
+            if changed then
+                client.watches = {}
+                print("Connected to OS computer " .. client.serverId)
+                for _, port in pairs(client.ports) do catalog(port) end
+            end
+        elseif message.type == "sensorWatch" and client.connected and message.sender == client.serverId
+            and message.serverSession == client.serverSession and message.bootId == config.bootId
+            and type(message.watches) == "table" and #message.watches <= 128 then
+            local previous, watches, seen = client.watches, {}, {}
+            for _, address in ipairs(message.watches) do
+                if not Data.address(address) or address.clientId ~= config.clientId then return end
+                seen[address.side] = seen[address.side] or {}
+                if not seen[address.side][address.target] then
+                    local watch = {side = address.side, target = address.target, card = address.card, nextRead = 0}
+                    for _, old in ipairs(previous) do
+                        if old.side == watch.side and old.target == watch.target and old.card == watch.card then
+                            watch.nextRead, watch.lastRaw, watch.lastFull, watch.lastFullSequence = old.nextRead, old.lastRaw, old.lastFull, old.lastFullSequence
+                            break
+                        end
+                    end
+                    watches[#watches + 1], seen[address.side][address.target] = watch, true
+                end
+            end
+            client.watches, client.lastServer = watches, now
+        end
+    end
+    function client.tick(now)
+        if not net.ensureModem() or client.connected and now - client.lastServer >= config.timeout then
+            client.connected, client.watches = false, {}
+        end
+        if now >= scanAt then
+            scanAt = now + 1
+            for _, side in ipairs(sides) do
+                local port = client.ports[side]
+                if peripheral.getType(side) == "sensor" then
+                    if not port or port.status == "detached" then
+                        client.ports[side] = {side = side, device = peripheral.wrap(side), targets = {}, status = "scanning",
+                            generation = (port and port.generation or 0) + 1, nameAt = 0, targetAt = 0}
+                        print("Sensor detected: " .. side)
+                    end
+                elseif port and port.status ~= "detached" then
+                    port.status, port.card, port.targets, port.error = "detached", nil, {}, "Sensor detached"
+                    port.generation = port.generation + 1
+                    catalog(port)
+                end
+            end
+        end
+        if net.modem and now - client.lastAnnounce >= config.announceInterval then
+            client.nonce, client.lastAnnounce = client.nonce + 1, now
+            net.toServer({type = "announce", clientType = "sensor", sensorProtocol = Data.protocol,
+                clientId = config.clientId, nonce = client.nonce, bootId = config.bootId, pollInterval = config.pollInterval})
+        end
+        if pending and now >= pending.deadline then
+            local job = pending
+            if job.queueId ~= nil then expiredIds[job.queueId] = true end
+            pending = nil; complete(job, nil, "Sensor request timed out")
+        end
+        if pending then return end
+        -- Discovery and samples share a bounded queue; modem events keep flowing.
+        for _, side in ipairs(sides) do
+            local port = client.ports[side]
+            if port and port.status ~= "detached" then
+                if now >= port.nameAt then start(port, "name", "getSensorName"); return end
+                if port.card and now >= port.targetAt then start(port, "targets", "getTargets"); return end
+            end
+        end
+        if not client.connected then return end
+        for _ = 1, #client.watches do
+            cursor = cursor % #client.watches + 1
+            local watch = client.watches[cursor]
+            if now >= watch.nextRead then
+                watch.nextRead = now + config.pollInterval
+                local port = client.ports[watch.side]
+                if port and port.status == "ok" and port.card == watch.card then start(port, "sample", "getTargetDetails", watch)
+                else sample(watch, nil, "Sensor or card unavailable") end
+                return
+            end
+        end
+    end
+    return client
+end
+return Sensor
+]=],
+    ["lib_sensor_server.lua"] = [=[-- Runtime-only sensor catalogs, bounded multipart readings and subscriptions.
+local Data = dofile("lib_sensor_data.lua")
+local Hub = {}
+local sides = {top = true, bottom = true, left = true, right = true, front = true, back = true}
+local function copy(value)
+    if type(value) ~= "table" then return value end
+    local result = {}; for key, item in pairs(value) do result[key] = copy(item) end; return result
+end
+local function keys(values)
+    local result = {}; for key in pairs(values) do result[#result + 1] = key end; table.sort(result); return result
+end
+function Hub.new(net, clients, session)
+    local hub = {watches = {}}
+    function hub.announce(client, message, reconnect)
+        if message.sensorProtocol ~= Data.protocol or not Data.string(message.bootId, 96) then return end
+        if reconnect or client.bootId ~= message.bootId then
+            client.ports, client.catalogParts, client.readings, client.sampleParts, client.sensorSent = {}, {}, {}, {}, nil
+        end
+        client.bootId, client.sensorProtocol = message.bootId, Data.protocol
+        client.sensorMaxAge = Data.number(message.pollInterval) and message.pollInterval >= 0.5 and message.pollInterval <= 60
+            and math.max(10, 3 * message.pollInterval) or 10
+    end
+    function hub.watch(key, address)
+        if not Data.string(key, 96) or not Data.address(address) then return false, "Invalid sensor binding" end
+        hub.watches[key] = {address = copy(address), used = os.clock()}
+        return true
+    end
+    function hub.unwatch(key) hub.watches[key] = nil end
+    local function wanted(id, side, target)
+        for _, item in pairs(hub.watches) do
+            local a = item.address
+            if os.clock() - item.used < 10 and a.clientId == id and a.side == side and a.target == target then return true end
+        end
+        return false
+    end
+    function hub.catalog(client, message, now)
+        if client.sensorProtocol ~= Data.protocol or client.bootId ~= message.bootId or not sides[message.side]
+            or not Data.integer(message.sequence, 1, 2147483647) or not Data.integer(message.parts, 1, 64)
+            or not Data.integer(message.part, 1, message.parts) or type(message.targets) ~= "table" or #message.targets > 64
+            or message.card ~= nil and not Data.string(message.card, 128)
+            or not ({ok = true, scanning = true, error = true, no_card = true, detached = true})[message.status] then return end
+        local targets = {}
+        for _, entry in ipairs(message.targets) do
+            if type(entry) ~= "table" or not Data.string(entry.key, 128) or not Data.string(entry.type, 96) then return end
+            targets[#targets + 1] = Data.target(entry.key, {Type = entry.type, Position = entry.position})
+        end
+        local current = client.ports[message.side]
+        if current and message.sequence <= current.sequence then return end
+        local pending = client.catalogParts[message.side]
+        if pending and message.sequence < pending.sequence then return end
+        if not pending or pending.sequence ~= message.sequence then
+            pending = {sequence = message.sequence, parts = message.parts, card = message.card, status = message.status, chunks = {}, time = now}
+            client.catalogParts[message.side] = pending
+        end
+        if pending.parts ~= message.parts or pending.card ~= message.card or pending.status ~= message.status then return end
+        pending.chunks[message.part] = targets
+        if current and current.card ~= message.card then current.status = "card_changed" end
+        local all, seen = {}, {}
+        for part = 1, pending.parts do
+            if not pending.chunks[part] then return end
+            for _, target in ipairs(pending.chunks[part]) do
+                if seen[target.key] then return end
+                seen[target.key], all[#all + 1] = true, target
+            end
+        end
+        table.sort(all, function(a, b) return a.key < b.key end)
+        client.ports[message.side] = {side = message.side, card = message.card, cardKind = Data.cardKind(message.card),
+            status = message.status, error = type(message.error) == "string" and message.error:sub(1, 160) or nil,
+            sequence = message.sequence, targets = all, time = now, truncated = message.truncated == true}
+        client.catalogParts[message.side] = nil
+        client.lastSeen = now
+        if not current or current.card ~= message.card or message.status ~= "ok" then
+            client.readings[message.side], client.sampleParts[message.side], client.sensorSent = {}, {}, nil
+        end
+    end
+    function hub.sample(client, message, now)
+        if client.sensorProtocol ~= Data.protocol or client.bootId ~= message.bootId or not sides[message.side]
+            or not Data.string(message.target, 128) or not Data.integer(message.sequence, 1, 2147483647)
+            or not Data.integer(message.parts, 1, Data.maxParts) or not Data.integer(message.part, 1, message.parts)
+            or type(message.data) ~= "string" or #message.data > Data.chunkSize
+            or (message.status ~= "ok" and message.status ~= "error") or not wanted(message.clientId, message.side, message.target) then return end
+        local port = client.ports[message.side]
+        if not port or port.card ~= message.card then return end
+        client.readings[message.side], client.sampleParts[message.side] = client.readings[message.side] or {}, client.sampleParts[message.side] or {}
+        local readings, parts = client.readings[message.side], client.sampleParts[message.side]
+        local current, pending = readings[message.target], parts[message.target]
+        if current and message.sequence <= current.sequence or pending and message.sequence < pending.sequence then return end
+        if message.unchanged then
+            if message.parts ~= 1 or message.part ~= 1 or message.status ~= "ok" or message.data ~= ""
+                or not current or not current.data or current.dataSequence ~= message.baseSequence then return end
+            current.sequence, current.status, current.error, current.time, current.dataTime = message.sequence, "ok", nil, now, now
+            parts[message.target], client.lastSeen = nil, now
+            return
+        end
+        if not pending or pending.sequence ~= message.sequence then
+            pending = {sequence = message.sequence, parts = message.parts, status = message.status, card = message.card, chunks = {}, time = now}
+            parts[message.target] = pending
+        end
+        if pending.parts ~= message.parts or pending.status ~= message.status or pending.card ~= message.card then return end
+        pending.chunks[message.part] = message.data
+        for part = 1, pending.parts do if not pending.chunks[part] then return end end
+        local data, err
+        if pending.status == "ok" then
+            local ok, value = pcall(textutils.unserialize, table.concat(pending.chunks))
+            if not ok or type(value) ~= "table" then return end
+            data, err = Data.clean(value)
+            if not data then return end
+        else err = type(message.error) == "string" and message.error:sub(1, 160) or "Sensor read failed" end
+        readings[message.target] = {sequence = message.sequence, card = message.card, status = pending.status,
+            data = data or current and current.data, error = err, time = now, dataTime = data and now or current and current.dataTime,
+            dataSequence = data and message.sequence or current and current.dataSequence}
+        parts[message.target], client.lastSeen = nil, now
+    end
+    function hub.getClients()
+        local result = {}
+        for _, id in ipairs(keys(clients)) do
+            local client = clients[id]
+            local ports = {}
+            for _, side in ipairs(keys(client.ports or {})) do ports[#ports + 1] = copy(client.ports[side]) end
+            result[#result + 1] = {id = id, online = client.online, computerId = client.computerId, ports = ports}
+        end
+        return result
+    end
+    function hub.read(address)
+        if not Data.address(address) then return {status = "unconfigured", error = "Select a sensor target"} end
+        local client = clients[address.clientId]
+        if not client or not client.online then return {status = "offline", error = "Sensor client offline"} end
+        local port = client.ports and client.ports[address.side]
+        if not port then return {status = "waiting", error = "Waiting for sensor catalog"} end
+        if port.status ~= "ok" then return {status = port.status, error = port.error or "Sensor unavailable"} end
+        if address.card and address.card ~= port.card then return {status = "card_changed", error = "Sensor card changed"} end
+        local found
+        for _, target in ipairs(port.targets) do if target.key == address.target then found = target; break end end
+        if not found then return {status = "missing", error = "Target missing or out of range"} end
+        if address.targetType and address.targetType ~= found.type then return {status = "target_changed", error = "Target type changed"} end
+        local reading = client.readings[address.side] and client.readings[address.side][address.target]
+        if not reading then return {status = "waiting", error = "Waiting for reading"} end
+        local result = copy(reading)
+        result.age, result.target = math.max(0, os.clock() - (reading.dataTime or reading.time)), copy(found)
+        if result.age > client.sensorMaxAge and result.status == "ok" then result.status, result.error = "stale", "Reading outdated" end
+        result.reactor = Data.reactor(result.data)
+        return result
+    end
+    function hub.tick(now)
+        local requests = {}
+        for key, item in pairs(hub.watches) do
+            if now - item.used >= 10 then hub.watches[key] = nil
+            else
+                local a = item.address
+                requests[a.clientId] = requests[a.clientId] or {}
+                requests[a.clientId][#requests[a.clientId] + 1] = a
+            end
+        end
+        for id, client in pairs(clients) do
+            if client.online and client.sensorProtocol == Data.protocol then
+                local list, seen = {}, {}
+                table.sort(requests[id] or {}, function(a, b) return a.side .. a.target < b.side .. b.target end)
+                for _, source in ipairs(requests[id] or {}) do
+                    seen[source.side] = seen[source.side] or {}
+                    if not seen[source.side][source.target] and #list < 128 then
+                        local a = copy(source)
+                        local port = client.ports[a.side]
+                        a.card = a.card or port and port.card
+                        list[#list + 1], seen[a.side][a.target] = a, true
+                    end
+                end
+                local signature = textutils.serialize(list)
+                if signature ~= client.sensorSignature or not client.sensorSent or now - client.sensorSent >= 3 then
+                    net.toClient(client, {type = "sensorWatch", clientId = id, serverSession = session, bootId = client.bootId, watches = list})
+                    client.sensorSignature, client.sensorSent = signature, now
+                end
+                for side, set in pairs(client.sampleParts or {}) do
+                    for target, part in pairs(set) do if now - part.time > 10 then set[target] = nil end end
+                end
+                for side, readings in pairs(client.readings or {}) do
+                    for target in pairs(readings) do if not wanted(id, side, target) then readings[target] = nil end end
+                end
+                for side, part in pairs(client.catalogParts or {}) do if now - part.time > 10 then client.catalogParts[side] = nil end end
+            end
+        end
+    end
+    return hub
+end
+return Hub
+]=],
+    ["lib_sensor_picker.lua"] = [=[-- Shared client -> sensor port -> target selection, rendered centrally.
+local Gui = dofile("lib_gui.lua")
+local Picker = {}
+function Picker.new(key, current, kind)
+    return {kind = "sensor", key = key, chosen = current or {}, filter = kind, stage = 1, page = 1}
+end
+function Picker.render(dialog, width, height, clients)
+    local list, chosen = {}, dialog.chosen
+    local function compatible(port)
+        if port.status ~= "ok" or not port.card then return false end
+        if not dialog.filter then return true end
+        if dialog.filter ~= "reactor" then return port.cardKind == dialog.filter end
+        if port.cardKind == "machine" or port.cardKind == "unknown" then return true end
+        for _, target in ipairs(port.targets) do if target.kind == "reactor" then return true end end
+        return false
+    end
+    if dialog.stage == 1 then
+        for _, client in ipairs(clients) do list[#list + 1] = {label = client.id .. (client.online and " +" or " -"), value = client.id} end
+    elseif dialog.stage == 2 then
+        for _, client in ipairs(clients) do if client.id == chosen.clientId then
+            for _, port in ipairs(client.ports) do
+                if compatible(port) then list[#list + 1] = {label = port.side .. " / " .. port.cardKind, value = port.side, card = port.card} end
+            end
+        end end
+    elseif dialog.stage == 3 then
+        for _, client in ipairs(clients) do if client.id == chosen.clientId then
+            for _, port in ipairs(client.ports) do if port.side == chosen.side then
+                for _, target in ipairs(port.targets) do
+                    if not dialog.filter or dialog.filter == "reactor" and (target.kind == "reactor" or target.type == "Unknown")
+                        or dialog.filter ~= "reactor" and port.cardKind == dialog.filter then
+                        list[#list + 1] = {label = target.key .. " " .. target.label, value = target.key, targetType = target.type}
+                    end
+                end
+            end end
+        end end
+    end
+    local ui = Gui.content(width, height)
+    ui.style(1, 1, width, height, 1, 32768)
+    if dialog.stage == 4 then
+        ui.heading("Use sensor?", 2048)
+        ui.text(2, chosen.clientId); ui.text(3, chosen.side .. " / " .. chosen.target)
+        if height >= 7 then ui.text(4, chosen.targetType or "") end
+        if dialog.error then ui.text(height - 2, dialog.error) end
+        ui.button(height - 1, "Back", "back")
+        ui.button(height, "Use", "use", 1, math.floor(width / 2), true, 32)
+        ui.button(height, "Cancel", "cancel", math.floor(width / 2) + 1, width)
+    else
+        local slots = #list <= height - 2 and height - 2 or height - 3
+        local pages = math.max(1, math.ceil(#list / slots))
+        dialog.page = math.max(1, math.min(dialog.page, pages))
+        ui.heading(({"Sensor client", "Sensor side", "Select target"})[dialog.stage], 2048)
+        for row = 1, slots do
+            local item = list[(dialog.page - 1) * slots + row]
+            if item then ui.button(row + 1, item.label, "select", nil, nil, true, nil, nil, item) end
+        end
+        if #list == 0 then ui.text(2, dialog.stage == 3 and "No targets yet" or "None available") end
+        if pages > 1 then
+            ui.button(height - 1, "< Prev", "prev", 1, math.floor(width / 2), dialog.page > 1)
+            ui.button(height - 1, "Next >", "next", math.floor(width / 2) + 1, width, dialog.page < pages, nil, nil, pages)
+        end
+        ui.button(height, "Back", "back", 1, math.floor(width / 2))
+        ui.button(height, "Cancel", "cancel", math.floor(width / 2) + 1, width)
+    end
+    dialog.hits = ui.hits
+    return ui.lines
+end
+function Picker.touch(dialog, x, y)
+    for _, hit in ipairs(dialog.hits or {}) do if hit.enabled ~= false and Gui.hit(hit, x, y) then
+        dialog.error = nil
+        if hit.action == "cancel" then return "cancel"
+        elseif hit.action == "use" then return "selected", dialog.chosen
+        elseif hit.action == "back" then
+            if dialog.stage == 1 then return "cancel" end
+            dialog.stage, dialog.page = dialog.stage - 1, 1
+        elseif hit.action == "prev" then dialog.page = math.max(1, dialog.page - 1)
+        elseif hit.action == "next" then dialog.page = math.min(hit.value, dialog.page + 1)
+        elseif hit.action == "select" then
+            local item = hit.value
+            if dialog.stage == 1 then dialog.chosen = {clientId = item.value}
+            elseif dialog.stage == 2 then dialog.chosen.side, dialog.chosen.card = item.value, item.card
+            else dialog.chosen.target, dialog.chosen.targetType = item.value, item.targetType end
+            dialog.stage, dialog.page = dialog.stage + 1, 1
+        end
+        return
+    end end
+end
+return Picker
+]=],
+    ["clients_sensor_client.lua"] = [=[-- Generic OpenCCSensors bridge; all names/configuration stay in the root.
+local storage = dofile("lib_storage.lua")
+local Network = dofile("lib_network.lua")
+local Sensor = dofile("lib_sensor.lua")
+local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
+local config = storage.config("configs_sensor.txt", {clientId = "sensor_" .. os.getComputerID(),
+    announceInterval = 5, timeout = 15, discoveryInterval = 5, pollInterval = 1, requestTimeout = 4, bootCounter = 0})
+assert(type(config.clientId) == "string" and #config.clientId > 0 and #config.clientId <= 64, "Invalid sensor client ID")
+for _, field in ipairs({"announceInterval", "discoveryInterval", "pollInterval", "requestTimeout"}) do
+    assert(type(config[field]) == "number" and config[field] >= 0.5 and config[field] <= 60, "Invalid " .. field)
+end
+assert(type(config.timeout) == "number" and config.timeout > config.announceInterval, "Invalid sensor timeout")
+assert(type(config.bootCounter) == "number" and config.bootCounter >= 0 and config.bootCounter < 2147483647, "Invalid sensor boot counter")
+config.bootCounter = math.floor(config.bootCounter) + 1
+assert(storage.save("configs_sensor.txt", config), "Cannot checkpoint sensor startup")
+config.bootId = config.clientId .. ":" .. config.bootCounter
+local net = Network.new(networkConfig, false)
+local client = Sensor.new(net, config)
+print("Sensor client: " .. config.clientId .. " (computer " .. net.id .. ")")
+client.tick(os.clock())
+local timer = os.startTimer(0.1)
+while true do
+    local event = {os.pullEvent()}
+    if event[1] == "modem_message" then
+        local message = net.receive(event[2], event[3], event[4], event[5])
+        if message then client.handle(message, os.clock()) end
+    elseif event[1] == "timer" and event[2] == timer then
+        client.tick(os.clock()); timer = os.startTimer(0.1)
+    elseif event[1] == "peripheral" or event[1] == "peripheral_detach" then net.peripheralChanged(event[2]) end
+    client.handleEvent(unpack(event))
+end
+]=],
 }
 local args = {...}
 local role, autorun = args[1], false
-local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v14")
+local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua"}
+print("SmartHome installer: bundled-v15")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
-    print("Usage: inst server|io|monitor [--startup]")
+    print("Usage: inst server|io|monitor|sensor [--startup]")
     print(appUsage)
     return
 end
@@ -2879,18 +3498,22 @@ if role == "app" then
     files = {path, configPath}
 else
     for index = 2, #args do
-        assert(args[index] == "--startup", "Usage: inst server|io|monitor [--startup]")
+        assert(args[index] == "--startup", "Usage: inst server|io|monitor|sensor [--startup]")
         autorun = true
     end
     files = {"lib_storage.lua", "lib_network.lua"}
-    if role ~= "io" then files[#files + 1] = "lib_gui.lua" end
+    if role == "server" or role == "monitor" then files[#files + 1] = "lib_gui.lua" end
     if role == "server" then
         files[#files + 1] = "lib_console.lua"
         files[#files + 1] = "lib_settings.lua"
         files[#files + 1] = "lib_io_picker.lua"
         files[#files + 1] = "lib_desktop.lua"
         files[#files + 1] = "lib_server.lua"
+        files[#files + 1] = "lib_sensor_data.lua"
+        files[#files + 1] = "lib_sensor_server.lua"
+        files[#files + 1] = "lib_sensor_picker.lua"
     elseif role == "io" then files[#files + 1] = "lib_io.lua"
+    elseif role == "sensor" then files[#files + 1] = "lib_sensor_data.lua"; files[#files + 1] = "lib_sensor.lua"
     else files[#files + 1] = "lib_monitor.lua" end
     files[#files + 1] = entry[role]
     if autorun then
@@ -2927,6 +3550,7 @@ if role ~= "app" then
     end
     migrate("configs_network.txt", "Configs/network.txt")
     if role == "io" then migrate("configs_io.txt", "Configs/io.txt")
+    elseif role == "sensor" then migrate("configs_sensor.txt", "Configs/sensor.txt")
     elseif role == "monitor" then migrate("configs_monitor.txt", "Configs/monitor.txt")
     else
         local settings, migrated = migrate("configs_os.txt", "Configs/os.txt")

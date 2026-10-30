@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parent
 PATHS = [
     "lib_storage.lua", "lib_network.lua", "lib_console.lua", "lib_gui.lua", "lib_settings.lua", "lib_io_picker.lua", "lib_desktop.lua", "lib_server.lua", "lib_io.lua", "lib_monitor.lua",
     "main_os.lua", "clients_io_client.lua", "clients_monitor_client.lua",
+    "lib_sensor_data.lua", "lib_sensor.lua", "lib_sensor_server.lua", "lib_sensor_picker.lua", "clients_sensor_client.lua",
 ]
 
 def lua_string(value):
@@ -14,10 +15,10 @@ def lua_string(value):
         equals += "="
     return "[" + equals + "[" + value + "]" + equals + "]"
 
-header = '''-- SmartHome OS installer: bundled-v14
+header = '''-- SmartHome OS installer: bundled-v15
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
--- Usage: inst server|io|monitor [--startup]
+-- Usage: inst server|io|monitor|sensor [--startup]
 -- User apps: inst app NAME [--ref BRANCH_OR_COMMIT] (GitHub)
 -- Alternatives: inst app NAME PASTE_ID   or   inst app NAME --file PATH
 -- OS/client installation is offline. Apps are fetched only on request.
@@ -27,11 +28,11 @@ entries = [f'    ["{path}"] = {lua_string((ROOT / path).read_text())},\n' for pa
 runner = r'''}
 local args = {...}
 local role, autorun = args[1], false
-local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"}
-print("SmartHome installer: bundled-v14")
+local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua"}
+print("SmartHome installer: bundled-v15")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
-    print("Usage: inst server|io|monitor [--startup]")
+    print("Usage: inst server|io|monitor|sensor [--startup]")
     print(appUsage)
     return
 end
@@ -168,18 +169,22 @@ if role == "app" then
     files = {path, configPath}
 else
     for index = 2, #args do
-        assert(args[index] == "--startup", "Usage: inst server|io|monitor [--startup]")
+        assert(args[index] == "--startup", "Usage: inst server|io|monitor|sensor [--startup]")
         autorun = true
     end
     files = {"lib_storage.lua", "lib_network.lua"}
-    if role ~= "io" then files[#files + 1] = "lib_gui.lua" end
+    if role == "server" or role == "monitor" then files[#files + 1] = "lib_gui.lua" end
     if role == "server" then
         files[#files + 1] = "lib_console.lua"
         files[#files + 1] = "lib_settings.lua"
         files[#files + 1] = "lib_io_picker.lua"
         files[#files + 1] = "lib_desktop.lua"
         files[#files + 1] = "lib_server.lua"
+        files[#files + 1] = "lib_sensor_data.lua"
+        files[#files + 1] = "lib_sensor_server.lua"
+        files[#files + 1] = "lib_sensor_picker.lua"
     elseif role == "io" then files[#files + 1] = "lib_io.lua"
+    elseif role == "sensor" then files[#files + 1] = "lib_sensor_data.lua"; files[#files + 1] = "lib_sensor.lua"
     else files[#files + 1] = "lib_monitor.lua" end
     files[#files + 1] = entry[role]
     if autorun then
@@ -216,6 +221,7 @@ if role ~= "app" then
     end
     migrate("configs_network.txt", "Configs/network.txt")
     if role == "io" then migrate("configs_io.txt", "Configs/io.txt")
+    elseif role == "sensor" then migrate("configs_sensor.txt", "Configs/sensor.txt")
     elseif role == "monitor" then migrate("configs_monitor.txt", "Configs/monitor.txt")
     else
         local settings, migrated = migrate("configs_os.txt", "Configs/os.txt")

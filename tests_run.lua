@@ -82,6 +82,7 @@ local function newBus()
         local comp = {id = id, role = role, modemSide = options.modemSide or "back", open = {}, log = {},
             disk = options.disk or {files = {}, dirs = {[""] = true}}, bundled = {}, digital = {},
             bundledInputs = {}, digitalInputs = {}, monitors = options.monitors or {}, started = bus.now,
+            sensors = options.sensors or {}, sensorCalls = {}, sensorDevices = {},
             appSources = options.apps or previous and previous.appSources or {}, timerId = 0, active = true,
             redstoneWrites = {}, lastRedstoneWrite = previous and previous.lastRedstoneWrite or {}}
         for _, side in ipairs({"top", "bottom", "left", "right", "front", "back"}) do
@@ -239,9 +240,35 @@ local function newBus()
             getType = function(side)
                 if side == comp.modemSide then return "modem" end
                 if comp.monitors[side] then return "monitor" end
+                if comp.sensors[side] then return "sensor" end
             end,
             wrap = function(side)
                 if side == comp.modemSide then return modem end
+                local source = comp.sensors[side]
+                if source then
+                    local wrapper = comp.sensorDevices[side]
+                    if not wrapper or wrapper.source ~= source then
+                        wrapper = {source = source, device = {}}
+                        comp.sensorDevices[side] = wrapper
+                        for _, method in ipairs({"getSensorName", "getTargets", "getTargetDetails"}) do
+                            local methodName = method
+                            wrapper.device[methodName] = function(target)
+                                source.counter = ((source.counter or 0) + 1) % 1001
+                                local callId = source.counter
+                                comp.sensorCalls[#comp.sensorCalls + 1] = {side = side, method = methodName, target = target, id = callId, time = bus.now}
+                                local result = methodName == "getSensorName" and source.card or methodName == "getTargets" and source.targets or source.details and source.details[target]
+                                local err = source.errors and source.errors[methodName]
+                                if methodName == "getSensorName" and not source.card then err = err or "No sensor card" end
+                                if source.hang == methodName then return callId end
+                                if source.yielding then bus.queue(comp, {"sensor_ready"}); env.os.pullEvent("sensor_ready") end
+                                if source.async == false or source.yielding then if err then error(err) end; return result end
+                                bus.queue(comp, {err and "ocs_error" or "ocs_success", callId, err or result})
+                                return callId
+                            end
+                        end
+                    end
+                    return wrapper.device
+                end
                 return comp.monitors[side]
             end,
         }
@@ -255,7 +282,7 @@ local function newBus()
         end
         env.dofile = function(path)
             local value = assert(env.loadfile(path))()
-            if path == "lib_server.lua" or path == "lib_io.lua" or path == "lib_monitor.lua" or path == "lib_console.lua" then
+            if path == "lib_server.lua" or path == "lib_io.lua" or path == "lib_monitor.lua" or path == "lib_console.lua" or path == "lib_sensor.lua" then
                 local constructor = value.new
                 value.new = function(...)
                     local object = constructor(...)
@@ -281,7 +308,7 @@ local function newBus()
             disk.files["configs_os.txt"] = serialize(settings)
         end
         function comp.start()
-            local path = ({server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua"})[role]
+            local path = ({server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua"})[role]
             comp.thread = coroutine.create(function() env.dofile(path) end)
             local ok, err = coroutine.resume(comp.thread)
             assert(ok, "Boot computer " .. id .. ": " .. tostring(err))
@@ -872,7 +899,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v14", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v15", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -1335,6 +1362,7 @@ assert(hostLoadfile("tests_coffee.lua"))()(tests, newBus, monitor, serialize, un
 assert(hostLoadfile("tests_desktop.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_appearance.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_switchboard.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
+assert(hostLoadfile("tests_sensors.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_console.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 local names, failures = {}, {}
 for name in pairs(tests) do names[#names + 1] = name end

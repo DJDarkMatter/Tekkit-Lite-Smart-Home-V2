@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all thirteen runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v14`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all eighteen runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v15`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -23,7 +23,7 @@ inst server --startup
 reboot
 ```
 
-Use `inst io --startup` or `inst monitor --startup` on the other computers, with the same paste ID. To replace an older downloaded installer, delete only that copy with `delete inst` before downloading the updated paste again. If it still says `Downloading lib_storage.lua`, the old HTTP installer is still being run.
+Use `inst io --startup`, `inst monitor --startup`, or `inst sensor --startup` on the other computers, with the same paste ID. To replace an older downloaded installer, delete only that copy with `delete inst` before downloading the updated paste again. If it still says `Downloading lib_storage.lua`, the old HTTP installer is still being run.
 
 The installer checks and stages all selected Lua files before replacing programs, preserves existing configuration and saved data, and backs up replaced program files as `.pre_update`. `--startup` explicitly configures the role's boot script and backs up an existing one. Omit the flag to preserve `startup`.
 
@@ -39,9 +39,10 @@ For direct file copying instead, preserve these paths:
 | Role | Required files |
 | --- | --- |
 | All roles | `lib_network.lua`, `lib_storage.lua` |
-| Central OS | Also `main_os.lua`, `lib_server.lua`, `lib_console.lua`, `lib_io_picker.lua`, `lib_desktop.lua`, `lib_settings.lua` |
+| Central OS | Also `main_os.lua`, `lib_server.lua`, `lib_console.lua`, `lib_io_picker.lua`, `lib_desktop.lua`, `lib_settings.lua`, `lib_sensor_data.lua`, `lib_sensor_server.lua`, `lib_sensor_picker.lua` |
 | IO client | Also `clients_io_client.lua`, `lib_io.lua` |
 | Monitor client | Also `clients_monitor_client.lua`, `lib_monitor.lua` |
+| Sensor client | Also `clients_sensor_client.lua`, `lib_sensor.lua`, `lib_sensor_data.lua` |
 
 Both the OS and monitor roles also require `lib_gui.lua` for colour surfaces and drawing.
 
@@ -64,7 +65,7 @@ The installer decodes the API's base64 content using Lua 5.1, checks the filenam
 
 These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
 
-Optional apps are [Coffee](documentation_coffee.md) and [Switchboard](documentation_switchboard.md). Run `inst app coffee` or `inst app switchboard` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers Menu → Settings for its IO, durations and UI colour. Switchboard starts when opened from the monitor launcher and offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and app appearance. Install the bundled-v14 **server** role and current Switchboard for shared routes, steady health status, and previewable colours; keep the current app files on GitHub. Coffee code, window resizing, calibration and IO/monitor clients are unchanged in this update. No client update is needed for Switchboard.
+Optional apps are [Coffee](documentation_coffee.md), [Switchboard](documentation_switchboard.md), and [Reactors](documentation_reactors.md). Run `inst app coffee` or `inst app switchboard` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers Menu → Settings for its IO, durations and UI colour. Switchboard starts when opened from the monitor launcher and offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and app appearance. Install the bundled-v14 **server** role and current Switchboard for shared routes, steady health status, and previewable colours; keep the current app files on GitHub. Coffee code, window resizing, calibration and IO/monitor clients are unchanged in this update. No client update is needed for Switchboard. For the new Reactor panel, install the bundled-v15 server role and `inst app reactors`; put `inst sensor --startup` on a sensor computer. See the [sensor setup](documentation_sensors.md) and [reactor guide](documentation_reactors.md), including which remaining-time data depends on the card.
 
 ### Confirm connection and test a wire
 
@@ -168,7 +169,7 @@ Window sizes in these commands include the frame. `move` and `resize` clamp to t
 
 ## Still to build from the design
 
-Production measurement/averages and real sensor peripheral adapters are not implemented. Coffee and Switchboard are optional and separate from the OS installer. The original coffee/switchboard programs are the root `oldfiles_*.lua` archives; the OS does not load them. Character resolution is measured from the monitor API; physical block dimensions are not guessed from that resolution.
+Production measurement/averages and the ME overview app are not implemented. The generic OpenCCSensors bridge supports IC2 and dedicated Applied Energistics card discovery/selected raw readings; Reactors provides the first sensor app. Coffee, Switchboard and Reactors are optional and separate from the OS installer. The original coffee/switchboard programs are the root `oldfiles_*.lua` archives; the OS does not load them. Character resolution is measured from the monitor API; physical block dimensions are not guessed from that resolution.
 
 Periodic checkpoints can lose progress since the last successful checkpoint on a crash (normally up to one second). Important app transitions call `api.save()` or save with the output intent before hardware commands. No program runs while its own computer is unloaded. Network confirmations report that the IO computer applied an output, not that an external machine physically responded. Disconnect detection still uses the configured client timeout; external-machine feedback requires a real input.
 

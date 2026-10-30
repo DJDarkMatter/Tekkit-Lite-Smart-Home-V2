@@ -4,6 +4,8 @@ local Picker = dofile("lib_io_picker.lua")
 local Desktop = dofile("lib_desktop.lua")
 local Gui = dofile("lib_gui.lua")
 local Settings = dofile("lib_settings.lua")
+local SensorHub = dofile("lib_sensor_server.lua")
+local SensorPicker = dofile("lib_sensor_picker.lua")
 local systemColours = {background = {field = "backgroundColour", title = "Background"},
     windowBorder = {field = "windowBorderColour", title = "Window border"}, taskbar = {field = "taskbarColour", title = "Taskbar"}}
 local sideSet = {top = true, bottom = true, left = true, right = true, front = true, back = true}
@@ -77,7 +79,7 @@ local function validApp(app)
         if app[key] ~= nil and not integer(app[key], 1, 512) then return false end
     end
     if app.backgroundService ~= nil and type(app.backgroundService) ~= "boolean" then return false end
-    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection"}) do
+    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection"}) do
         if app[key] ~= nil and type(app[key]) ~= "function" then return false end
     end
     return (not app.maxWidth or app.maxWidth >= (app.minWidth or 8))
@@ -134,6 +136,8 @@ function Server.new(net, storage, config, logger)
     state.desktopVersion = 2
     state.bootCounter = (tonumber(state.bootCounter) or 0) + 1
     server.session = tostring(net.id) .. ":" .. state.bootCounter
+    local sensors = SensorHub.new(net, server.sensorClients, server.session)
+    server.sensors = sensors
     if source and source ~= config.saveFile then log("Recovered state from " .. source) end
     if not loaded and fs.exists(config.saveFile) then log("Unreadable OS state; starting with defaults") end
 
@@ -146,6 +150,15 @@ function Server.new(net, storage, config, logger)
         return ok, err
     end
     api.save = server.save
+    function api.invalidateAppViews(name)
+        local seen = {}
+        for _, win in pairs(state.windows) do
+            if win.appName == name and not seen[win.monitorId] then
+                invalidateInput(win.monitorId)
+                seen[win.monitorId] = true
+            end
+        end
+    end
 
     function api.getOSSettings()
         return {backgroundMode = "solid", backgroundColour = state.appearance.backgroundColour,
@@ -434,6 +447,16 @@ function Server.new(net, storage, config, logger)
         local client = server.sensorClients[clientId]
         if client and client.online then return copy(client.values[name]) end
     end
+    api.getSensorClients, api.watchSensor, api.unwatchSensor, api.getSensorReading = sensors.getClients, sensors.watch, sensors.unwatch, sensors.read
+    function api.pickSensor(windowId, key, current, kind)
+        local win = state.windows[windowId]
+        local app = win and definition(win.appName)
+        if not win or not app or not app.handleSensorSelection or type(key) ~= "string" then return false, "Invalid sensor selector" end
+        if win.width < 14 or win.height < 8 then return false, "Sensor settings need a 12x6 content area" end
+        server.dialogs[windowId] = SensorPicker.new(key, copy(current), kind)
+        invalidateInput(win.monitorId)
+        return true
+    end
     function api.getClients()
         local result = {}
         for kind, group in pairs({io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients}) do
@@ -635,6 +658,7 @@ function Server.new(net, storage, config, logger)
                         dialog.current = option and state.appearance[option.field] or api.getAppColour(win.appName)
                         content, dialog.hits = Gui.palette(win.width - 2, win.height - 2, dialog.current,
                             dialog.error or (option and option.title or "UI colour"))
+                    elseif dialog.kind == "sensor" then content = SensorPicker.render(dialog, win.width - 2, win.height - 2, api.getSensorClients())
                     else content = Picker.render(dialog, win.width - 2, win.height - 2, api.getIOClients()) end
                 else
                     ok, content = appCall(win.appName, "render", win.width - 2, win.height - 2,
@@ -891,10 +915,12 @@ function Server.new(net, storage, config, logger)
                                 else ok, err = api.setAppColour(win.appName, address) end
                                 if ok then server.dialogs[win.id] = nil else dialog.error = tostring(err) end
                             elseif action == "cancel" then server.dialogs[win.id] = nil end
+                        elseif dialog.kind == "sensor" then action, address = SensorPicker.touch(dialog, x - win.x, y - win.y)
                         else action, address = Picker.touch(dialog, x - win.x, y - win.y) end
                         if action == "cancel" then server.dialogs[win.id] = nil
                         elseif action == "selected" then
-                            local ok, accepted, err = appCall(win.appName, "handleIOSelection", dialog.key,
+                            local hook = dialog.kind == "sensor" and "handleSensorSelection" or "handleIOSelection"
+                            local ok, accepted, err = appCall(win.appName, hook, dialog.key,
                                 address, state.appStates[win.appName], api, viewContext(win))
                             if ok and accepted ~= false then server.dialogs[win.id] = nil
                             else dialog.error = tostring(ok and err or accepted) end
@@ -966,6 +992,7 @@ function Server.new(net, storage, config, logger)
                 ioReset = ioReset or ioChanged
                 client.announceNonce = message.nonce
             end
+            if message.clientType == "sensor" then sensors.announce(client, message, reconnect) end
             net.toClient(client, {type = "welcome", clientId = id, nonce = message.nonce, serverSession = server.session})
             if reconnect then log(message.clientType .. " connected: " .. id .. " (computer " .. message.sender .. ")") end
             if message.clientType == "io" then
@@ -985,6 +1012,11 @@ function Server.new(net, storage, config, logger)
             local client = registered(server.ioClients, message, replyChannel)
             if client and message.revision == client.revision then
                 client.ackedRevision, client.lastSeen = message.revision, now
+            end
+        elseif message.type == "sensorCatalog" or message.type == "sensorSample" then
+            local client = registered(server.sensorClients, message, replyChannel)
+            if client then
+                if message.type == "sensorCatalog" then sensors.catalog(client, message, now) else sensors.sample(client, message, now) end
             end
         elseif message.type == "sensorData" then
             local client = registered(server.sensorClients, message, replyChannel)
@@ -1067,6 +1099,7 @@ function Server.new(net, storage, config, logger)
         server.lastTick = now
         updateClock()
         for name in pairs(server.running) do appCall(name, "background", dt, state.appStates[name], api) end
+        sensors.tick(now)
         for id, client in pairs(server.ioClients) do
             if client.online and client.ackedRevision ~= client.revision
                 and now - (client.lastSent or -math.huge) >= config.retryInterval then server.syncIO(id, false) end
