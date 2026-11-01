@@ -24,26 +24,30 @@ function Sensor.new(net, config)
     end
     local function sample(watch, data, err)
         client.sequence = client.sequence + 1
-        local raw
+        local raw, profile
         if not err then
             local port = client.ports[watch.side]
-            if watch.profile == "ae_storage" and port and Data.cardKind(port.card) == "ae" then data = Data.aeSummary(data) end
-            data, err = Data.clean(data)
+            if port and Data.cardKind(port.card) == "ae" then
+                profile = watch.profile
+                if profile == "ae_storage" then data = Data.aeSummary(data)
+                elseif profile == "ae_items" then data,err = Data.aeItems(data) end
+            end
+            if not err then data, err = Data.clean(data, profile) end
             if type(data) ~= "table" then err = err or "Target not found" end
-            if not err then raw = textutils.serialize(data); if #raw > Data.chunkSize * Data.maxParts then err = "Reading exceeds network limit"; raw = nil end end
+            if not err then raw = textutils.serialize(data); if #raw > Data.chunkSize * Data.parts(profile) then err = "Reading exceeds network limit"; raw = nil end end
         end
         raw = raw or ""
         local port = client.ports[watch.side]
         if not err and watch.lastRaw == raw and watch.lastFull and os.clock() - watch.lastFull < 5 then
             send({type = "sensorSample", sequence = client.sequence, side = watch.side, target = watch.target,
-                card = port and port.card, status = "ok", part = 1, parts = 1, data = "", unchanged = true, baseSequence = watch.lastFullSequence})
+                card = port and port.card, profile = profile, status = "ok", part = 1, parts = 1, data = "", unchanged = true, baseSequence = watch.lastFullSequence})
             return
         end
         if not err then watch.lastRaw, watch.lastFull, watch.lastFullSequence = raw, os.clock(), client.sequence else watch.lastRaw = nil end
         local parts = math.max(1, math.ceil(#raw / Data.chunkSize))
         for part = 1, parts do
             send({type = "sensorSample", sequence = client.sequence, side = watch.side, target = watch.target,
-                card = port and port.card, status = err and "error" or "ok", error = err and tostring(err):sub(1, 160),
+                card = port and port.card, profile = profile, status = err and "error" or "ok", error = err and tostring(err):sub(1, 160),
                 part = part, parts = parts, data = raw:sub((part - 1) * Data.chunkSize + 1, part * Data.chunkSize)})
         end
     end
@@ -130,7 +134,7 @@ function Sensor.new(net, config)
             local previous, watches, seen = client.watches, {}, {}
             for _, address in ipairs(message.watches) do
                 if not Data.address(address) or address.clientId ~= config.clientId
-                    or address.profile ~= nil and address.profile ~= "ae_storage" then return end
+                    or not Data.validProfile(address.profile) then return end
                 seen[address.side] = seen[address.side] or {}
                 if not seen[address.side][address.target] then
                     local watch = {side = address.side, target = address.target, card = address.card, profile = address.profile, nextRead = 0}
@@ -191,7 +195,7 @@ function Sensor.new(net, config)
             cursor = cursor % #client.watches + 1
             local watch = client.watches[cursor]
             if now >= watch.nextRead then
-                watch.nextRead = now + config.pollInterval
+                watch.nextRead = now + (watch.profile == "ae_items" and math.max(2, config.pollInterval) or config.pollInterval)
                 local port = client.ports[watch.side]
                 if port and port.status == "ok" and port.card == watch.card then start(port, "sample", "getTargetDetails", watch)
                 else sample(watch, nil, "Sensor or card unavailable") end

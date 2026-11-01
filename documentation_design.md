@@ -14,6 +14,8 @@ Apps are stored as files on the main OS computer's storage. The OS loads app fil
 
 Bundled-v21 also checkpoints each window's app navigation (selected view/page and plain UI drafts) together with geometry. Existing Switchboard views restore on their original monitors after restart/reconnect. Live readings remain separate and must arrive again. The optional [ME storage overview and independent four-app measurement plan](documentation_me_storage.md) use the generic sensor hub; no ME app is part of a default OS installation.
 
+Bundled-v22 implements the second independent app, [ME item monitors](documentation_me_monitor.md). It provides saved source-selectable grid views, per-tile item bindings, both-direction Name/Amount sorting, search and ordinary decimal quantities. It shares sensor reads with the capacity app through the compact ae_items profile, while maintaining separate app state. The two production apps remain future work. Coffee's player line is restored and its clock clearance matches the clock background; Cells surveyed is removed only from the capacity dashboard.
+
 ## 2. Client Types
 
 ### Monitor Clients

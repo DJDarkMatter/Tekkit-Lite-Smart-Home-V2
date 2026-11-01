@@ -1,5 +1,5 @@
 -- Shared bounded sensor data and OCS 1.4.7 field adapters. No peripherals here.
-local Data = {protocol = 1, chunkSize = 12000, maxParts = 16, maxTargets = 4096}
+local Data = {protocol = 1, chunkSize = 12000, maxParts = 16, maxItemParts = 64, maxTargets = 4096, maxItems = 8192}
 local sides = {top = true, bottom = true, left = true, right = true, front = true, back = true}
 function Data.number(v) return type(v) == "number" and v == v and math.abs(v) < math.huge end
 function Data.integer(v, lo, hi) return Data.number(v) and v == math.floor(v) and v >= lo and v <= hi end
@@ -8,11 +8,11 @@ function Data.address(a)
     return type(a) == "table" and Data.string(a.clientId, 64) and sides[a.side] and Data.string(a.target, 128)
         and (a.card == nil or Data.string(a.card, 128))
 end
-function Data.clean(value)
+function Data.clean(value, profile)
     local seen, count = {}, 0
     local function walk(v, depth)
         count = count + 1
-        if count > 12000 or depth > 8 then error("Sensor reading is too large or deeply nested", 0) end
+        if count > (profile == "ae_items" and 60000 or 12000) or depth > 8 then error("Sensor reading is too large or deeply nested", 0) end
         if type(v) == "number" then assert(Data.number(v), "Invalid sensor number"); return v end
         if type(v) == "boolean" or v == nil then return v end
         if type(v) == "string" then assert(#v <= 2048, "Sensor string too long"); return v end
@@ -37,6 +37,34 @@ function Data.aeSummary(value)
     local result = {ItemsOmitted = true}
     for _, key in ipairs({"Name", "RawName", "Position", "Powered", "FreeTypes", "FreeCount", "FreeBytes",
         "UsedTypes", "UsedCount", "UsedBytes", "TotalBytes", "CellCount", "DriveCount"}) do result[key] = value[key] end
+    return result
+end
+function Data.validProfile(profile) return profile == nil or profile == "ae_storage" or profile == "ae_items" end
+function Data.profileRank(profile) return profile == "ae_storage" and 1 or profile == "ae_items" and 2 or 3 end
+function Data.parts(profile) return profile == "ae_items" and Data.maxItemParts or Data.maxParts end
+-- Compact the native item maps without discarding item identity or quantities.
+-- Summary counters remain available to capacity apps sharing the same target.
+function Data.aeItems(value)
+    if type(value) ~= "table" then return value end
+    local result = Data.aeSummary(value)
+    result.ItemsOmitted, result.ItemsFormat = nil, "ae_compact_v1"
+    if type(value.Items) ~= "table" then return result end
+    result.Items, result.ItemsComplete = {}, true
+    for _, item in pairs(value.Items) do
+        if type(item) ~= "table" or not Data.integer(item.Size, 0, 9007199254740991) then return nil, "Invalid AE item count" end
+        local raw = type(item.RawName) == "string" and item.RawName or ""
+        local name = type(item.Name) == "string" and item.Name or raw
+        local damage = item.DamageValue or item.Damagevalue or 0
+        if #raw > 256 or #name > 256 or not Data.integer(damage, 0, 2147483647) then return nil, "Invalid AE item metadata" end
+        if #result.Items >= Data.maxItems then return nil, "AE item catalog exceeds 8192 entries" end
+        result.Items[#result.Items+1] = {raw, damage, name, item.Size}
+    end
+    table.sort(result.Items, function(a,b)
+        if a[1] ~= b[1] then return a[1] < b[1] end
+        if a[2] ~= b[2] then return a[2] < b[2] end
+        if a[3] ~= b[3] then return a[3] < b[3] end
+        return a[4] < b[4]
+    end)
     return result
 end
 function Data.cardKind(card)

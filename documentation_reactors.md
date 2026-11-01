@@ -4,7 +4,7 @@
 
 ## Install and add reactors
 
-Upload the current package files to the V2 repository root. Replace your installer paste with bundled-v21 `install.lua`, download a fresh `inst`, and quit the central OS to CraftOS:
+Upload the current package files to the V2 repository root. Replace your installer paste with bundled-v22 `install.lua`, download a fresh `inst`, and quit the central OS to CraftOS:
 
 ```text
 cd /

@@ -12,7 +12,7 @@ inst app switchboard
 reboot
 ```
 
-This downloads only `apps_switchboard.lua` through the GitHub API, validates it and enables it. The v20 appearance feature needs no installer change. For v21 navigation restoration, update the central server role with a fresh bundled-v21 installer; the Switchboard app file itself is unchanged. Existing configuration and app/window state are preserved. A first installation needs the [current OS](README.md) and GitHub-capable `inst`; Switchboard requires the shared routing/UI APIs from bundled-v14 or newer.
+This downloads only `apps_switchboard.lua` through the GitHub API, validates it and enables it. The v20 appearance feature needs no installer change. For v21 navigation restoration, update the central server role with a fresh bundled-v22 installer; the Switchboard app file itself is unchanged. Existing configuration and app/window state are preserved. A first installation needs the [current OS](README.md) and GitHub-capable `inst`; Switchboard requires the shared routing/UI APIs from bundled-v14 or newer.
 
 Open **Switchboard** from the monitor's `[+]` launcher. It starts when opened; restored OS windows start it again after reboot. Closing one monitor's window leaves the others running. Closing the last window stops the UI; the OS keeps applying saved switch positions with no window open.
 

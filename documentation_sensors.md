@@ -63,3 +63,10 @@ Samples use changed full snapshots or compact unchanged heartbeats. Heartbeats i
 The default freshness limit is ten seconds, increasing to three polling intervals for configured slower polling. Client loss is separately detected by the OS's client timeout. Live readings are never restored from disk as fresh after a reboot. Removing the last active subscription stops detailed polling; basic card/target discovery continues. All relevant computers/chunks must remain loaded for live readings.
 
 The sensor role never writes redstone. Reactor switches use independently selected **IO clients**, with the existing cooldown/ACK system. The installer embeds client/core files offline and no apps. No extra Pastebin paste, OCS Lua API installation or HTTP request is needed to extract the sensor role; the peripheral mod itself must be installed on the server.
+
+
+## Compact item catalogs (bundled-v22)
+
+The independent [ME monitors app](documentation_me_monitor.md) requests the ae_items profile from the same AE access-point target used by capacity views. Its compact rows preserve raw identity, damage, name and count with the native capacity fields. The hub shares one physical poll, choosing default/raw over ae_items over ae_storage. Capacity readers can request only summary fields from a richer cached sample. Update the OS and AE sensor roles for this profile; relay/monitor/IO programs do not change.
+
+Typed item snapshots allow up to 8,192 entries, 60,000 cleaned values and 64 twelve-thousand-character fragments, with atomic assembly and profile/base checks. Native/default and storage-only profiles retain their existing smaller limits. Item polls run no faster than two seconds. Missing/oversized/invalid catalogs report errors rather than publishing a partial item list as zero. NBT is not exposed by the old card; equal raw-name/damage variants cannot be distinguished. See the monitor guide for sorting, selection and count semantics.

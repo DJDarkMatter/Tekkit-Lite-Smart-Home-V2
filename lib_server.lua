@@ -138,6 +138,7 @@ function Server.new(net, storage, config, logger)
     local api, errors = {}, {}
     server.api = api
     api.ui, api.log, api.sharedOutputs, api.sensorProfiles = Gui, log, true, true
+    api.aeItemProfiles = true
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
         local monitor = server.monitors[id]

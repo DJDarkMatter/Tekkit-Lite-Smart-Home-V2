@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v21`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v22`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -85,6 +85,10 @@ Bundled-v19 fixes the OS crash `lib_sensor_server.lua:199: invalid key to 'next'
 Version 20 is an app-only Switchboard update. Each switch's editor adds a Colour palette with an optional saved tile colour and Auto to restore the routed wire colour. Actual routing remains visible, and appearance edits leave routing and output state alone. Upload `apps_switchboard.lua` to GitHub, quit the central OS, run `inst app switchboard` with your existing installer, then reboot. No installer paste replacement or client/core update is needed. The full v20 package includes every root file and the unchanged bundled-v19 installer.
 
 Bundled-v21 adds the optional [ME storage overview](documentation_me_storage.md), using an explicitly selected AE1 sensor/access-point source. It shows native bytes, item counts and type-slot data, with optional inventory-card drive/cell surveys. No ME app is bundled automatically. It also saves per-window app navigation (including each monitor's Switchboard view/page), adds Coffee's clock side clearance and hides its compact Player line. Update the central OS and the sensor role serving ME, then explicitly install `coffee` and `me_storage` with the fresh v21 installer. Relays, IO/monitor clients and existing Switchboard/Reactors app files need no update. The ME guide explains version-specific limits and the measurement plan for the next three independent apps.
+
+Bundled-v22 adds independent [ME item monitors](documentation_me_monitor.md): saved views, arbitrary 1–16 by 1–16 grids, per-tile item selection, Name/Amount sorting in both directions, search and live plain-number counts. The new compact item feed shares one sensor poll with capacity views and supports bounded larger catalogs. Update the OS and affected ME sensor roles, then explicitly install `me_monitor`. Coffee's compact player line is restored; clock side clearance now matches its selected background colour. The capacity dashboard removes Cells surveyed and uses plain decimal counters/one-decimal percentages without scientific notation or letter suffixes. Update `coffee` and `me_storage` too. The full package includes all fifty-seven flat root files.
+
+Version 23 changes the ME capacity heading from Live to Usage, preserving connection/power/error messages. Drive inventories are an optional inventory-card survey of installed cells, separate from AE network totals. Update only `me_storage` using the existing installer; all core/client files and the bundled-v22 installer are unchanged. The full v23 package still includes every root file.
 
 On the **OS console**, substitute the IO computer's actual client ID:
 

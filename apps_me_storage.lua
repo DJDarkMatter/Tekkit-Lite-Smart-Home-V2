@@ -31,17 +31,26 @@ local function find(list, id)
     for index, item in ipairs(list or {}) do if item.id == id then return item, index end end
 end
 local function key(entry, drive) return appName .. "_" .. entry.id .. (drive and "_drive_" .. drive.id or "_network") end
+local function decimal(value)
+    local digits = {}
+    repeat
+        local digit = value % 10
+        digits[#digits+1] = ("0123456789"):sub(digit+1,digit+1)
+        value = math.floor(value / 10)
+    until value == 0
+    return table.concat(digits):reverse()
+end
 local function number(value)
     if value == nil then return "Unavailable" end
-    return string.format("%.0f", value):reverse():gsub("(%d%d%d)", "%1 "):reverse():gsub("^ ", "")
+    return decimal(value):reverse():gsub("(%d%d%d)", "%1 "):reverse():gsub("^ ", "")
+end
+local function percent(value)
+    local tenths = math.floor(value * 10 + 0.5)
+    return decimal(math.floor(tenths / 10)) .. "." .. decimal(tenths % 10)
 end
 local function short(value, width)
     local text = number(value)
-    if #text <= width or value == nil then return text end
-    for _, unit in ipairs({{1e12,"T"},{1e9,"G"},{1e6,"M"},{1e3,"k"}}) do
-        if value >= unit[1] then return string.format("%.2f%s", value / unit[1], unit[2]) end
-    end
-    return text
+    return #text > width and text:gsub(" ", "") or text
 end
 local function storage(reading)
     local data = reading.data or {}
@@ -235,27 +244,21 @@ local function build(width, height, state, api, context)
     if screen == "home" then
         local items = {}
         for _, item in ipairs(state.networks) do
-            local value = storage(api.getSensorReading(item.sensor))
-            items[#items+1] = {label = item.name .. (value.percent and string.format(" %.1f%%",value.percent) or " / "..value.status), action="open", value=item.id}
+            local value = storage(api.getSensorReading(item.sensor, {profile="ae_storage"}))
+            items[#items+1] = {label = item.name .. (value.percent and " "..percent(value.percent).."%" or " / "..value.status), action="open", value=item.id}
         end
         if #items == 0 then items[1] = {label="Select an ME system", enabled=false} end
         list("ME storage", items, height-2)
         button(height-1, "+ Add system", "add", nil, nil, nil, #state.networks < 16, accent)
         footer({{"Settings","settings"}})
     elseif screen == "network" then
-        local value = storage(api.getSensorReading(entry.sensor))
+        local value = storage(api.getSensorReading(entry.sensor, {profile="ae_storage"}))
         local live = value.status == "ok"
         ui.heading(entry.name, accent)
-        ui.text(2, (live and "Live" or value.error or value.status) .. (value.percent and string.format(" %.1f%%",value.percent) or ""), true)
+        ui.text(2, (live and "Usage" or value.error or value.status) .. (value.percent and " "..percent(value.percent).."%" or ""), true)
         ui.style(1,2,width,1, live and 1 or 32768, live and 128 or 2)
-        local cells, validDrives = 0, 0
-        for _, item in ipairs(entry.drives) do
-            local inv = inventory(api.getSensorReading(item.sensor))
-            if inv.status == "ok" then cells, validDrives = cells + inv.known, validDrives + 1 end
-        end
         local metrics = {{"Bytes used",value.used},{"Bytes free",value.free},{"Total bytes",value.total},
-            {"Items stored",value.items},{"Item room*",value.room},{"Item types",value.types},{"Free type slots",value.freeTypes},
-            {"Cells surveyed",validDrives > 0 and cells or nil}}
+            {"Items stored",value.items},{"Item room*",value.room},{"Item types",value.types},{"Free type slots",value.freeTypes}}
         local cols, cardH = width >= 38 and 2 or 1, height >= 10 and 3 or 2
         local rows = math.max(1, math.floor((height-4)/cardH))
         local first = page(#metrics, rows*cols, height-1)
@@ -274,8 +277,6 @@ local function build(width, height, state, api, context)
                     ui.style(x,y+2,span,1,nil,128)
                     local filled = math.floor(span*value.percent/100+0.5)
                     if filled > 0 then ui.style(x,y+2,filled,1,nil,live and (value.percent >= 90 and 2 or 32) or 128) end
-                elseif cardH == 3 and first+i == 8 and #entry.drives > 0 then
-                    put(x,y+2,validDrives.."/"..#entry.drives.." drives live",span)
                 end
             end
         end
@@ -322,7 +323,7 @@ local function build(width, height, state, api, context)
     elseif screen == "source" or screen == "driveSource" then
         local sensor = screen == "source" and entry.sensor or drive.sensor
         local lines = sourceLines(sensor)
-        local reading = api.getSensorReading(sensor)
+        local reading = api.getSensorReading(sensor, screen == "source" and {profile="ae_storage"} or nil)
         lines[#lines+1]="Status: "..reading.status; lines[#lines+1]="Age: "..(reading.age and string.format("%.1fs",reading.age) or "Unavailable")
         if reading.error then lines[#lines+1]=reading.error end
         if screen == "source" then

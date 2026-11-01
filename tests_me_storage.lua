@@ -78,12 +78,27 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local data=t.api.getSensorReading(entry.sensor)
         equal(data.status,"ok"); equal(data.data.UsedBytes,1024); equal(data.data.Items,nil); equal(data.data.ItemsOmitted,true)
         local text=t.allText(t.id)
-        for _,value in ipairs({"25.0%","1 024","3 072","4 096","7 000","20 000","42","84","Cells surveyed","Unavailable"}) do assert(text:find(value,1,true),value) end
+        for _,value in ipairs({"25.0%","1 024","3 072","4 096","7 000","20 000","42","84"}) do assert(text:find(value,1,true),value) end
+        assert(not text:find("Cells surveyed",1,true))
         equal(#t.sensor.client.watches,1); equal(t.sensor.client.watches[1].profile,"ae_storage")
         equal(next(t.central.server.state.outputMap),nil); equal(#t.sensor.redstoneWrites,0)
         t.click(t.id,"home"); local empty=t.add(t.id,"2,0,0")
         equal(t.api.getSensorReading(empty.sensor).data.UsedBytes,0)
         assert(t.allText(t.id):find("0.0%",1,true),"Genuine empty storage remains zero")
+    end
+    function tests.me_storage_plain_integers_and_percentages_do_not_depend_on_legacy_float_formatting()
+        local t=setup(); t.add(t.id)
+        t.central.env.string=setmetatable({format=function(format,...)
+            if format=="%.0f" or format:find("%.1f",1,true) then return "3.7389404E7" end
+            return string.format(format,...)
+        end},{__index=string})
+        t.ae.details["1,0,0"].UsedCount=37389404
+        t.ae.details["1,0,0"].UsedBytes=85579404
+        t.ae.details["1,0,0"].FreeBytes=14420596
+        t.bus.advance(3)
+        local text=t.allText(t.id)
+        assert(text:find("37 389 404",1,true)); assert(text:find("85.6%",1,true))
+        assert(not text:find("E7",1,true)); assert(not text:find("Cells surveyed",1,true))
     end
     function tests.me_storage_large_item_lists_are_projected_and_full_subscribers_share_one_target_poll()
         local t=setup(); local entry=t.add(t.id)

@@ -23,7 +23,7 @@ function Hub.new(net, clients, session)
     end
     function hub.watch(key, address, options)
         if not Data.string(key, 96) or not Data.address(address) then return false, "Invalid sensor binding" end
-        if options ~= nil and (type(options) ~= "table" or options.profile ~= "ae_storage") then return false, "Invalid sensor profile" end
+        if options ~= nil and (type(options) ~= "table" or not Data.validProfile(options.profile) or options.profile == nil) then return false, "Invalid sensor profile" end
         hub.watches[key] = {address = copy(address), used = os.clock(), profile = options and options.profile}
         return true
     end
@@ -92,7 +92,7 @@ function Hub.new(net, clients, session)
     function hub.sample(client, message, now)
         if client.sensorProtocol ~= Data.protocol or client.bootId ~= message.bootId or not sides[message.side]
             or not Data.string(message.target, 128) or not Data.integer(message.sequence, 1, 2147483647)
-            or not Data.integer(message.parts, 1, Data.maxParts) or not Data.integer(message.part, 1, message.parts)
+            or not Data.validProfile(message.profile) or not Data.integer(message.parts, 1, Data.parts(message.profile)) or not Data.integer(message.part, 1, message.parts)
             or type(message.data) ~= "string" or #message.data > Data.chunkSize
             or (message.status ~= "ok" and message.status ~= "error") or not wanted(message.clientId, message.side, message.target) then return end
         local port = client.ports[message.side]
@@ -103,26 +103,26 @@ function Hub.new(net, clients, session)
         if current and message.sequence <= current.sequence or pending and message.sequence < pending.sequence then return end
         if message.unchanged then
             if message.parts ~= 1 or message.part ~= 1 or message.status ~= "ok" or message.data ~= ""
-                or not current or not current.data or current.dataSequence ~= message.baseSequence then return end
+                or not current or not current.data or current.profile ~= message.profile or current.dataSequence ~= message.baseSequence then return end
             current.sequence, current.status, current.error, current.time, current.dataTime = message.sequence, "ok", nil, now, now
             parts[message.target], client.lastSeen = nil, now
             return
         end
         if not pending or pending.sequence ~= message.sequence then
-            pending = {sequence = message.sequence, parts = message.parts, status = message.status, card = message.card, chunks = {}, time = now}
+            pending = {sequence = message.sequence, parts = message.parts, status = message.status, card = message.card, profile = message.profile, chunks = {}, time = now}
             parts[message.target] = pending
         end
-        if pending.parts ~= message.parts or pending.status ~= message.status or pending.card ~= message.card then return end
+        if pending.parts ~= message.parts or pending.status ~= message.status or pending.card ~= message.card or pending.profile ~= message.profile then return end
         pending.chunks[message.part] = message.data
         for part = 1, pending.parts do if not pending.chunks[part] then return end end
         local data, err
         if pending.status == "ok" then
             local ok, value = pcall(textutils.unserialize, table.concat(pending.chunks))
             if not ok or type(value) ~= "table" then return end
-            data, err = Data.clean(value)
+            data, err = Data.clean(value, pending.profile)
             if not data then return end
         else err = type(message.error) == "string" and message.error:sub(1, 160) or "Sensor read failed" end
-        readings[message.target] = {sequence = message.sequence, card = message.card, status = pending.status,
+        readings[message.target] = {sequence = message.sequence, card = message.card, profile = pending.profile, status = pending.status,
             data = data or current and current.data, error = err, time = now, dataTime = data and now or current and current.dataTime,
             dataSequence = data and message.sequence or current and current.dataSequence}
         parts[message.target], client.lastSeen = nil, now
@@ -145,7 +145,7 @@ function Hub.new(net, clients, session)
         end
         return result
     end
-    function hub.read(address)
+    function hub.read(address, options)
         if not Data.address(address) then return {status = "unconfigured", error = "Select a sensor target"} end
         local client = clients[address.clientId]
         if not client or not client.online then return {status = "offline", error = "Sensor client offline"} end
@@ -159,7 +159,10 @@ function Hub.new(net, clients, session)
         if address.targetType and address.targetType ~= found.type then return {status = "target_changed", error = "Target type changed"} end
         local reading = client.readings[address.side] and client.readings[address.side][address.target]
         if not reading then return {status = "waiting", error = "Waiting for reading"} end
-        local result = copy(reading)
+        local result = {}
+        for field, value in pairs(reading) do
+            result[field] = copy(field == "data" and options and options.profile == "ae_storage" and Data.aeSummary(value) or value)
+        end
         result.age, result.target = math.max(0, os.clock() - (reading.dataTime or reading.time)), copy(found)
         if result.age > client.sensorMaxAge and result.status == "ok" then result.status, result.error = "stale", "Reading outdated" end
         result.reactor = Data.reactor(result.data)
@@ -191,8 +194,8 @@ function Hub.new(net, clients, session)
                         local port = client.ports[a.side]
                         a.card = a.card or port and port.card
                         list[#list + 1], seen[a.side][a.target] = a, #list + 1
-                    elseif index and source.profile ~= "ae_storage" then
-                        list[index].profile = nil -- A full subscriber wins; the target is still polled once.
+                    elseif index and Data.profileRank(source.profile) > Data.profileRank(list[index].profile) then
+                        list[index].profile = source.profile -- Richer subscribers win; the target is still polled once.
                     end
                 end
                 local signature = textutils.serialize(list)

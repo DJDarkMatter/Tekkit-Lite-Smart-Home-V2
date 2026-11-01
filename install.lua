@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v21
+-- SmartHome OS installer: bundled-v22
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -1172,6 +1172,7 @@ function Server.new(net, storage, config, logger)
     local api, errors = {}, {}
     server.api = api
     api.ui, api.log, api.sharedOutputs, api.sensorProfiles = Gui, log, true, true
+    api.aeItemProfiles = true
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
         local monitor = server.monitors[id]
@@ -2958,7 +2959,7 @@ end, function()
 end)
 ]=],
     ["lib_sensor_data.lua"] = [=[-- Shared bounded sensor data and OCS 1.4.7 field adapters. No peripherals here.
-local Data = {protocol = 1, chunkSize = 12000, maxParts = 16, maxTargets = 4096}
+local Data = {protocol = 1, chunkSize = 12000, maxParts = 16, maxItemParts = 64, maxTargets = 4096, maxItems = 8192}
 local sides = {top = true, bottom = true, left = true, right = true, front = true, back = true}
 function Data.number(v) return type(v) == "number" and v == v and math.abs(v) < math.huge end
 function Data.integer(v, lo, hi) return Data.number(v) and v == math.floor(v) and v >= lo and v <= hi end
@@ -2967,11 +2968,11 @@ function Data.address(a)
     return type(a) == "table" and Data.string(a.clientId, 64) and sides[a.side] and Data.string(a.target, 128)
         and (a.card == nil or Data.string(a.card, 128))
 end
-function Data.clean(value)
+function Data.clean(value, profile)
     local seen, count = {}, 0
     local function walk(v, depth)
         count = count + 1
-        if count > 12000 or depth > 8 then error("Sensor reading is too large or deeply nested", 0) end
+        if count > (profile == "ae_items" and 60000 or 12000) or depth > 8 then error("Sensor reading is too large or deeply nested", 0) end
         if type(v) == "number" then assert(Data.number(v), "Invalid sensor number"); return v end
         if type(v) == "boolean" or v == nil then return v end
         if type(v) == "string" then assert(#v <= 2048, "Sensor string too long"); return v end
@@ -2996,6 +2997,34 @@ function Data.aeSummary(value)
     local result = {ItemsOmitted = true}
     for _, key in ipairs({"Name", "RawName", "Position", "Powered", "FreeTypes", "FreeCount", "FreeBytes",
         "UsedTypes", "UsedCount", "UsedBytes", "TotalBytes", "CellCount", "DriveCount"}) do result[key] = value[key] end
+    return result
+end
+function Data.validProfile(profile) return profile == nil or profile == "ae_storage" or profile == "ae_items" end
+function Data.profileRank(profile) return profile == "ae_storage" and 1 or profile == "ae_items" and 2 or 3 end
+function Data.parts(profile) return profile == "ae_items" and Data.maxItemParts or Data.maxParts end
+-- Compact the native item maps without discarding item identity or quantities.
+-- Summary counters remain available to capacity apps sharing the same target.
+function Data.aeItems(value)
+    if type(value) ~= "table" then return value end
+    local result = Data.aeSummary(value)
+    result.ItemsOmitted, result.ItemsFormat = nil, "ae_compact_v1"
+    if type(value.Items) ~= "table" then return result end
+    result.Items, result.ItemsComplete = {}, true
+    for _, item in pairs(value.Items) do
+        if type(item) ~= "table" or not Data.integer(item.Size, 0, 9007199254740991) then return nil, "Invalid AE item count" end
+        local raw = type(item.RawName) == "string" and item.RawName or ""
+        local name = type(item.Name) == "string" and item.Name or raw
+        local damage = item.DamageValue or item.Damagevalue or 0
+        if #raw > 256 or #name > 256 or not Data.integer(damage, 0, 2147483647) then return nil, "Invalid AE item metadata" end
+        if #result.Items >= Data.maxItems then return nil, "AE item catalog exceeds 8192 entries" end
+        result.Items[#result.Items+1] = {raw, damage, name, item.Size}
+    end
+    table.sort(result.Items, function(a,b)
+        if a[1] ~= b[1] then return a[1] < b[1] end
+        if a[2] ~= b[2] then return a[2] < b[2] end
+        if a[3] ~= b[3] then return a[3] < b[3] end
+        return a[4] < b[4]
+    end)
     return result
 end
 function Data.cardKind(card)
@@ -3096,26 +3125,30 @@ function Sensor.new(net, config)
     end
     local function sample(watch, data, err)
         client.sequence = client.sequence + 1
-        local raw
+        local raw, profile
         if not err then
             local port = client.ports[watch.side]
-            if watch.profile == "ae_storage" and port and Data.cardKind(port.card) == "ae" then data = Data.aeSummary(data) end
-            data, err = Data.clean(data)
+            if port and Data.cardKind(port.card) == "ae" then
+                profile = watch.profile
+                if profile == "ae_storage" then data = Data.aeSummary(data)
+                elseif profile == "ae_items" then data,err = Data.aeItems(data) end
+            end
+            if not err then data, err = Data.clean(data, profile) end
             if type(data) ~= "table" then err = err or "Target not found" end
-            if not err then raw = textutils.serialize(data); if #raw > Data.chunkSize * Data.maxParts then err = "Reading exceeds network limit"; raw = nil end end
+            if not err then raw = textutils.serialize(data); if #raw > Data.chunkSize * Data.parts(profile) then err = "Reading exceeds network limit"; raw = nil end end
         end
         raw = raw or ""
         local port = client.ports[watch.side]
         if not err and watch.lastRaw == raw and watch.lastFull and os.clock() - watch.lastFull < 5 then
             send({type = "sensorSample", sequence = client.sequence, side = watch.side, target = watch.target,
-                card = port and port.card, status = "ok", part = 1, parts = 1, data = "", unchanged = true, baseSequence = watch.lastFullSequence})
+                card = port and port.card, profile = profile, status = "ok", part = 1, parts = 1, data = "", unchanged = true, baseSequence = watch.lastFullSequence})
             return
         end
         if not err then watch.lastRaw, watch.lastFull, watch.lastFullSequence = raw, os.clock(), client.sequence else watch.lastRaw = nil end
         local parts = math.max(1, math.ceil(#raw / Data.chunkSize))
         for part = 1, parts do
             send({type = "sensorSample", sequence = client.sequence, side = watch.side, target = watch.target,
-                card = port and port.card, status = err and "error" or "ok", error = err and tostring(err):sub(1, 160),
+                card = port and port.card, profile = profile, status = err and "error" or "ok", error = err and tostring(err):sub(1, 160),
                 part = part, parts = parts, data = raw:sub((part - 1) * Data.chunkSize + 1, part * Data.chunkSize)})
         end
     end
@@ -3202,7 +3235,7 @@ function Sensor.new(net, config)
             local previous, watches, seen = client.watches, {}, {}
             for _, address in ipairs(message.watches) do
                 if not Data.address(address) or address.clientId ~= config.clientId
-                    or address.profile ~= nil and address.profile ~= "ae_storage" then return end
+                    or not Data.validProfile(address.profile) then return end
                 seen[address.side] = seen[address.side] or {}
                 if not seen[address.side][address.target] then
                     local watch = {side = address.side, target = address.target, card = address.card, profile = address.profile, nextRead = 0}
@@ -3263,7 +3296,7 @@ function Sensor.new(net, config)
             cursor = cursor % #client.watches + 1
             local watch = client.watches[cursor]
             if now >= watch.nextRead then
-                watch.nextRead = now + config.pollInterval
+                watch.nextRead = now + (watch.profile == "ae_items" and math.max(2, config.pollInterval) or config.pollInterval)
                 local port = client.ports[watch.side]
                 if port and port.status == "ok" and port.card == watch.card then start(port, "sample", "getTargetDetails", watch)
                 else sample(watch, nil, "Sensor or card unavailable") end
@@ -3300,7 +3333,7 @@ function Hub.new(net, clients, session)
     end
     function hub.watch(key, address, options)
         if not Data.string(key, 96) or not Data.address(address) then return false, "Invalid sensor binding" end
-        if options ~= nil and (type(options) ~= "table" or options.profile ~= "ae_storage") then return false, "Invalid sensor profile" end
+        if options ~= nil and (type(options) ~= "table" or not Data.validProfile(options.profile) or options.profile == nil) then return false, "Invalid sensor profile" end
         hub.watches[key] = {address = copy(address), used = os.clock(), profile = options and options.profile}
         return true
     end
@@ -3369,7 +3402,7 @@ function Hub.new(net, clients, session)
     function hub.sample(client, message, now)
         if client.sensorProtocol ~= Data.protocol or client.bootId ~= message.bootId or not sides[message.side]
             or not Data.string(message.target, 128) or not Data.integer(message.sequence, 1, 2147483647)
-            or not Data.integer(message.parts, 1, Data.maxParts) or not Data.integer(message.part, 1, message.parts)
+            or not Data.validProfile(message.profile) or not Data.integer(message.parts, 1, Data.parts(message.profile)) or not Data.integer(message.part, 1, message.parts)
             or type(message.data) ~= "string" or #message.data > Data.chunkSize
             or (message.status ~= "ok" and message.status ~= "error") or not wanted(message.clientId, message.side, message.target) then return end
         local port = client.ports[message.side]
@@ -3380,26 +3413,26 @@ function Hub.new(net, clients, session)
         if current and message.sequence <= current.sequence or pending and message.sequence < pending.sequence then return end
         if message.unchanged then
             if message.parts ~= 1 or message.part ~= 1 or message.status ~= "ok" or message.data ~= ""
-                or not current or not current.data or current.dataSequence ~= message.baseSequence then return end
+                or not current or not current.data or current.profile ~= message.profile or current.dataSequence ~= message.baseSequence then return end
             current.sequence, current.status, current.error, current.time, current.dataTime = message.sequence, "ok", nil, now, now
             parts[message.target], client.lastSeen = nil, now
             return
         end
         if not pending or pending.sequence ~= message.sequence then
-            pending = {sequence = message.sequence, parts = message.parts, status = message.status, card = message.card, chunks = {}, time = now}
+            pending = {sequence = message.sequence, parts = message.parts, status = message.status, card = message.card, profile = message.profile, chunks = {}, time = now}
             parts[message.target] = pending
         end
-        if pending.parts ~= message.parts or pending.status ~= message.status or pending.card ~= message.card then return end
+        if pending.parts ~= message.parts or pending.status ~= message.status or pending.card ~= message.card or pending.profile ~= message.profile then return end
         pending.chunks[message.part] = message.data
         for part = 1, pending.parts do if not pending.chunks[part] then return end end
         local data, err
         if pending.status == "ok" then
             local ok, value = pcall(textutils.unserialize, table.concat(pending.chunks))
             if not ok or type(value) ~= "table" then return end
-            data, err = Data.clean(value)
+            data, err = Data.clean(value, pending.profile)
             if not data then return end
         else err = type(message.error) == "string" and message.error:sub(1, 160) or "Sensor read failed" end
-        readings[message.target] = {sequence = message.sequence, card = message.card, status = pending.status,
+        readings[message.target] = {sequence = message.sequence, card = message.card, profile = pending.profile, status = pending.status,
             data = data or current and current.data, error = err, time = now, dataTime = data and now or current and current.dataTime,
             dataSequence = data and message.sequence or current and current.dataSequence}
         parts[message.target], client.lastSeen = nil, now
@@ -3422,7 +3455,7 @@ function Hub.new(net, clients, session)
         end
         return result
     end
-    function hub.read(address)
+    function hub.read(address, options)
         if not Data.address(address) then return {status = "unconfigured", error = "Select a sensor target"} end
         local client = clients[address.clientId]
         if not client or not client.online then return {status = "offline", error = "Sensor client offline"} end
@@ -3436,7 +3469,10 @@ function Hub.new(net, clients, session)
         if address.targetType and address.targetType ~= found.type then return {status = "target_changed", error = "Target type changed"} end
         local reading = client.readings[address.side] and client.readings[address.side][address.target]
         if not reading then return {status = "waiting", error = "Waiting for reading"} end
-        local result = copy(reading)
+        local result = {}
+        for field, value in pairs(reading) do
+            result[field] = copy(field == "data" and options and options.profile == "ae_storage" and Data.aeSummary(value) or value)
+        end
         result.age, result.target = math.max(0, os.clock() - (reading.dataTime or reading.time)), copy(found)
         if result.age > client.sensorMaxAge and result.status == "ok" then result.status, result.error = "stale", "Reading outdated" end
         result.reactor = Data.reactor(result.data)
@@ -3468,8 +3504,8 @@ function Hub.new(net, clients, session)
                         local port = client.ports[a.side]
                         a.card = a.card or port and port.card
                         list[#list + 1], seen[a.side][a.target] = a, #list + 1
-                    elseif index and source.profile ~= "ae_storage" then
-                        list[index].profile = nil -- A full subscriber wins; the target is still polled once.
+                    elseif index and Data.profileRank(source.profile) > Data.profileRank(list[index].profile) then
+                        list[index].profile = source.profile -- Richer subscribers win; the target is still polled once.
                     end
                 end
                 local signature = textutils.serialize(list)
@@ -3698,7 +3734,7 @@ end
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v21")
+print("SmartHome installer: bundled-v22")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
