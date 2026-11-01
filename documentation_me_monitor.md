@@ -1,30 +1,20 @@
-# ME item monitors (AE1, v22)
+# ME item monitors (AE1, v24)
 
-`apps_me_monitor.lua` is the second independent ME app. It displays live amounts for selected items in saved grids, similar to clusters of AE storage monitors. It does not move items, craft, toggle redstone or depend on the capacity app's configuration.
+`apps_me_monitor.lua` is the second independent ME app. It displays live amounts for selected items in saved grids or lists, similar to clusters of AE storage monitors. It does not move items, craft, toggle redstone or depend on the capacity app's configuration.
 
-## Install
+## Install v24
 
-Upload the complete v22 package's flat root files to the V2 GitHub repository. Replace the one installer paste with the new `install.lua` (banner `bundled-v22`) and download a fresh `inst` on the central OS and affected ME sensor computers.
-
-Quit the central OS to CraftOS and run:
+Upload the complete v24 package's flat root files to GitHub, replace the one installer paste with the supplied bundled-v24 `install.lua`, download a fresh `inst` on the central OS, quit the OS and run:
 
 ```text
 cd /
-inst server --startup
-inst app coffee
+inst server
 inst app me_storage
 inst app me_monitor
 reboot
 ```
 
-On sensor computers serving these AE targets, stop the sensor program and use the same fresh installer:
-
-```text
-inst sensor --startup
-reboot
-```
-
-The new sensor profile carries complete compact item catalogs; the old v21 summary profile cannot supply item amounts. Relays, IO and monitor clients need no update. Switchboard/Reactors apps stay installed. Coffee and the capacity app receive the separate display fixes in this version. Apps are still explicitly downloaded from GitHub and never bundled/enabled by a core role installation.
+This preserves startup, settings and saved views. v24 does not change any clients. AE sensor computers need v22 or newer for compact catalogs; when upgrading one older than v22, run `inst sensor --startup` and reboot it. Apps remain explicit GitHub downloads and are never bundled or enabled by a core role installation.
 
 ## Create a view
 
@@ -32,10 +22,10 @@ Open **ME monitors** from Start. Home shows saved view cards and **+ Add view**,
 
 1. Choose **+ Add view**.
 2. Select **AE sensor client → peripheral side → ME Wireless Access Point → Use**. You can reuse the same target already selected in ME storage, or select another ME network.
-3. Set columns and rows independently from **1 to 16**, then **Create**. The default is 4×4; every combination up to 256 tiles is supported.
+3. Touch **Grid / List** to choose the layout. Grid sets columns and rows independently from **1 to 16** (default 4×4); List sets **1–256 entries**. Then choose **Create**.
 4. Touch an empty **+ Item** tile and choose the item to monitor.
 
-Up to 64 named views can be saved. Each view has its own source, grid and item selections. **Edit → Rename view** uses a touch keyboard. The physical sensor computer can serve multiple apps/views; the OS deduplicates reads of the same client/side/target.
+Up to 64 named views can be saved. Each view has its own source, layout and item selections. **Edit → Rename view** uses a touch keyboard. The physical sensor computer can serve multiple apps/views; the OS deduplicates reads of the same client/side/target.
 
 ## Select and sort items
 
@@ -55,9 +45,9 @@ Bindings use the card's **raw item name and DamageValue**, not row positions or 
 
 Each tile shows its selected item name and amount. Names can wrap over two lines on roomy tiles; very long quantities wrap as plain digits when needed. Small windows page through a subset of the saved grid. Growing or resizing a window does not alter the grid or bindings. A complete live catalog in which an item is absent means **0**; unpowered/offline/waiting/stale/invalid data shows **--**, not zero. The heading also changes colour when the source is unavailable.
 
-Touch a configured tile for its full name, count, status, raw identity, damage and source. **Item** changes its selection, **Clear** unassigns it, and **Back** returns to the board. **Edit → Edit items** makes each tile open its picker directly for assigning several tiles. Repeating the same item in multiple tiles/views is allowed.
+Touch a configured tile for its full name, count, status, raw identity, damage and source. **Item** changes its selection, **Clear** unassigns it, and **Colour** edits the tile/row appearance, and **Back** returns to the board. The palette has Apply, Auto and Back with a preview on larger windows. Auto restores the default grid fill or alternating list rows. Cosmetic changes preserve the real item identity and source. **Edit → Edit items** makes each tile open its picker directly for assigning several tiles. Repeating the same item in multiple tiles/views is allowed.
 
-View settings also include **Grid size**, **AE source**, **Source information** and confirmed **Delete view**. Changing a grid preserves existing tile IDs/order/selections; expanding adds unassigned tiles. Shrinking asks for confirmation before removing trailing tiles. IDs are never reused. Source changes preserve item identities and read their amounts from the newly selected network. Deleting views or clearing tiles removes only saved display bindings.
+View settings also include **Layout / size**, **AE source**, **Source information** and confirmed **Delete view**. Changing a grid preserves existing tile IDs/order/selections; expanding adds unassigned tiles. Shrinking asks for confirmation before removing trailing tiles. IDs are never reused. Switching Grid/List retains tile IDs, bindings and colours. A list whose length does not exactly fit a rectangular grid expands with empty tiles; shrinking always confirms removal. Source changes preserve item identities and read their amounts from the newly selected network. Deleting views or clearing tiles removes only saved display bindings.
 
 App Settings offers **UI colour**, Roomy/Compact density and About. Colours use the shared OS palette. Input rectangles and rendering share geometry, and structural edits invalidate stale touches on other monitors.
 
@@ -71,8 +61,8 @@ The capacity app requests only summary fields from the hub even when an item sub
 
 ## Persistence and restart behavior
 
-Views, grid shapes, source addresses, names and item identities are saved in `appStates.me_monitor` inside `configs_os_state.txt`. Quantities and catalogs remain runtime-only. Existing per-window OS checkpoints restore the selected view/page, search/sort and small UI drafts after reboot. Fresh data must arrive again before a quantity is shown as live. Save failures roll back edits; deleting an entry from another monitor safely closes its stale editor. Minimized/covered windows keep the app running; closing its last window stops its subscriptions.
+Views, grid/list shapes, per-item colours, source addresses, names and item identities are saved in `appStates.me_monitor` inside `configs_os_state.txt`. Quantities and catalogs remain runtime-only. Existing per-window OS checkpoints restore the selected view/page, search/sort and small UI drafts after reboot. Fresh data must arrive again before a quantity is shown as live. Save failures roll back edits; deleting an entry from another monitor safely closes its stale editor. Minimized/covered windows keep the app running; closing its last window stops its subscriptions.
 
 V22 also restores Coffee's compact player line, keeps its digit clearance in the selected clock background colour, removes Cells surveyed from the capacity dashboard, and formats capacity counters/percentages without legacy floating-point formatting. The optional drive survey remains available under Cells.
 
-Tests exercise the real app/OS/sensor/monitor entry points with simulated Lua 5.1, including a 4,000-entry catalog, dropped fragments, shared subscriptions, failed saves, both sort directions, search, stable taps, variant identity, window restoration and 504 screen/size layouts. Minecraft's actual graphics/touch behavior still needs in-game use.
+Tests exercise the real app/OS/sensor/monitor entry points with simulated Lua 5.1, including a 4,000-entry catalog, dropped fragments, shared subscriptions, failed saves, both sort directions, search, stable taps, variant identity, window restoration and a grid/list/colour screen-size matrix. Minecraft's actual graphics/touch behavior still needs in-game use.

@@ -219,13 +219,61 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         t.bus.advance(13); assert(t.text(t.id):find("--",1,true),"A lost new snapshot cannot become a fresh zero")
         t.bus.drop=nil; t.bus.advance(6); assert(t.text(t.id):find("123",1,true))
     end
+    function tests.me_monitors_tile_colours_are_cosmetic_persistent_and_remove_the_inner_grey_frame()
+        local t=setup(); local board=t.create(t.id,1,1); t.bind(t.id,board,1,"Iron Ingot")
+        local before=serialize(board.tiles[1].item)
+        for _,style in ipairs(t.content(t.id).styles) do
+            if style.y>1 and style.y<t.window(t.id).height-2 then assert(style.bg~=256,"No inner grey tile border") end
+        end
+        t.click(t.id,"tile",board.tiles[1].id); t.click(t.id,"tileColour")
+        t.click(t.id,"colour",16384); t.click(t.id,"applyColour")
+        equal(board.tiles[1].displayColour,16384); equal(serialize(board.tiles[1].item),before)
+        t.click(t.id,"board"); local coloured=false
+        for _,style in ipairs(t.content(t.id).styles) do if style.bg==16384 then coloured=true end end
+        assert(coloured); equal(next(t.central.server.state.outputMap),nil)
+        assert(t.api.save()); t.central=t.bus.computer(10,"server",{disk=t.central.disk}):start(); t.reload(); t.bus.advance(6)
+        board=t.state.boards[1]; equal(board.tiles[1].displayColour,16384); equal(board.sensor.target,"1,0,0")
+        t.click(t.id,"tile",board.tiles[1].id); t.click(t.id,"tileColour"); t.click(t.id,"autoColour"); t.click(t.id,"applyColour")
+        equal(board.tiles[1].displayColour,nil)
+    end
+    function tests.me_monitors_list_layout_paginates_and_preserves_item_colours_when_switching_layouts()
+        local t=setup()
+        t.click(t.id,"add"); t.click(t.id,"select","sensor_14"); t.click(t.id,"select","top"); t.click(t.id,"select","1,0,0"); t.click(t.id,"use")
+        t.click(t.id,"layoutToggle"); equal(t.view(t.id).gridDraft.layout,"list")
+        t.click(t.id,"saveGrid"); t.bus.advance(3)
+        local board=t.state.boards[1]; equal(board.layout,"list"); equal(#board.tiles,16)
+        t.bind(t.id,board,1,"Iron Ingot")
+        t.click(t.id,"tile",board.tiles[1].id); t.click(t.id,"tileColour"); t.click(t.id,"colour",32); t.click(t.id,"applyColour"); t.click(t.id,"board")
+        local other=t.open("left"); t.click(other,"open",board.id)
+        assert(t.content(other).hits); t.click(other,"page",function(value) return value.key=="tiles" and value.delta==1 end)
+        equal(t.view(other).pages.tiles.page,2)
+        t.click(t.id,"edit"); t.click(t.id,"resize"); t.click(t.id,"layoutToggle"); t.click(t.id,"saveGrid")
+        equal(board.layout,"grid"); equal(board.tiles[1].item.raw,"item.iron"); equal(board.tiles[1].displayColour,32)
+        t.click(t.id,"resize"); t.click(t.id,"layoutToggle"); t.view(t.id).gridDraft.count=256; t.click(t.id,"saveGrid")
+        equal(board.layout,"list"); equal(#board.tiles,256)
+        assert(t.api.save()); t.central=t.bus.computer(10,"server",{disk=t.central.disk}):start(); t.reload()
+        equal(t.state.boards[1].layout,"list"); equal(#t.state.boards[1].tiles,256); equal(t.state.boards[1].tiles[1].displayColour,32)
+    end
+    function tests.me_monitors_colour_save_failure_rolls_back_and_concurrent_editors_cannot_overwrite_each_other()
+        local t=setup(); local board=t.create(t.id,1,1); t.bind(t.id,board,1,"Iron Ingot")
+        t.click(t.id,"tile",board.tiles[1].id); t.click(t.id,"tileColour"); t.click(t.id,"colour",2)
+        t.central.disk.failWrite=true; t.click(t.id,"applyColour"); equal(t.state.boards[1].tiles[1].displayColour,nil)
+        t.central.disk.failWrite=false; t.click(t.id,"messageBack")
+        -- Reopen with a current item record after rollback.
+        t.view(t.id).screen="item"; t.click(t.id,"tileColour"); t.click(t.id,"colour",2)
+        local other=t.open("left"); t.click(other,"open",board.id); t.click(other,"tile",board.tiles[1].id); t.click(other,"tileColour"); t.click(other,"colour",32); t.click(other,"applyColour")
+        t.click(t.id,"applyColour"); equal(t.state.boards[1].tiles[1].displayColour,32)
+        equal(t.view(t.id).screen,"message")
+    end
     function tests.me_monitors_all_screens_and_maximum_grid_keep_styles_and_touches_in_bounds()
         local t=setup(); local board=t.create(t.id,16,16); t.bind(t.id,board,1,"Iron Ingot")
         local checked=0
+        for _,layout in ipairs({"grid","list"}) do
+        board.layout,board.columns,board.rows=layout,layout=="list" and 1 or 16,layout=="list" and 256 or 16
         for _,width in ipairs({12,13,24,38,50,79}) do for _,height in ipairs({6,7,10,14,18,30}) do
-            for _,screen in ipairs({"home","board","tiles","picker","item","edit","settings","grid","keyboard","delete","shrink","source","about","message"}) do
+            for _,screen in ipairs({"home","board","tiles","picker","item","edit","settings","grid","keyboard","delete","shrink","source","about","message","colour"}) do
                 local view={screen=screen,boardId=board.id,tileId=board.tiles[1].id,pages={},sort="name",query="",message="Test message",
-                    gridDraft={target="edit",columns=16,rows=16,beforeColumns=16,beforeRows=16},keyboard={kind="name",draft="Main",bank=0,page=1}}
+                    colourDraft={value=2,auto=false},gridDraft={target="edit",layout="grid",count=256,columns=16,rows=16,beforeColumns=16,beforeRows=16},keyboard={kind="name",draft="Main",bank=0,page=1}}
                 local lines=t.app.render(width,height,t.state,t.api,{appName="me_monitor",windowId=t.id,view=view})
                 equal(#lines,height)
                 for _,line in ipairs(lines) do equal(#line,width) end
@@ -239,6 +287,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
                 checked=checked+1
             end
         end end
-        equal(checked,504)
+        end
+        equal(checked,1080)
     end
 end

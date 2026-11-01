@@ -2,28 +2,18 @@
 
 `apps_me_storage.lua` is the first of four independent ME apps. It reads storage capacity; it neither crafts nor changes items or outputs. The generic sensor clients can be shared by every app, with independent saved source selections. No ME app is installed by the OS role automatically.
 
-## Install v22
+## Install v24
 
-Upload this package's flat root files to the V2 GitHub repository. Replace the one installer paste with `install.lua` (banner `bundled-v22`) and download a fresh `inst` on the computers being updated.
-
-Quit the central OS to CraftOS, then run:
+Upload the complete package's root files to GitHub, replace the single installer paste with the supplied bundled-v24 `install.lua`, download a fresh `inst` on the central computer, quit the OS and run:
 
 ```text
 cd /
-inst server --startup
-inst app coffee
+inst server
 inst app me_storage
 reboot
 ```
 
-Update only the sensor computer(s) serving these ME sources with the same fresh installer:
-
-```text
-inst sensor --startup
-reboot
-```
-
-The sensor update adds a compact storage-summary profile, so a huge ME item list does not exceed the existing bounded reading/network limits. Other sensors, relays, IO and monitor clients remain compatible. Existing Switchboard and Reactors app files need no update for window navigation restoration. Saved IDs, bindings, timers and layouts are retained.
+Existing startup, settings and sources are retained. v24 requires no client updates. AE sensors must already have v21 or newer for summary counters, or v22 for shared ME item catalogs. Apps are still separate explicit downloads through the same installer.
 
 ## Required AE source
 
@@ -33,9 +23,9 @@ Open **ME storage** from Start. Choose **+ Add system**, then **sensor client â†
 
 ## Dashboard and exact counters
 
-The dashboard uses two columns on wide windows and paged cards on small ones.
+The dashboard uses two columns on wide windows, three on very wide windows, and paged cards on small ones.
 
-The percentage heading reads **Usage 85.6%**, meaning the percentage of reported bytes in use. Connection/power/error messages replace Usage when the source is unavailable. This v23 label update needs only `inst app me_storage` and an OS restart; the bundled-v22 installer and all clients remain compatible.
+The percentage heading reads **Usage 85.6%**, meaning the percentage of reported bytes in use. Connection/power/error messages replace Usage when the source is unavailable. The Usage label was introduced in v23; v24 adds the responsive totals below.
 
 | Readout | Meaning |
 | --- | --- |
@@ -87,3 +77,11 @@ All four apps stay separate. Source clients/ports/targets are selected inside ea
 - [Native IC2 mass-fabricator fields](https://github.com/Cloudhunter/OpenCCSensors/blob/96e89c135c846c406f6eea3f7006ac5b81dbcf68/src/openccsensors/common/sensors/targets/industrialcraft/MassFabTarget.java)
 
 These are the pre-Minecraft-1.5 sources, not modern AE2 or CC:Tweaked APIs. Automated checks use simulated ComputerCraft Lua 5.1; live server sensor output, graphics and touch alignment still need in-game verification.
+
+## Responsive counters and totals (v24)
+
+Medium/compact windows show **Bytes used, Bytes free, Items stored, Item room, Item types, Free type slots**, with paging only if needed. This removes the old total card that pushed the final counter onto another page. A large window whose card capacity is at least nine adds **Total bytes**, **Total item storage*** and **Total types***. Very wide windows use three columns. The choice follows content width/height rather than physical monitor block count.
+
+Total bytes is UsedBytes + FreeBytes. Total item storage is UsedCount + FreeCount, meaning currently stored items plus the card's reported headroom. New item types consume metadata overhead, so this is not a guaranteed arbitrary-item capacity. Total types is UsedTypes + FreeTypes: **unique stored identities plus reported free per-cell type slots**. The native counters do not expose occupied per-cell slots across duplicated item types, so this combined indicator is not the actual sum of every cell's physical type capacity. The asterisks refer to this distinction; **Edit â†’ Source / exact figures** explains it in the app. Missing or overflowing terms make the derived total unavailable instead of inventing a number. All values use plain decimal digits.
+
+Sensor and drive addresses are saved immediately when applied; app/window checkpoints retain them through restarts. Received counters and item catalogs are runtime observations and must be refreshed after boot.

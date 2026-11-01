@@ -130,3 +130,15 @@ Update the central OS and affected ME sensor roles using a fresh bundled-v22 ins
 ## ME usage label and drive-survey explanation (v23 app update)
 
 No new files. Updated app: `apps_me_storage.lua`. Updated guides: `README.md`, `documentation_me_storage.md`, `documentation_review.md`, and this map. The percentage heading says Usage instead of Live when data is available; error/offline states are retained. The guide explains optional Inventory Card drive surveys and their cell-count versus per-cell-fill limits. Update only the ME capacity app. All fifty-seven root files remain in the complete package, and the installer remains bundled-v22 without changes.
+
+## ME layouts, Clock and CC system (bundled-v24)
+
+New app/test/guide files: `apps_clock.lua`, `tests_clock.lua`, `documentation_clock.md`, `apps_system.lua`, `tests_system.lua`, `documentation_system.md`.
+
+Updated runtime/build: `apps_me_monitor.lua`, `apps_me_storage.lua`, `lib_server.lua`, `tools_build_installer.py`, generated `install.lua`.
+
+Updated existing tests: `tests_run.lua`, `tests_desktop.lua`, `tests_me_monitor.lua`, `tests_me_storage.lua`.
+
+Updated existing guides: `README.md`, `documentation_api.md`, `documentation_desktop.md`, `documentation_me_monitor.md`, `documentation_me_storage.md`, `documentation_review.md`, and this map.
+
+All sixty-three root files are included in the complete package. The installer retains twenty core sources and no apps. Update only the central server role and explicitly install `me_storage`, `me_monitor`, `system` and `clock`. No client, Coffee, Switchboard or Reactors files change. Existing configs and state filenames remain unchanged; the optional new apps add independent appStates entries. ME selections, colours, clocks, routes and per-window navigation are checkpointed centrally; live telemetry remains runtime-only.

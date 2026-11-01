@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v22
+-- SmartHome OS installer: bundled-v24
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -1296,12 +1296,17 @@ function Server.new(net, storage, config, logger)
     end
 
     local function updateClock()
+        server.worldTime, server.worldDay = nil, nil
         if type(os.time) == "function" then
             local ok, value = pcall(os.time)
             if ok and type(value) == "number" and value >= 0 and value < 24 then
                 local minutes = math.floor(value * 60 + 0.000001)
                 server.gameTime = string.format("%02d:%02d", math.floor(minutes / 60), minutes % 60)
-                server.clockSource = "computer"
+                server.clockSource, server.worldTime = "computer", value
+                if type(os.day) == "function" then
+                    local dayOK, day = pcall(os.day)
+                    if dayOK and integer(day, 0, 2147483647) then server.worldDay = day end
+                end
                 return
             end
         end
@@ -1532,14 +1537,35 @@ function Server.new(net, storage, config, logger)
                 local via = {}
                 for _, hop in ipairs(client.route or {}) do via[#via + 1] = hop.id end
                 result[#result + 1] = {id = id, type = kind, online = client.online, computerId = client.computerId,
-                    via = via, hops = #via, route = copy(client.route or {}), forwarded = client.forwarded}
+                    via = via, hops = #via, route = copy(client.route or {}), forwarded = client.forwarded,
+                    channel = client.channel, age = math.max(0, os.clock() - client.lastSeen),
+                    width = client.width, height = client.height, revision = client.revision,
+                    ackedRevision = client.ackedRevision, touchProtocol = client.touchProtocol}
             end
         end
         table.sort(result, function(a, b) return a.id < b.id end)
         return result
     end
     function api.getSystem() return {gameTime = server.gameTime, clockSource = server.clockSource,
-        playerOnline = server.playerOnline} end
+        worldTime = server.worldTime, worldDay = server.worldDay, playerOnline = server.playerOnline,
+        computerId = net.id, networkId = net.config.networkId, modemSide = net.side,
+        channel = net.listenChannel, relayChannel = net.config.relayEnabled ~= false and net.relayChannel or nil,
+        uptime = os.clock(), session = server.session, lastSaveAge = math.max(0, os.clock()-server.lastSave)} end
+    function api.getDiagnostics()
+        local result = {system = api.getSystem(), clients = api.getClients(), io = api.getIOClients(),
+            sensors = api.getSensorClients(), outputs = api.getOutputs(), apps = {}, windows = {}}
+        for _, name in ipairs(sortedKeys(server.apps)) do
+            local app = server.apps[name]
+            result.apps[#result.apps+1] = {name = name, title = app.title or name,
+                running = server.running[name] == true, backgroundService = isService(app)}
+        end
+        for _, id in ipairs(sortedKeys(state.windows)) do
+            local win = state.windows[id]
+            result.windows[#result.windows+1] = {id=id, appName=win.appName, title=win.title, monitorId=win.monitorId,
+                x=win.x, y=win.y, width=win.width, height=win.height, minimized=win.minimized == true, layout=win.layout}
+        end
+        return result
+    end
 
     local function windowsFor(monitorId, stable)
         local list = {}
@@ -1715,7 +1741,7 @@ function Server.new(net, storage, config, logger)
                 surface.fill(win.x, win.y, win.width, win.height, Gui.contrast(borderColour), borderColour)
                 surface.fill(win.x + 1, win.y + 1, win.width - 2, win.height - 2, 32768, 256)
                 surface.fill(win.x, win.y, win.width, 1, Gui.contrast(borderColour), borderColour)
-                write(win.x, win.y, win.title, win.width - 9)
+                write(win.x + 1, win.y, win.title, math.max(0, win.width - 10))
                 for _, control in ipairs(Desktop.controls(win)) do
                     local controlColour = control.action == "close" and 16384 or borderColour
                     surface.write(control.x1, win.y, control.label, Gui.contrast(controlColour), controlColour)
@@ -3734,7 +3760,7 @@ end
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v22")
+print("SmartHome installer: bundled-v24")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")

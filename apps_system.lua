@@ -1,0 +1,207 @@
+-- Read-only overview of the central computer and its live client registry.
+local app={title="CC system",minWidth=12,minHeight=6,preferredWidth=50,preferredHeight=20}
+local appName="system"
+local function find(list,id) for _,item in ipairs(list or {}) do if item.id==id then return item end end end
+local function join(values) return #values>0 and table.concat(values,", ") or "None" end
+local function elapsed(seconds)
+    seconds=math.floor(seconds or 0)
+    return math.floor(seconds/3600).."h "..math.floor(seconds/60)%60 .."m "..seconds%60 .."s"
+end
+local function route(address,api)
+    return address.clientId.." / "..address.side.." / "..(address.color and api.ui.colourName(address.color) or "Digital")
+end
+function app.init(state,api,context)
+    assert(api.getDiagnostics,"CC system requires bundled-v24 OS")
+    appName=context and context.appName or "system"
+    if state.version==nil then state.version,state.filter=1,"all" end
+    assert(state.version==1 and ({all=true,io=true,monitor=true,sensor=true,relay=true})[state.filter],"Invalid overview settings")
+end
+local function build(width,height,state,api,context)
+    local view=context.view; view.pages=view.pages or {}
+    local screen=view.screen or "home"
+    local d=api.getDiagnostics()
+    local ui,accent=api.ui.content(width,height),api.getAppColour(appName)
+    ui.style(1,1,width,height,1,32768)
+    local function button(y,label,action,value,x1,x2,enabled,bg)
+        ui.button(y,label,action,x1,x2,enabled,bg or 128,nil,value)
+    end
+    local function footer(items)
+        for i,item in ipairs(items) do button(height,item[1],item[2],item[3],1+math.floor((i-1)*width/#items),math.floor(i*width/#items),true,i%2==0 and 256 or 128) end
+    end
+    local function page(key,count,slots)
+        local pages=math.max(1,math.ceil(count/slots))
+        local current=math.max(1,math.min(view.pages[key] or 1,pages)); view.pages[key]=current
+        if pages>1 then
+            local half=math.floor(width/2)
+            button(height-1,"< "..current.."/"..pages,"page",{key=key,page=current-1},1,half,current>1)
+            button(height-1,">","page",{key=key,page=current+1},half+1,width,current<pages)
+        end
+        return (current-1)*slots
+    end
+    local function menu(title,items,key,back)
+        ui.heading(title,accent)
+        local slots=#items<=height-2 and height-2 or height-3
+        local first=page(key,#items,slots)
+        for i=1,slots do local item=items[first+i]; if item then button(i+1,item[1],item[2],item[3],nil,nil,item[4],item[5]) end end
+        footer(back or {{"Back","home"}})
+    end
+    local function info(title,lines,key,back)
+        local wrapped={}
+        for _,line in ipairs(lines) do
+            line=tostring(line):gsub("[%c]"," ")
+            repeat
+                local cut=#line>width and line:sub(1,width):match("^.*()%s")
+                if cut and cut>1 then wrapped[#wrapped+1],line=line:sub(1,cut-1),line:sub(cut+1)
+                else wrapped[#wrapped+1],line=line:sub(1,width),line:sub(width+1) end
+            until line==""
+        end
+        ui.heading(title,accent)
+        local slots=#wrapped<=height-2 and height-2 or height-3
+        local first=page(key,#wrapped,slots)
+        for i=1,slots do ui.text(i+1,wrapped[first+i] or "") end
+        footer(back or {{"Back","home"}})
+    end
+    if screen=="home" then
+        local online,ports,targets,windows=0,0,0,#d.windows
+        for _,client in ipairs(d.clients) do if client.online then online=online+1 end end
+        for _,sensor in ipairs(d.sensors) do for _,port in ipairs(sensor.ports) do ports=ports+1; targets=targets+#(port.targets or {}) end end
+        menu("CC system / "..online.." online",{{"Central computer","central"},{"Clients: "..#d.clients,"clients"},
+            {"Sensors: "..ports.." / "..targets.." targets","sensors"},{"Outputs: "..#d.outputs,"outputs"},
+            {"Apps: "..#d.apps,"apps"},{"Windows: "..windows,"windows"},{"Settings","settings"}},"home",{{"Refresh","refresh"}})
+    elseif screen=="central" then
+        local s=d.system
+        info("Central computer",{"Computer: "..s.computerId,"Network: "..s.networkId,"Session: "..s.session,
+            "Wireless modem: "..(s.modemSide or "Detached"),"Server channel: "..tostring(s.channel),
+            "Relay channel: "..tostring(s.relayChannel or "Disabled"),"Uptime: "..elapsed(s.uptime),
+            "Last checkpoint: "..elapsed(s.lastSaveAge).." ago","World clock: "..s.gameTime,
+            "Clock source: "..s.clockSource,"World day: "..tostring(s.worldDay or "Unavailable"),
+            "Player indicator: "..(s.playerOnline and "Online" or "Offline"),
+            "Only announced devices are known. No distance or chunk-loaded status is invented."},"central")
+    elseif screen=="clients" or screen=="sensors" then
+        local items={}
+        for _,client in ipairs(d.clients) do
+            if (screen=="sensors" and client.type=="sensor") or screen=="clients" and (state.filter=="all" or state.filter==client.type) then
+                items[#items+1]={client.id.." / "..(client.online and "Online" or "Offline"),"client",client.id,true,client.online and 128 or 4096}
+            end
+        end
+        if #items==0 then items[1]={"No known clients","noop",nil,false} end
+        menu(screen=="sensors" and "Sensor clients" or "Clients / "..state.filter,items,screen,{{"Back","home"},{"Filter","filter"}})
+    elseif screen=="client" then
+        local client=find(d.clients,view.clientId)
+        if not client then info("Client",{"Waiting for client to announce"},"client",{{"Back","clients"}})
+        else
+            local lines={client.id,"Role: "..client.type,"Status: "..(client.online and "Online" or "Offline"),"Computer: "..client.computerId,
+                "Reply channel: "..tostring(client.channel),"Last seen: "..elapsed(client.age).." ago","Relay hops: "..client.hops,
+                "Route: "..(#client.via>0 and table.concat(client.via," > ") or "Direct")}
+            if client.type=="relay" then lines[#lines+1]="Forwarded packets: "..tostring(client.forwarded or 0) end
+            if client.type=="monitor" then
+                lines[#lines+1]="Size: "..client.width.." x "..client.height.." characters"
+                lines[#lines+1]="Revisioned touches: "..(client.touchProtocol and "Yes" or "No")
+                local count=0; for _,win in ipairs(d.windows) do if win.monitorId==client.id then count=count+1 end end
+                lines[#lines+1]="Saved windows: "..count
+            elseif client.type=="io" then
+                local io=find(d.io,client.id)
+                lines[#lines+1]="Usable sides: "..join(io and io.sides or {})
+                lines[#lines+1]="Output revision / ACK: "..tostring(client.revision).." / "..tostring(client.ackedRevision)
+                for _,side in ipairs(io and io.sides or {}) do
+                    local input=api.getInput(client.id,side)
+                    lines[#lines+1]=side..": "..(input and ("digital "..tostring(input.digital)..", mask "..tostring(input.value)) or "Unavailable")
+                end
+            elseif client.type=="sensor" then
+                local sensor=find(d.sensors,client.id)
+                if sensor then
+                    lines[#lines+1]="Protocol: "..tostring(sensor.sensorProtocol or "Legacy").." / boot "..tostring(sensor.bootId)
+                    if sensor.catalogError then lines[#lines+1]="Catalog: "..sensor.catalogError end
+                    for _,port in ipairs(sensor.ports) do
+                        lines[#lines+1]=port.side..": "..(port.error or port.status or "Unknown")
+                        lines[#lines+1]="Card: "..tostring(port.card or "None")
+                        lines[#lines+1]="Targets: "..#(port.targets or {})
+                    end
+                    for _,pending in ipairs(sensor.pending) do lines[#lines+1]=pending.side..": "..pending.received.."/"..pending.parts.." catalog parts" end
+                end
+            end
+            info("Client details",lines,"client:"..client.id,client.type=="sensor" and {{"Back","clients"},{"Targets","targets"}} or {{"Back","clients"}})
+        end
+    elseif screen=="targets" then
+        local sensor=find(d.sensors,view.clientId); local items={}
+        for _,port in ipairs(sensor and sensor.ports or {}) do for _,target in ipairs(port.targets or {}) do
+            items[#items+1]={port.side..": "..(target.label or target.name or target.type or target.key),"target",{side=port.side,key=target.key}}
+        end end
+        if #items==0 then items[1]={"No catalog targets","noop",nil,false} end
+        menu("Sensor targets",items,"targets:"..tostring(view.clientId),{{"Back","client"}})
+    elseif screen=="target" then
+        local lines={"Client: "..view.clientId,"Side: "..view.target.side,"Key: "..view.target.key}
+        local sensor=find(d.sensors,view.clientId); local profile
+        for _,port in ipairs(sensor and sensor.ports or {}) do if port.side==view.target.side then
+            lines[#lines+1]="Card: "..tostring(port.card)
+            if port.cardKind=="ae" then profile="ae_storage" end
+            for _,target in ipairs(port.targets or {}) do if target.key==view.target.key then
+                lines[#lines+1]="Name: "..tostring(target.label or target.name or "Unknown")
+                lines[#lines+1]="Type: "..tostring(target.type or "Unknown")
+                lines[#lines+1]="Raw: "..tostring(target.rawName or "Unavailable")
+                lines[#lines+1]="Kind: "..tostring(target.kind or "Unknown")
+                if target.position then lines[#lines+1]="Position: "..target.position.X..", "..target.position.Y..", "..target.position.Z end
+            end end
+        end end
+        local cached=api.getSensorReading({clientId=view.clientId,side=view.target.side,target=view.target.key},{profile=profile})
+        lines[#lines+1]="Cached sample: "..cached.status
+        if cached.error then lines[#lines+1]=cached.error end
+        if cached.age then lines[#lines+1]="Sample age: "..elapsed(cached.age) end
+        if cached.status=="ok" and type(cached.data)=="table" then
+            local keys={}; for key,value in pairs(cached.data) do if type(value)~="table" then keys[#keys+1]=key end end
+            table.sort(keys,function(a,b) return tostring(a)<tostring(b) end)
+            for i=1,math.min(#keys,48) do local key=keys[i]; lines[#lines+1]=tostring(key)..": "..tostring(cached.data[key]) end
+        end
+        lines[#lines+1]="Reads cached observations only; no new subscriptions or output changes."
+        info("Target",lines,"target",{{"Back","targets"}})
+    elseif screen=="outputs" then
+        local items={}; for _,output in ipairs(d.outputs) do items[#items+1]={output.name.." / "..(output.value and "ON" or "OFF"),"output",output.name} end
+        if #items==0 then items[1]={"No output routes","noop",nil,false} end
+        menu("Mapped outputs",items,"outputs")
+    elseif screen=="output" then
+        local lines={"Route was removed"}
+        for _,output in ipairs(d.outputs) do if output.name==view.output then lines={output.name,route(output,api),"Desired: "..(output.value and "ON" or "OFF"),
+            "Client: "..(output.online and "Online" or "Offline"),"Acknowledged: "..(output.confirmed and "Yes" or "No / pending"),"Shared routes control the same physical wire."} end end
+        info("Output details",lines,"output",{{"Back","outputs"}})
+    elseif screen=="apps" then
+        local lines={}
+        for _,item in ipairs(d.apps) do lines[#lines+1]=item.title.." ("..item.name.."): "..(item.running and "Running" or "Stopped")..(item.backgroundService and " / background" or "") end
+        if #lines==0 then lines={"No enabled user apps"} end
+        info("Enabled apps",lines,"apps")
+    elseif screen=="windows" then
+        local lines={}
+        for _,win in ipairs(d.windows) do
+            lines[#lines+1]="#"..win.id.." "..(win.title or win.appName)..(win.minimized and " / minimized" or "")
+            lines[#lines+1]=win.monitorId.." @ "..win.x..","..win.y.." "..win.width.."x"..win.height.." / "..(win.layout or "normal")
+        end
+        if #lines==0 then lines={"No saved windows"} end
+        info("Saved windows",lines,"windows")
+    elseif screen=="settings" then
+        menu("Overview settings",{{"UI colour","accent"},{"Client filter: "..state.filter,"filter"},{"About","about"}},"settings")
+    elseif screen=="about" then
+        info("About CC system",{"Live registry, routes, card catalogs, IO confirmations, enabled apps and saved windows. Offline clients remain visible during this OS session; a restart waits for announcements. Sensors and machine readings are never restored as live. Sensor bindings and app settings are saved by their owning apps. This app is read-only."},"about",{{"Back","settings"}})
+    end
+    return ui.lines,ui.hits
+end
+function app.render(w,h,state,api,context) return (build(w,h,state,api,context)) end
+function app.handleTouch(x,y,w,h,state,api,context)
+    local _,hits=build(w,h,state,api,context)
+    local view=context.view
+    for _,hit in ipairs(hits) do if hit.enabled~=false and api.ui.hit(hit,x,y) then
+        local action,value=hit.action,hit.value
+        if action=="page" then view.pages[value.key]=value.page
+        elseif action=="client" and value then view.clientId,view.screen=value,"client"
+        elseif action=="target" and value then view.target,view.screen=value,"target"
+        elseif action=="output" and value then view.output,view.screen=value,"output"
+        elseif action=="filter" then
+            local options={"all","io","monitor","sensor","relay"}; local old=state.filter
+            for i,item in ipairs(options) do if item==old then state.filter=options[i%#options+1]; break end end
+            local ok=api.save(); if not ok then state.filter=old end
+            view.pages.clients=nil
+        elseif action=="accent" then api.pickColour(context.windowId)
+        elseif action~="noop" and action~="refresh" then view.screen=action end
+        return true
+    end end
+    return false
+end
+return app

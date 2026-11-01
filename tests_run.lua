@@ -936,7 +936,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v22", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v24", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -1404,6 +1404,8 @@ assert(hostLoadfile("tests_me_storage.lua"))()(tests, newBus, monitor, serialize
 assert(hostLoadfile("tests_me_monitor.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_relay.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_console.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
+assert(hostLoadfile("tests_clock.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
+assert(hostLoadfile("tests_system.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 local names, failures = {}, {}
 for name in pairs(tests) do names[#names + 1] = name end
 table.sort(names)

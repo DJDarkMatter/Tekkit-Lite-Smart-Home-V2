@@ -78,8 +78,13 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local data=t.api.getSensorReading(entry.sensor)
         equal(data.status,"ok"); equal(data.data.UsedBytes,1024); equal(data.data.Items,nil); equal(data.data.ItemsOmitted,true)
         local text=t.allText(t.id)
-        for _,value in ipairs({"25.0%","1 024","3 072","4 096","7 000","20 000","42","84"}) do assert(text:find(value,1,true),value) end
+        for _,value in ipairs({"25.0%","1 024","3 072","7 000","20 000","42","84"}) do assert(text:find(value,1,true),value) end
         assert(not text:find("Cells surveyed",1,true))
+        assert(not text:find("Total bytes",1,true),"Medium layout omits totals")
+        assert(text:find("Free type slots",1,true))
+        assert(t.api.layoutWindow(t.id,"maximize")); t.paint()
+        text=t.allText(t.id)
+        for _,value in ipairs({"Total bytes","4 096","Total item storage*","27 000","Total types*","126"}) do assert(text:find(value,1,true),value) end
         equal(#t.sensor.client.watches,1); equal(t.sensor.client.watches[1].profile,"ae_storage")
         equal(next(t.central.server.state.outputMap),nil); equal(#t.sensor.redstoneWrites,0)
         t.click(t.id,"home"); local empty=t.add(t.id,"2,0,0")

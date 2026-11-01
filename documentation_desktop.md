@@ -92,3 +92,7 @@ If samples differ too much, Retry/Reset/Cancel appear on the monitor and the old
 Window geometry, snap mode, restore target, ordering, minimized state, and per-monitor taskbar scroll are saved. Successful layout actions commit immediately; the OS also checkpoints all app/window state at least once a second while running. Placement previews and unapplied settings drafts are transient.
 
 Old top-taskbar window positions are migrated once to the new workspace origin. Restored ordinary-app views start their app once at OS boot; an ordinary app with no saved views stays stopped until opened. `backgroundService = true` apps, and apps without any render hook, start automatically when explicitly enabled. Coffee declares this flag.
+
+## Title spacing (v24)
+
+Every window title begins one character to the right of the outer left edge. The right-hand Minimize, Layout and Close controls retain their positions; the title clips before them. This applies to user apps and built-in OS settings. Global text scale, calibration, taskbar rows and window geometry are unchanged.

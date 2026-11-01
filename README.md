@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v22`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v24`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -67,6 +67,26 @@ The installer decodes the API's base64 content using Lua 5.1, checks the filenam
 These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
 
 Optional apps are [Coffee](documentation_coffee.md), [Switchboard](documentation_switchboard.md), and [Reactors](documentation_reactors.md). Use `inst app coffee`, `inst app switchboard` or `inst app reactors` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers IO, durations and colour settings. Switchboard offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and appearance settings. Reactors selects sensor targets and separate IO switches; see [sensor setup](documentation_sensors.md) and [the reactor guide](documentation_reactors.md), including card-dependent remaining-time data. All three app sources stay unchanged in bundled-v16. Update the OS and endpoint roles to use [wireless relays](documentation_relay.md); existing direct clients remain compatible. Apps, calibration and desktop geometry need no changes for relaying.
+
+### Version 24: ME layouts, diagnostics and clocks
+
+ME storage shows the six main counters in compact/medium windows and adds all three reported totals when nine cards fit. ME monitors removes the inner grey tile rim and adds Grid/List layouts plus saved per-item colours. Every title bar has a leading space. Sensor selections, routes, settings, layouts and open app pages remain checkpointed; live sensor observations still refresh after boot.
+
+New optional apps are [CC system](documentation_system.md), a read-only client/card/route/output/app/window overview, and [Clock](documentation_clock.md), a background service for multiple world-time alarms, real/game timers with pulse/pattern IO outputs, and a saved stopwatch with laps. Apps are downloaded only when explicitly requested.
+
+After uploading this package's root files to GitHub and replacing the one installer paste, download a fresh bundled-v24 `inst` on the central computer. Quit the OS, then run:
+
+```text
+cd /
+inst server
+inst app me_storage
+inst app me_monitor
+inst app system
+inst app clock
+reboot
+```
+
+Existing startup and saved settings are retained. No client updates are required for v24; Coffee, Switchboard and Reactors stay installed. Clock starts at OS boot without a window. Clocks resume from saved progress, exclude downtime and skip missed alarms; see its guide for world-time jumps, offline signals and shared routes. The full v24 archive includes every root file, not just changes.
 
 ### Confirm connection and test a wire
 

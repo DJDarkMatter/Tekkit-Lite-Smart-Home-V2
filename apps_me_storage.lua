@@ -67,6 +67,8 @@ local function storage(reading)
         result.total = result.used + result.free
         result.percent = result.total > 0 and 100 * result.used / result.total or 0
     end
+    if result.items and result.room then result.totalItems = counter(result.items + result.room) end
+    if result.types and result.freeTypes then result.totalTypes = counter(result.types + result.freeTypes) end
     if reading.status == "ok" and (invalid or not found) then
         result.status, result.error = "unsupported", invalid and "Invalid AE counter" or "No AE storage counters"
     end
@@ -257,10 +259,15 @@ local function build(width, height, state, api, context)
         ui.heading(entry.name, accent)
         ui.text(2, (live and "Usage" or value.error or value.status) .. (value.percent and " "..percent(value.percent).."%" or ""), true)
         ui.style(1,2,width,1, live and 1 or 32768, live and 128 or 2)
-        local metrics = {{"Bytes used",value.used},{"Bytes free",value.free},{"Total bytes",value.total},
-            {"Items stored",value.items},{"Item room*",value.room},{"Item types",value.types},{"Free type slots",value.freeTypes}}
-        local cols, cardH = width >= 38 and 2 or 1, height >= 10 and 3 or 2
+        local cols, cardH = width >= 60 and 3 or width >= 38 and 2 or 1, height >= 10 and 3 or 2
         local rows = math.max(1, math.floor((height-4)/cardH))
+        local metrics = {{"Bytes used",value.used},{"Bytes free",value.free},
+            {"Items stored",value.items},{"Item room*",value.room},{"Item types",value.types},{"Free type slots",value.freeTypes}}
+        if rows*cols >= 9 then
+            metrics = {{"Bytes used",value.used},{"Bytes free",value.free},{"Total bytes",value.total},
+                {"Items stored",value.items},{"Item room*",value.room},{"Total item storage*",value.totalItems},
+                {"Item types",value.types},{"Free type slots",value.freeTypes},{"Total types*",value.totalTypes}}
+        end
         local first = page(#metrics, rows*cols, height-1)
         for i = 1, rows*cols do
             local metric = metrics[first+i]
@@ -279,6 +286,9 @@ local function build(width, height, state, api, context)
                     if filled > 0 then ui.style(x,y+2,filled,1,nil,live and (value.percent >= 90 and 2 or 32) or 128) end
                 end
             end
+        end
+        if #metrics==9 and 2+math.ceil(#metrics/cols)*cardH<height-2 then
+            ui.text(height-2,"* Reported headroom; see Source",true)
         end
         footer({{"Back","home"},{width >= 15 and "Cells" or "Cell","cells"},{"Edit","edit"}})
     elseif screen == "cells" then
@@ -328,8 +338,9 @@ local function build(width, height, state, api, context)
         if reading.error then lines[#lines+1]=reading.error end
         if screen == "source" then
             local value = storage(reading)
-            for _, field in ipairs({"used","free","total","items","room","types","freeTypes"}) do lines[#lines+1]=field..": "..number(value[field]) end
+            for _, field in ipairs({"used","free","total","items","room","totalItems","types","freeTypes","totalTypes"}) do lines[#lines+1]=field..": "..number(value[field]) end
         end
+        if screen == "source" then lines[#lines+1]="* Item total = stored + reported room; new item types consume overhead. Type total = unique stored types + free per-cell slots; this is a combined indicator, not physical cell slot capacity." end
         info("Sensor source",lines,screen == "source" and "edit" or "drive")
     elseif screen == "edit" then
         list("System settings",{{label="Rename",action="rename"},{label="Change AE sensor",action="retarget"},

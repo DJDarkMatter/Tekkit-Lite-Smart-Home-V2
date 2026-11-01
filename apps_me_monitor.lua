@@ -15,6 +15,10 @@ end
 local function integer(value,low,high)
     return type(value)=="number" and value==math.floor(value) and value>=low and value<=high
 end
+local function colour(value)
+    for i=0,15 do if value==2^i then return true end end
+    return false
+end
 local function decimal(value)
     local digits={}
     repeat
@@ -46,6 +50,17 @@ local function itemKey(raw,damage,name)
 end
 local function find(list,id)
     for index,item in ipairs(list or {}) do if item.id==id then return item,index end end
+end
+local function gridShape(count)
+    local bestC,bestR,bestScore=1,1,math.huge
+    for c=1,MAX_AXIS do
+        local r=math.ceil(count/c)
+        if r<=MAX_AXIS then
+            local score=(c*r-count)*100+math.abs(c-r)+(c<r and 0.1 or 0)
+            if score<bestScore then bestC,bestR,bestScore=c,r,score end
+        end
+    end
+    return bestC,bestR
 end
 local function watch(board) return appName.."_view_"..board.id end
 local function catalog(reading)
@@ -116,11 +131,14 @@ function app.init(state,api,context)
     for _,board in ipairs(state.boards) do
         assert(type(board)=="table" and integer(board.id,1,2147483000) and not boards[board.id]
             and safeName(board.name) and #board.name<=24 and address(board.sensor)
-            and integer(board.columns,1,MAX_AXIS) and integer(board.rows,1,MAX_AXIS)
+            and (board.layout==nil or board.layout=="grid" or board.layout=="list")
+            and integer(board.columns,1,MAX_AXIS) and integer(board.rows,1,board.layout=="list" and MAX_AXIS^2 or MAX_AXIS)
+            and (board.layout~="list" or board.columns==1)
             and type(board.tiles)=="table" and #board.tiles==board.columns*board.rows,"Invalid saved monitor view")
         boards[board.id],maxBoard=true,math.max(maxBoard,board.id)
         for _,tile in ipairs(board.tiles) do
-            assert(type(tile)=="table" and integer(tile.id,1,2147483000) and not tiles[tile.id],"Invalid saved monitor tile")
+            assert(type(tile)=="table" and integer(tile.id,1,2147483000) and not tiles[tile.id]
+                and (tile.displayColour==nil or colour(tile.displayColour)),"Invalid saved monitor tile")
             if tile.item then
                 local item=tile.item
                 assert(type(item)=="table" and type(item.raw)=="string" and #item.raw<=256 and safeName(item.name)
@@ -167,7 +185,7 @@ function app.handleSensorSelection(key,selected,state,api,context)
     local view=context.view
     if key=="new" then
         if #state.boards>=MAX_VIEWS then return false,"Maximum 64 views" end
-        view.gridDraft={target="new",columns=4,rows=4,sensor=copy(selected)}
+        view.gridDraft={target="new",layout="grid",columns=4,rows=4,count=16,sensor=copy(selected)}
         view.screen="grid"; return true
     end
     local board=find(state.boards,tonumber(key:match("^source_(%d+)$")))
@@ -209,7 +227,7 @@ local function build(width,height,state,api,context)
     if screen=="keyboard" and view.keyboard and view.keyboard.kind=="search" then global.keyboard=board~=nil end
     if not global[screen] and not board then screen,view.screen="home","home" end
     local tile=board and find(board.tiles,view.tileId)
-    if (screen=="item" or screen=="picker") and not tile then screen,view.screen="board","board" end
+    if (screen=="item" or screen=="picker" or screen=="colour") and not tile then screen,view.screen="board","board" end
     if screen=="keyboard" and view.keyboard and view.keyboard.kind=="search" and not tile then screen,view.screen="board","board" end
     local ui=api.ui.content(width,height)
     local accent=api.getAppColour(context.appName or appName)
@@ -283,20 +301,19 @@ local function build(width,height,state,api,context)
             end
         end
     end
-    local function monitorTile(rect,title,quantity,action,value,status)
-        ui.style(rect.x,rect.y,rect.w,rect.h,1,256)
-        local insetX=rect.w>=10 and rect.h>=5 and 1 or 0
-        local insetY=rect.h>=5 and 1 or 0
-        local x,y,w,h=rect.x+insetX,rect.y+insetY,rect.w-2*insetX,rect.h-2*insetY
-        ui.style(x,y,w,h,status=="ok" and 1 or 256,128)
+    local function monitorTile(rect,title,quantity,action,value,status,bg)
+        bg=bg or 128
+        local fg=api.ui.contrast(bg)
+        -- The window frame already supplies its border; tiles fill their cells.
+        local x,y,w,h=rect.x,rect.y,rect.w,rect.h
+        ui.style(x,y,w,h,fg,bg)
         local valueText=quantity or ""
-        local quantityRows=math.max(1,math.ceil(#valueText/w))
+        local quantityRows=math.min(h-1,math.max(1,math.ceil(#valueText/w)))
         local nameRows=math.max(1,math.min(2,h-quantityRows))
         for row=1,nameRows do text(x,y+row-1,title:sub((row-1)*w+1,row*w),w,true) end
         local firstRow=y+math.max(nameRows,h-quantityRows)
         for row=1,quantityRows do
             text(x,firstRow+row-1,valueText:sub((row-1)*w+1,row*w),w,true)
-            ui.style(x,firstRow+row-1,w,1,quantity=="0" and 16384 or status=="ok" and 1 or 256,128)
         end
         ui.hits[#ui.hits+1]={x1=rect.x,x2=rect.x+rect.w-1,y1=rect.y,y2=rect.y+rect.h-1,action=action,value=value}
     end
@@ -316,12 +333,32 @@ local function build(width,height,state,api,context)
     elseif screen=="board" or screen=="tiles" then
         local data=source(board)
         ui.heading(screen=="tiles" and "Choose a tile" or board.name,data.status=="ok" and accent or 2)
-        grid(#board.tiles,board.columns,board.rows,"tiles",height-1,8,3,function(index,rect)
-            local cell=board.tiles[index]
-            local inner=rect.w-(rect.w>=10 and rect.h>=5 and 2 or 0)
-            monitorTile(rect,cell.item and cell.item.name or "+ Item",cell.item and amount(countFor(board,cell),inner) or "Select item",
-                screen=="tiles" and "chooseTile" or "tile",cell.id,data.status)
-        end)
+        if board.layout=="list" then
+            local rowH=width>=28 and 1 or 2
+            local slots=math.max(1,math.floor((height-3)/rowH))
+            local first=page("tiles",#board.tiles,slots,height-1)
+            for i=1,slots do
+                local cell=board.tiles[first+i]
+                if cell then
+                    local y=2+(i-1)*rowH
+                    local bg=cell.displayColour or (i%2==0 and 128 or 32768)
+                    ui.style(1,y,width,rowH,api.ui.contrast(bg),bg)
+                    local title=cell.item and cell.item.name or "+ Item"
+                    local quantity=cell.item and amount(countFor(board,cell),width) or "Select item"
+                    if rowH==1 then
+                        local n=math.min(#quantity,width-2)
+                        text(1,y,title,math.max(1,width-n-1)); text(width-n+1,y,quantity,n)
+                    else ui.text(y,title); ui.text(y+1,quantity,true) end
+                    ui.hits[#ui.hits+1]={x1=1,x2=width,y1=y,y2=y+rowH-1,action=screen=="tiles" and "chooseTile" or "tile",value=cell.id}
+                end
+            end
+        else
+            grid(#board.tiles,board.columns,board.rows,"tiles",height-1,8,3,function(index,rect)
+                local cell=board.tiles[index]
+                monitorTile(rect,cell.item and cell.item.name or "+ Item",cell.item and amount(countFor(board,cell),rect.w) or "Select item",
+                    screen=="tiles" and "chooseTile" or "tile",cell.id,data.status,cell.displayColour)
+            end)
+        end
         if screen=="tiles" then footer({{"Back","edit"}}) else footer({{"Back","home"},{"Edit","edit"}}) end
     elseif screen=="picker" then
         local frozen=picker(view,board,tile,context.windowId)
@@ -365,29 +402,36 @@ local function build(width,height,state,api,context)
         local wrapped={}
         for _,line in ipairs(lines) do repeat wrapped[#wrapped+1],line=line:sub(1,width),line:sub(width+1) until line=="" end
         ui.heading("Item monitor",accent)
-        local slots=#wrapped<=height-2 and height-2 or height-3
-        local first=page("item",#wrapped,slots,height-1)
+        local slots=#wrapped<=height-3 and height-3 or height-4
+        local first=page("item",#wrapped,slots,height-2)
         for i=1,slots do ui.text(i+1,wrapped[first+i] or "") end
+        button(height-1,"Colour","tileColour",nil,nil,nil,true,tile.displayColour or 128)
+        -- Reserve the colour control even when details span multiple pages.
         footer({{"Item","changeItem"},{"Clear","clearItem"},{"Back","board"}})
     elseif screen=="edit" then
-        menu("View settings",{{"Rename view","rename"},{"Edit items","tiles"},{"Grid size","resize"},{"AE source","sensor"},
+        menu("View settings",{{"Rename view","rename"},{"Edit items","tiles"},{"Layout / size","resize"},{"AE source","sensor"},
             {"Source information","source"},{"Delete view","delete"}},"edit","board")
     elseif screen=="settings" then
         menu("Monitor settings",{{"UI colour","accent"},{"Density: "..state.settings.density,"density"},{"About","about"}},"settings","home")
     elseif screen=="grid" then
         local draft=view.gridDraft
-        ui.heading(draft.target=="new" and "New view grid" or "Grid size",accent)
-        ui.text(2,draft.columns.." x "..draft.rows.." = "..draft.columns*draft.rows,true)
+        ui.heading(draft.target=="new" and "New view layout" or "Layout / size",accent)
+        button(2,draft.layout=="list" and "List" or "Grid "..draft.columns.."x"..draft.rows,"layoutToggle",nil,nil,nil,true,accent)
         local third=math.floor(width/3)
-        for _,item in ipairs({{row=3,key="columns",label="Cols"},{row=4,key="rows",label="Rows"}}) do
+        local controls=draft.layout=="list" and {{row=3,key="count",label="Items"}} or {{row=3,key="columns",label="Cols"},{row=4,key="rows",label="Rows"}}
+        for _,item in ipairs(controls) do
+            local limit=item.key=="count" and MAX_AXIS^2 or MAX_AXIS
             button(item.row,"-","gridStep",{key=item.key,delta=-1},1,third,draft[item.key]>1)
             text(third+1,item.row,item.label.." "..draft[item.key],width-2*third,true)
-            button(item.row,"+","gridStep",{key=item.key,delta=1},width-third+1,width,draft[item.key]<MAX_AXIS)
+            button(item.row,"+","gridStep",{key=item.key,delta=1},width-third+1,width,draft[item.key]<limit)
         end
+        if draft.layout=="list" then ui.text(4,"Name + amount",true) end
         if height>=10 then
-            local ph,pw=math.min(height-7,draft.rows*2),math.min(width-2,draft.columns*3)
+            local previewRows=draft.layout=="list" and draft.count or draft.rows
+            local previewCols=draft.layout=="list" and 1 or draft.columns
+            local ph,pw=math.min(height-7,previewRows*2),math.min(width-2,previewCols*8)
             local x=1+math.floor((width-pw)/2)
-            local rows,cols=math.min(draft.rows,ph),math.min(draft.columns,pw)
+            local rows,cols=math.min(previewRows,ph),math.min(previewCols,pw)
             for row=0,rows-1 do for col=0,cols-1 do
                 local x1,x2=x+math.floor(col*pw/cols),x+math.floor((col+1)*pw/cols)-1
                 local y1,y2=6+math.floor(row*ph/rows),5+math.floor((row+1)*ph/rows)
@@ -396,6 +440,16 @@ local function build(width,height,state,api,context)
         end
         button(height-1,draft.target=="new" and "Create" or "Save grid","saveGrid",nil,nil,nil,true,accent)
         footer({{"Cancel",draft.target=="new" and "home" or "edit"}})
+    elseif screen=="colour" then
+        local draft=view.colourDraft
+        local lines,hits=api.ui.palette(width,height,draft.auto and nil or draft.value,"Item colour")
+        ui.lines,ui.hits=lines,hits
+        table.remove(hits) -- Replace the palette's Back row with draft controls.
+        if width>=24 and height>=14 then
+            monitorTile({x=2,y=11,w=width-2,h=height-12},tile.item and tile.item.name or "+ Item",
+                tile.item and amount(countFor(board,tile),width-2) or "Select item","preview",nil,"ok",draft.auto and 128 or draft.value)
+        end
+        footer({{"Apply","applyColour"},{"Auto","autoColour"},{"Back","item"}})
     elseif screen=="keyboard" then
         local keyboard=view.keyboard
         local letters=keyboard.bank==2 and "1234567890-_/.:" or keyboard.bank==1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
@@ -424,18 +478,18 @@ local function build(width,height,state,api,context)
             "Status: "..(data.error or data.status),"Age: "..(data.age and amount(math.floor(data.age)).." seconds" or "Unknown")},"source","edit")
     elseif screen=="about" or screen=="message" then
         info("Information",{screen=="message" and view.message or
-            "Each saved view selects an AE1 sensor client, side and ME Wireless Access Point. Choose any 1-16 by 1-16 grid, then touch a tile to select an item. Name/Amount and direction sort the picker; Search filters names/raw IDs. Rows keep their positions until Sort, Search or Refresh so live count changes cannot select the wrong item. Counts update about every two seconds. A live complete catalog with no selected item means zero; offline/unpowered/missing data shows --. Counts use plain decimal digits without k/M/E notation. The native card does not expose NBT; indistinguishable raw-name/damage variants are combined. Items are never moved, requested or crafted. Each app configures its own source; the OS shares physical sensor reads."},"info",screen=="message" and "messageBack" or "settings")
+            "Each saved view selects an AE1 sensor client, side and ME Wireless Access Point. Choose a 1-16 by 1-16 grid or a list of up to 256 rows, then touch an entry to select an item. Item details offer Colour; Auto restores the default tile or alternating list colours. Appearance does not change the item or AE source. Name/Amount and direction sort the picker; Search filters names/raw IDs. Rows keep their positions until Sort, Search or Refresh so live count changes cannot select the wrong item. Counts update about every two seconds. A live complete catalog with no selected item means zero; offline/unpowered/missing data shows --. Counts use plain decimal digits without k/M/E notation. The native card does not expose NBT; indistinguishable raw-name/damage variants are combined. Items are never moved, requested or crafted. Each app configures its own source; the OS shares physical sensor reads."},"info",screen=="message" and "messageBack" or "settings")
     end
     return ui.lines,ui.hits
 end
 local function resize(state,api,view,board)
     local draft=view.gridDraft
-    if board.columns~=draft.beforeColumns or board.rows~=draft.beforeRows then notice(view,"Grid changed in another window","edit"); return end
+    if board.columns~=draft.beforeColumns or board.rows~=draft.beforeRows or (board.layout or "grid")~=(draft.beforeLayout or "grid") then notice(view,"Grid changed in another window","edit"); return end
     if commit(state,api,view,function()
-        local count=draft.columns*draft.rows
+        local count=draft.layout=="list" and draft.count or draft.columns*draft.rows
         for i=#board.tiles,count+1,-1 do table.remove(board.tiles,i) end
         for i=#board.tiles+1,count do board.tiles[i]=newTile(state) end
-        board.columns,board.rows=draft.columns,draft.rows
+        board.layout,board.columns,board.rows=draft.layout,draft.layout=="list" and 1 or draft.columns,draft.layout=="list" and draft.count or draft.rows
     end) then view.screen,view.pages="edit",{} end
 end
 function app.render(width,height,state,api,context)
@@ -496,27 +550,43 @@ function app.handleTouch(x,y,width,height,state,api,context)
         elseif board.name~=k.original then notice(view,"Name changed in another window","edit")
         elseif commit(state,api,view,function() board.name=k.draft:gsub("^%s+",""):gsub("%s+$","") end) then view.screen="edit" end
     elseif action=="resize" then
-        view.gridDraft={target="edit",columns=board.columns,rows=board.rows,beforeColumns=board.columns,beforeRows=board.rows}; view.screen="grid"
-    elseif action=="gridStep" then local draft=view.gridDraft; draft[value.key]=math.max(1,math.min(MAX_AXIS,draft[value.key]+value.delta))
+        local columns,rows=board.columns,board.rows
+        if board.layout=="list" then columns,rows=gridShape(#board.tiles) end
+        view.gridDraft={target="edit",layout=board.layout or "grid",columns=columns,rows=rows,count=#board.tiles,
+            beforeLayout=board.layout or "grid",beforeColumns=board.columns,beforeRows=board.rows}; view.screen="grid"
+    elseif action=="layoutToggle" then
+        local draft=view.gridDraft
+        if draft.layout=="list" then draft.layout="grid"
+        else draft.layout,draft.count="list",draft.columns*draft.rows end
+    elseif action=="gridStep" then local draft=view.gridDraft; draft[value.key]=math.max(1,math.min(value.key=="count" and MAX_AXIS^2 or MAX_AXIS,draft[value.key]+value.delta))
     elseif action=="saveGrid" then
         local draft=view.gridDraft
         if draft.target=="new" then
             local created
             if #state.boards>=MAX_VIEWS then notice(view,"Maximum 64 views","home")
             elseif commit(state,api,view,function()
-                created={id=state.nextBoardId,name="View "..state.nextBoardId,sensor=copy(draft.sensor),columns=draft.columns,rows=draft.rows,tiles={}}
+                created={id=state.nextBoardId,name="View "..state.nextBoardId,sensor=copy(draft.sensor),layout=draft.layout,
+                    columns=draft.layout=="list" and 1 or draft.columns,rows=draft.layout=="list" and draft.count or draft.rows,tiles={}}
                 state.nextBoardId=state.nextBoardId+1
-                for i=1,draft.columns*draft.rows do created.tiles[i]=newTile(state) end
+                for i=1,created.columns*created.rows do created.tiles[i]=newTile(state) end
                 state.boards[#state.boards+1]=created
             end) then
                 view.boardId,view.screen,view.pages=created.id,"board",{}
                 api.watchSensor(watch(created),created.sensor,{profile="ae_items"})
             end
-        elseif draft.columns*draft.rows<#board.tiles then view.screen="shrink"
+        elseif (draft.layout=="list" and draft.count or draft.columns*draft.rows)<#board.tiles then view.screen="shrink"
         else resize(state,api,view,board) end
     elseif action=="confirm" then
         if value=="shrink" then resize(state,api,view,board)
         elseif commit(state,api,view,function() table.remove(state.boards,index) end) then api.unwatchSensor(watch(board)); view.screen,view.pages="home",{} end
+    elseif action=="tileColour" then
+        view.colourDraft={value=tile.displayColour or 128,auto=tile.displayColour==nil,before=tile.displayColour}
+        view.screen="colour"
+    elseif action=="colour" then view.colourDraft.value,view.colourDraft.auto=value,false
+    elseif action=="autoColour" then view.colourDraft.auto=true
+    elseif action=="applyColour" then
+        if tile.displayColour~=view.colourDraft.before then notice(view,"Colour changed in another window","item")
+        elseif commit(state,api,view,function() tile.displayColour=not view.colourDraft.auto and view.colourDraft.value or nil end) then view.screen="item" end
     elseif action=="accent" then local ok,err=api.pickColour(context.windowId); if not ok then notice(view,err) end
     elseif action=="density" then commit(state,api,view,function() state.settings.density=state.settings.density=="roomy" and "compact" or "roomy" end)
     elseif action=="messageBack" then view.screen=view.messageBack or "home"
