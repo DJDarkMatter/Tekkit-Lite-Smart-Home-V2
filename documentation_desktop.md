@@ -56,12 +56,12 @@ Apps receive their current content width/height and render the appropriate layou
 | --- | --- |
 | Every supported size, starting at 12×6 content | Phase heading, remaining time, status, Pause/Resume, Harvest now and Menu. |
 | Width at least 36, height at least 8 | Places the three main controls in a single bottom row; narrower windows use three rows. |
-| Width at least 32, height at least 14 | Keeps the original graphical clock font, dimensions and scaling, with its two colours swapped: light digits on the app accent (white on blue by default). Doubles scale at height 20+ when the complete time fits at double width. |
-| Remaining information area | Shows player presence and harvest counts, side by side when space permits. Wiring and configured durations stay in Settings. |
+| Height at least 14 and complete clock width plus four cells fits | Graphical white-on-accent clock with black side gutters and extra clock-background space beside its strokes. Doubles scale at height 20+ only when that complete clock plus clearance fits; long hour counts can use the smaller size or normal text. |
+| Remaining information area | Shows player presence and harvest counts when space permits. Below 20 columns the main screen omits the player line. Wiring and configured durations stay in Settings. |
 
 Coffee uses a dark content panel with a distinct accent header and spaced controls. Menu has exactly three destinations: **Settings**, **Stats**, **Maintenance**. Settings has player input, harvest output, countdown, harvest time and UI colour; wide settings menus show configured durations in their labels. Stats owns the trip reset. Maintenance owns timer reset and legacy import, with confirmation. Each submenu's Back/Cancel returns to its parent. Pagination is shown only when needed; changing width/height never resets progress or applies an unsaved duration draft.
 
-All views of Coffee share one timer. Resizing, hiding, moving, closing or reopening a view does not reset it. Each view has independent temporary menus/settings drafts.
+All views of Coffee share one timer. Resizing, hiding, moving, closing or reopening a view does not reset it. Each view has independent menus/settings drafts. The v21 OS checkpoints that per-window navigation, including Switchboard's selected board/page, alongside geometry, z order and minimized state. Temporary client loss/rejoin does not delete windows; an OS reboot restores the last successful checkpoint. After upgrading from an older version, select the desired board once so it can be saved. Selector overlays and live telemetry are rebuilt rather than treated as saved observations.
 
 Snap modes are recalculated after resolution/text-scale changes. Free rectangles retain relative coordinates, with app size limits applied. The bridge polls resolution once a second so older CC versions do not need `monitor_resize` events.
 
@@ -70,6 +70,8 @@ Snap modes are recalculated after resolution/text-scale changes. Free rectangles
 The monitor client defaults to `textScale = 0.5` in `configs_monitor.txt`; an existing configuration takes precedence. This setting applies to every monitor attached to that client. Increasing it by 0.5 would change the default from 0.5 to 1.0, roughly doubling character width and height, halving columns/rows and leaving about one quarter of the logical cells. Borders and rounding affect the exact dimensions. Apps would reflow/page more often and some small windows or grid positions would no longer fit. Larger physical cells/buttons may be easier to touch, but this cannot guarantee a repair for the observed player-position-dependent native hitbox offset. Saved calibration offsets are measured in cells and would need reassessing at a different scale.
 
 Individual buttons, cards, bars and clocks can instead occupy more cells while the monitor scale stays fixed. Drawing and hit regions must use the same geometry. Native text has one scale for the entire monitor; differently sized text within one area needs custom glyphs drawn over multiple cells, as with Coffee's clock. Keeping ordinary text consistent and enlarging selected controls is possible without giving each element a different font. No text-scale, monitor, calibration or taskbar-coordinate changes are made in bundled-v18.
+
+V21 keeps that scale/calibration behavior. The supplied 1×1 Coffee screenshot has roughly 13 content columns. Doubling the width of all eight HH:MM:SS characters would need at least 16, and the existing graphical font needs still more cells. Removing the compact Player line leaves visual space but cannot supply the missing columns. This update therefore retains the full readable text clock on that monitor; it does not enlarge the whole display or silently drop seconds.
 
 ## Touch reliability and calibration
 

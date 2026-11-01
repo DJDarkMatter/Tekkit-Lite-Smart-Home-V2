@@ -12,6 +12,8 @@ Communication between OS and all clients uses ComputerCraft's wireless network.
 
 Apps are stored as files on the main OS computer's storage. The OS loads app files and manages their execution and display.
 
+Bundled-v21 also checkpoints each window's app navigation (selected view/page and plain UI drafts) together with geometry. Existing Switchboard views restore on their original monitors after restart/reconnect. Live readings remain separate and must arrive again. The optional [ME storage overview and independent four-app measurement plan](documentation_me_storage.md) use the generic sensor hub; no ME app is part of a default OS installation.
+
 ## 2. Client Types
 
 ### Monitor Clients

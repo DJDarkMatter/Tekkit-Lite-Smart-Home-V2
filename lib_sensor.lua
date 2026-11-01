@@ -26,6 +26,8 @@ function Sensor.new(net, config)
         client.sequence = client.sequence + 1
         local raw
         if not err then
+            local port = client.ports[watch.side]
+            if watch.profile == "ae_storage" and port and Data.cardKind(port.card) == "ae" then data = Data.aeSummary(data) end
             data, err = Data.clean(data)
             if type(data) ~= "table" then err = err or "Target not found" end
             if not err then raw = textutils.serialize(data); if #raw > Data.chunkSize * Data.maxParts then err = "Reading exceeds network limit"; raw = nil end end
@@ -127,12 +129,13 @@ function Sensor.new(net, config)
             and type(message.watches) == "table" and #message.watches <= 128 then
             local previous, watches, seen = client.watches, {}, {}
             for _, address in ipairs(message.watches) do
-                if not Data.address(address) or address.clientId ~= config.clientId then return end
+                if not Data.address(address) or address.clientId ~= config.clientId
+                    or address.profile ~= nil and address.profile ~= "ae_storage" then return end
                 seen[address.side] = seen[address.side] or {}
                 if not seen[address.side][address.target] then
-                    local watch = {side = address.side, target = address.target, card = address.card, nextRead = 0}
+                    local watch = {side = address.side, target = address.target, card = address.card, profile = address.profile, nextRead = 0}
                     for _, old in ipairs(previous) do
-                        if old.side == watch.side and old.target == watch.target and old.card == watch.card then
+                        if old.side == watch.side and old.target == watch.target and old.card == watch.card and old.profile == watch.profile then
                             watch.nextRead, watch.lastRaw, watch.lastFull, watch.lastFullSequence = old.nextRead, old.lastRaw, old.lastFull, old.lastFullSequence
                             break
                         end

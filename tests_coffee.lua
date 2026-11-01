@@ -63,6 +63,26 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(bridge.digital.front, false)
         equal(unserialize(central.disk.files["configs_os_state.txt"]).appStates.coffee.remainingTime, state.remainingTime)
     end
+    function tests.coffee_compact_clock_hides_presence_and_large_strokes_keep_clear_side_margins()
+        local bus,central,bridge,app,state=coffee()
+        bus.advance(1)
+        state.remainingTime=1*3600+33*60+12
+        local lines=app.render(13,7,state,central.server.api,{appName="coffee",view={}})
+        local text=table.concat(lines,"\n")
+        assert(text:find("01:33:12",1,true)); assert(not text:find("Player:",1,true))
+        for _,remaining in ipairs({0,4791,359999,604800}) do
+            state.remainingTime=remaining
+            for _,width in ipairs({31,32,34,35,54,58,62,66,79}) do
+                lines=app.render(width,21,state,central.server.api,{appName="coffee",view={}})
+                for _,style in ipairs(lines.styles) do
+                    if style.bg==1 and style.y>=2 and style.y<=11 then
+                        assert(style.x>=3 and style.x+style.width-1<=width-2,"Clock stroke touches a side gutter")
+                    end
+                    assert(style.x>=1 and style.x+style.width-1<=width)
+                end
+            end
+        end
+    end
 
     function tests.coffee_harvest_manual_pause_force_and_offline_player_behavior()
         local bus, central, bridge, app, state = coffee()

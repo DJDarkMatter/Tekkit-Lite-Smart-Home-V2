@@ -30,6 +30,15 @@ function Data.clean(value)
     if ok then return result end
     return nil, tostring(result)
 end
+-- Native AE details include the entire item list. Storage-only subscribers do
+-- not need it; project before cleaning/encoding so large networks still fit.
+function Data.aeSummary(value)
+    if type(value) ~= "table" then return value end
+    local result = {ItemsOmitted = true}
+    for _, key in ipairs({"Name", "RawName", "Position", "Powered", "FreeTypes", "FreeCount", "FreeBytes",
+        "UsedTypes", "UsedCount", "UsedBytes", "TotalBytes", "CellCount", "DriveCount"}) do result[key] = value[key] end
+    return result
+end
 function Data.cardKind(card)
     local value = tostring(card or ""):lower():gsub("[%s_-]", "")
     if value:find("energistics", 1, true) or value:find("aesensor", 1, true) or value:find("appeng", 1, true) then return "ae" end

@@ -11,7 +11,8 @@ local function copy(value)
     return result
 end
 local function restore(state, previous)
-    for key in pairs(state) do state[key] = nil end
+    local keys = {}; for key in pairs(state) do keys[#keys + 1] = key end
+    for _, key in ipairs(keys) do state[key] = nil end
     for key, value in pairs(previous) do state[key] = value end
 end
 local function number(value, minimum, maximum)
@@ -181,13 +182,17 @@ local digits = {
     ["8"] = {"111","101","111","101","111"}, ["9"] = {"111","101","111","001","111"},
     [":"] = {"0","1","0","1","0"},
 }
-local function largeClock(ui, width, height, value, accent, contrast)
+local function clockWidth(value)
     local total = -1
     for index = 1, #value do total = total + #digits[value:sub(index, index)][1] + 1 end
-    -- Preserve the original font, size and scaling; only reverse its colours.
-    local scale = height >= 20 and width >= total * 2 and 2 or 1
+    return total
+end
+local function largeClock(ui, width, height, value, accent, contrast)
+    local total = clockWidth(value)
+    -- Keep black gutters plus at least one clock-background cell beside strokes.
+    local scale = height >= 20 and width >= total * 2 + 4 and 2 or 1
     local x = 1 + math.floor((width - total * scale) / 2)
-    ui.style(1, 2, width, 5 * scale, nil, accent)
+    ui.style(2, 2, width - 2, 5 * scale, nil, accent)
     for index = 1, #value do
         local pattern = digits[value:sub(index, index)]
         for row, pixels in ipairs(pattern) do
@@ -260,7 +265,7 @@ local function build(width, height, state, api, context)
         local remaining = state.phase == "harvest" and state.harvestRemaining or state.remainingTime
         local value = clock(remaining)
         ui.heading(state.phase == "harvest" and "Harvesting" or "Next harvest", accent)
-        local large = width >= 32 and height >= 14
+        local large = width >= clockWidth(value) + 4 and height >= 14
         local timeRow = height >= 10 and 3 or 2
         local statusRow = large and 2 + largeClock(ui, width, height, value, accent, api.ui.contrast(accent))
             or height >= 10 and 5 or 3
@@ -291,7 +296,7 @@ local function build(width, height, state, api, context)
             card(2, "PLAYER", presence)
             card(width - cardWidth, "TRIP / TOTAL", state.tripHarvests .. " / " .. state.totalHarvests)
         else
-            if infoRow <= limit then ui.text(infoRow, "Player: " .. (width < 16 and (player == nil and "?" or player and "on" or "off") or presence), true) end
+            if width >= 20 and infoRow <= limit then ui.text(infoRow, "Player: " .. presence, true) end
             if infoRow + 1 <= limit then ui.text(infoRow + 1, "Total: " .. state.totalHarvests, true) end
         end
         if inline then

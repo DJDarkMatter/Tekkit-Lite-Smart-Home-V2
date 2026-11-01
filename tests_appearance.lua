@@ -290,8 +290,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             return result
         end
         equal(pixels(3), table.concat({"111", "010", "0", "111", "111", "0", "101", "111"}, "0"))
-        -- Same two-cell pixels and full-width clock band as before, with white
-        -- strokes on blue instead of blue strokes on white.
+        -- Same two-cell pixels, with white strokes on blue and side gutters.
         equal(t.top.bg[3][3], 2048); equal(t.top.bg[3][62], 2048)
         equal(t.top.bg[3][6], 1); equal(t.top.bg[4][7], 1)
         local before = pixels(7)

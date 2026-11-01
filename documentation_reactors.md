@@ -4,7 +4,7 @@
 
 ## Install and add reactors
 
-Upload the current package files to the V2 repository root. Replace your installer paste with bundled-v19 `install.lua`, download a fresh `inst`, and quit the central OS to CraftOS:
+Upload the current package files to the V2 repository root. Replace your installer paste with bundled-v21 `install.lua`, download a fresh `inst`, and quit the central OS to CraftOS:
 
 ```text
 cd /
@@ -70,5 +70,9 @@ Names, sensor bindings, output bindings, panel colour and stable IDs are saved i
 Reactors is a normal app: it runs while at least one window exists, including minimized/covered windows. Closing its last window releases its sensor subscriptions and stops detailed polling, while saved manual switch intent stays applied by the OS. Reopening/restoring a window subscribes again. No background alarm/history service or automatic reactor control is introduced.
 
 Bundled-v19 fixes the OS-side cleanup crash seen after closing the last window (`lib_sensor_server.lua:199: invalid key to 'next'`). If Reactors is already installed, update only the server role using a fresh v19 installer and reboot the OS; do not reinstall the app or clients for this fix. Closing one of several windows continues to leave the app and its subscriptions running.
+
+## A possible fuel-time source in Tekkit Lite
+
+An additional OpenCCSensors Inventory Sensor Card exposes per-slot item identity, count and DamageValue. A [period Tekkit Lite reactor-control program](https://forums.technicpack.net/topic/39819-cc-breeder-reactor-control/) specifically describes using inventory-sensor uranium usage to determine cycle time. This makes fuel inspection a candidate, rather than requiring more chamber readings. However, the [native inventory helper](https://github.com/Cloudhunter/OpenCCSensors/blob/96e89c135c846c406f6eea3f7006ac5b81dbcf68/src/openccsensors/common/helper/InventoryHelper.java) reports ordinary item damage with NBT disabled; we must verify what the actual fuel item on this server reports before promising an exact remaining-time formula. Nuclear Control location cards use a different interface and are not OpenCCSensors cards. V21 does not add fuel bindings or a guessed reactor countdown.
 
 Tests use real app, server, sensor, IO and monitor entry points under simulated ComputerCraft Lua 5.1, including old asynchronous OCS replies. In-game values, sensor range, physical wiring and rendering still need verification on the user's server.

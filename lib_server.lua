@@ -32,6 +32,31 @@ local function copy(value)
     for key, item in pairs(value) do result[key] = copy(item) end
     return result
 end
+-- Window UI state is plain bounded data, independent of sensor caches and app
+-- business state. Do not persist frame hit maps or rendering styles.
+local function viewSnapshot(value)
+    local seen, count = {}, 0
+    local function clean(item, depth)
+        count = count + 1
+        if count > 2048 or depth > 8 then error("Window UI state is too large", 0) end
+        local kind = type(item)
+        if kind == "boolean" or kind == "nil" then return item end
+        if kind == "number" then return item == item and math.abs(item) < math.huge and item or nil end
+        if kind == "string" then assert(#item <= 4096, "Window UI text is too large"); return item end
+        if kind ~= "table" or seen[item] then return nil end
+        seen[item] = true
+        local result = {}
+        for key, child in pairs(item) do
+            if (type(key) == "string" and #key <= 96 or integer(key, 1, 2147483646)) and key ~= "hits" and key ~= "styles" then
+                result[key] = clean(child, depth + 1)
+            end
+        end
+        seen[item] = nil
+        return result
+    end
+    local ok, result = pcall(clean, value, 0)
+    return ok and type(result) == "table" and result or {}
+end
 
 local function wireGroup(groups, mapping)
     groups[mapping.clientId] = groups[mapping.clientId] or {}
@@ -112,7 +137,7 @@ function Server.new(net, storage, config, logger)
     local clientGroups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients, relay = server.relayClients}
     local api, errors = {}, {}
     server.api = api
-    api.ui, api.log, api.sharedOutputs = Gui, log, true
+    api.ui, api.log, api.sharedOutputs, api.sensorProfiles = Gui, log, true, true
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
         local monitor = server.monitors[id]
@@ -131,6 +156,8 @@ function Server.new(net, storage, config, logger)
                 state.appStates[win.appName] = win.appState
             end
             win.appState = nil -- App state is shared with its background service.
+            server.views[id] = viewSnapshot(win.viewState)
+            win.viewState = nil
             if legacyDesktop then win.y = math.max(1, (tonumber(win.y) or 3) - 2) end
         end
     end
@@ -146,6 +173,11 @@ function Server.new(net, storage, config, logger)
         local saved = {}
         for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides",
             "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance"}) do saved[name] = state[name] end
+        saved.windows = {}
+        for id, win in pairs(state.windows) do
+            saved.windows[id] = copy(win)
+            saved.windows[id].viewState = viewSnapshot(server.views[id])
+        end
         local ok, err = storage.save(config.saveFile, saved)
         if not ok then log("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
         return ok, err

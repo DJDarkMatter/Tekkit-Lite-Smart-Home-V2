@@ -81,6 +81,26 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.window(id), nil)
         equal(t.central.server.running.pane, nil)
     end
+    function tests.desktop_window_ui_checkpoint_is_plain_bounded_and_failed_saves_keep_the_previous_navigation()
+        local t=setup()
+        local id=t.open()
+        local view={screen="details",page=2,selection=17,draft={text="Pending name"},callback=function() end,hits={{x1=1}}}
+        view.cycle=view
+        t.central.server.views[id]=view
+        assert(t.api.save())
+        local saved=unserialize(t.central.disk.files["configs_os_state.txt"])
+        equal(saved.windows[id].viewState.screen,"details"); equal(saved.windows[id].viewState.page,2)
+        equal(saved.windows[id].viewState.draft.text,"Pending name")
+        equal(saved.windows[id].viewState.callback,nil); equal(saved.windows[id].viewState.cycle,nil); equal(saved.windows[id].viewState.hits,nil)
+        view.page=3; t.central.disk.failWrite=true; equal(t.api.save(),false)
+        equal(unserialize(t.central.disk.files["configs_os_state.txt"]).windows[id].viewState.page,2)
+        t.central.disk.failWrite=false
+        local restored=t.bus.computer(10,"server",{disk=t.central.disk}):start()
+        equal(restored.server.views[id].page,2); equal(restored.server.views[id].selection,17)
+        restored.server.views[id]={oversized=string.rep("x",5000)}
+        assert(restored.server.api.save())
+        equal(next(unserialize(restored.disk.files["configs_os_state.txt"]).windows[id].viewState),nil)
+    end
 
     function tests.desktop_last_view_stops_normal_apps_but_not_background_services()
         local t = setup()

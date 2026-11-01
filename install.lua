@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v19
+-- SmartHome OS installer: bundled-v21
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -1066,6 +1066,31 @@ local function copy(value)
     for key, item in pairs(value) do result[key] = copy(item) end
     return result
 end
+-- Window UI state is plain bounded data, independent of sensor caches and app
+-- business state. Do not persist frame hit maps or rendering styles.
+local function viewSnapshot(value)
+    local seen, count = {}, 0
+    local function clean(item, depth)
+        count = count + 1
+        if count > 2048 or depth > 8 then error("Window UI state is too large", 0) end
+        local kind = type(item)
+        if kind == "boolean" or kind == "nil" then return item end
+        if kind == "number" then return item == item and math.abs(item) < math.huge and item or nil end
+        if kind == "string" then assert(#item <= 4096, "Window UI text is too large"); return item end
+        if kind ~= "table" or seen[item] then return nil end
+        seen[item] = true
+        local result = {}
+        for key, child in pairs(item) do
+            if (type(key) == "string" and #key <= 96 or integer(key, 1, 2147483646)) and key ~= "hits" and key ~= "styles" then
+                result[key] = clean(child, depth + 1)
+            end
+        end
+        seen[item] = nil
+        return result
+    end
+    local ok, result = pcall(clean, value, 0)
+    return ok and type(result) == "table" and result or {}
+end
 
 local function wireGroup(groups, mapping)
     groups[mapping.clientId] = groups[mapping.clientId] or {}
@@ -1146,7 +1171,7 @@ function Server.new(net, storage, config, logger)
     local clientGroups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients, relay = server.relayClients}
     local api, errors = {}, {}
     server.api = api
-    api.ui, api.log, api.sharedOutputs = Gui, log, true
+    api.ui, api.log, api.sharedOutputs, api.sensorProfiles = Gui, log, true, true
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
         local monitor = server.monitors[id]
@@ -1165,6 +1190,8 @@ function Server.new(net, storage, config, logger)
                 state.appStates[win.appName] = win.appState
             end
             win.appState = nil -- App state is shared with its background service.
+            server.views[id] = viewSnapshot(win.viewState)
+            win.viewState = nil
             if legacyDesktop then win.y = math.max(1, (tonumber(win.y) or 3) - 2) end
         end
     end
@@ -1180,6 +1207,11 @@ function Server.new(net, storage, config, logger)
         local saved = {}
         for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides",
             "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance"}) do saved[name] = state[name] end
+        saved.windows = {}
+        for id, win in pairs(state.windows) do
+            saved.windows[id] = copy(win)
+            saved.windows[id].viewState = viewSnapshot(server.views[id])
+        end
         local ok, err = storage.save(config.saveFile, saved)
         if not ok then log("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
         return ok, err
@@ -2957,6 +2989,15 @@ function Data.clean(value)
     if ok then return result end
     return nil, tostring(result)
 end
+-- Native AE details include the entire item list. Storage-only subscribers do
+-- not need it; project before cleaning/encoding so large networks still fit.
+function Data.aeSummary(value)
+    if type(value) ~= "table" then return value end
+    local result = {ItemsOmitted = true}
+    for _, key in ipairs({"Name", "RawName", "Position", "Powered", "FreeTypes", "FreeCount", "FreeBytes",
+        "UsedTypes", "UsedCount", "UsedBytes", "TotalBytes", "CellCount", "DriveCount"}) do result[key] = value[key] end
+    return result
+end
 function Data.cardKind(card)
     local value = tostring(card or ""):lower():gsub("[%s_-]", "")
     if value:find("energistics", 1, true) or value:find("aesensor", 1, true) or value:find("appeng", 1, true) then return "ae" end
@@ -3057,6 +3098,8 @@ function Sensor.new(net, config)
         client.sequence = client.sequence + 1
         local raw
         if not err then
+            local port = client.ports[watch.side]
+            if watch.profile == "ae_storage" and port and Data.cardKind(port.card) == "ae" then data = Data.aeSummary(data) end
             data, err = Data.clean(data)
             if type(data) ~= "table" then err = err or "Target not found" end
             if not err then raw = textutils.serialize(data); if #raw > Data.chunkSize * Data.maxParts then err = "Reading exceeds network limit"; raw = nil end end
@@ -3158,12 +3201,13 @@ function Sensor.new(net, config)
             and type(message.watches) == "table" and #message.watches <= 128 then
             local previous, watches, seen = client.watches, {}, {}
             for _, address in ipairs(message.watches) do
-                if not Data.address(address) or address.clientId ~= config.clientId then return end
+                if not Data.address(address) or address.clientId ~= config.clientId
+                    or address.profile ~= nil and address.profile ~= "ae_storage" then return end
                 seen[address.side] = seen[address.side] or {}
                 if not seen[address.side][address.target] then
-                    local watch = {side = address.side, target = address.target, card = address.card, nextRead = 0}
+                    local watch = {side = address.side, target = address.target, card = address.card, profile = address.profile, nextRead = 0}
                     for _, old in ipairs(previous) do
-                        if old.side == watch.side and old.target == watch.target and old.card == watch.card then
+                        if old.side == watch.side and old.target == watch.target and old.card == watch.card and old.profile == watch.profile then
                             watch.nextRead, watch.lastRaw, watch.lastFull, watch.lastFullSequence = old.nextRead, old.lastRaw, old.lastFull, old.lastFullSequence
                             break
                         end
@@ -3254,9 +3298,10 @@ function Hub.new(net, clients, session)
         client.sensorMaxAge = Data.number(message.pollInterval) and message.pollInterval >= 0.5 and message.pollInterval <= 60
             and math.max(10, 3 * message.pollInterval) or 10
     end
-    function hub.watch(key, address)
+    function hub.watch(key, address, options)
         if not Data.string(key, 96) or not Data.address(address) then return false, "Invalid sensor binding" end
-        hub.watches[key] = {address = copy(address), used = os.clock()}
+        if options ~= nil and (type(options) ~= "table" or options.profile ~= "ae_storage") then return false, "Invalid sensor profile" end
+        hub.watches[key] = {address = copy(address), used = os.clock(), profile = options and options.profile}
         return true
     end
     function hub.unwatch(key) hub.watches[key] = nil end
@@ -3405,7 +3450,8 @@ function Hub.new(net, clients, session)
             local item = hub.watches[key]
             if now - item.used >= 10 then hub.watches[key] = nil
             else
-                local a = item.address
+                local a = copy(item.address)
+                a.profile = item.profile
                 requests[a.clientId] = requests[a.clientId] or {}
                 requests[a.clientId][#requests[a.clientId] + 1] = a
             end
@@ -3416,11 +3462,14 @@ function Hub.new(net, clients, session)
                 table.sort(requests[id] or {}, function(a, b) return a.side .. a.target < b.side .. b.target end)
                 for _, source in ipairs(requests[id] or {}) do
                     seen[source.side] = seen[source.side] or {}
-                    if not seen[source.side][source.target] and #list < 128 then
+                    local index = seen[source.side][source.target]
+                    if not index and #list < 128 then
                         local a = copy(source)
                         local port = client.ports[a.side]
                         a.card = a.card or port and port.card
-                        list[#list + 1], seen[a.side][a.target] = a, true
+                        list[#list + 1], seen[a.side][a.target] = a, #list + 1
+                    elseif index and source.profile ~= "ae_storage" then
+                        list[index].profile = nil -- A full subscriber wins; the target is still polled once.
                     end
                 end
                 local signature = textutils.serialize(list)
@@ -3649,7 +3698,7 @@ end
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v19")
+print("SmartHome installer: bundled-v21")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")

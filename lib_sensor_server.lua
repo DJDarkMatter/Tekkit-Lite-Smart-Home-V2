@@ -21,9 +21,10 @@ function Hub.new(net, clients, session)
         client.sensorMaxAge = Data.number(message.pollInterval) and message.pollInterval >= 0.5 and message.pollInterval <= 60
             and math.max(10, 3 * message.pollInterval) or 10
     end
-    function hub.watch(key, address)
+    function hub.watch(key, address, options)
         if not Data.string(key, 96) or not Data.address(address) then return false, "Invalid sensor binding" end
-        hub.watches[key] = {address = copy(address), used = os.clock()}
+        if options ~= nil and (type(options) ~= "table" or options.profile ~= "ae_storage") then return false, "Invalid sensor profile" end
+        hub.watches[key] = {address = copy(address), used = os.clock(), profile = options and options.profile}
         return true
     end
     function hub.unwatch(key) hub.watches[key] = nil end
@@ -172,7 +173,8 @@ function Hub.new(net, clients, session)
             local item = hub.watches[key]
             if now - item.used >= 10 then hub.watches[key] = nil
             else
-                local a = item.address
+                local a = copy(item.address)
+                a.profile = item.profile
                 requests[a.clientId] = requests[a.clientId] or {}
                 requests[a.clientId][#requests[a.clientId] + 1] = a
             end
@@ -183,11 +185,14 @@ function Hub.new(net, clients, session)
                 table.sort(requests[id] or {}, function(a, b) return a.side .. a.target < b.side .. b.target end)
                 for _, source in ipairs(requests[id] or {}) do
                     seen[source.side] = seen[source.side] or {}
-                    if not seen[source.side][source.target] and #list < 128 then
+                    local index = seen[source.side][source.target]
+                    if not index and #list < 128 then
                         local a = copy(source)
                         local port = client.ports[a.side]
                         a.card = a.card or port and port.card
-                        list[#list + 1], seen[a.side][a.target] = a, true
+                        list[#list + 1], seen[a.side][a.target] = a, #list + 1
+                    elseif index and source.profile ~= "ae_storage" then
+                        list[index].profile = nil -- A full subscriber wins; the target is still polled once.
                     end
                 end
                 local signature = textutils.serialize(list)

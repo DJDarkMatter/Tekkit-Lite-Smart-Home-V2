@@ -12,7 +12,7 @@ inst app switchboard
 reboot
 ```
 
-This downloads only `apps_switchboard.lua` through the GitHub API, validates it and enables it. The installer and core files remain bundled-v19; no installer paste replacement, core reinstall or client update is needed for v20. Existing configuration and app/window state are preserved. A first installation needs the [current OS](README.md) and GitHub-capable `inst`; Switchboard requires the shared routing/UI APIs from bundled-v14 or newer.
+This downloads only `apps_switchboard.lua` through the GitHub API, validates it and enables it. The v20 appearance feature needs no installer change. For v21 navigation restoration, update the central server role with a fresh bundled-v21 installer; the Switchboard app file itself is unchanged. Existing configuration and app/window state are preserved. A first installation needs the [current OS](README.md) and GitHub-capable `inst`; Switchboard requires the shared routing/UI APIs from bundled-v14 or newer.
 
 Open **Switchboard** from the monitor's `[+]` launcher. It starts when opened; restored OS windows start it again after reboot. Closing one monitor's window leaves the others running. Closing the last window stops the UI; the OS keeps applying saved switch positions with no window open.
 
@@ -40,7 +40,7 @@ Long labels shorten to fit, retaining the desired ON/OFF prefix. Acknowledgement
 
 Small content areas show fewer switches with **<**, page number and **>** navigation. A 13×7 content area displays a 2×2 page for a standard board; smaller supported areas can show fewer. The same rules apply to small physical monitors and resized OS windows. Preferred grid dimensions limit the visible columns/rows; pages follow saved row-major switch order. Every switch remains reachable, and resizing the OS window never deletes or rebinds anything.
 
-Navigation and unfinished drafts are independent per OS window. Saved names, routes, order, colours and positions are shared. On restart, OS windows restore their geometry and Switchboard opens its selection screen.
+Navigation and unfinished drafts are independent per OS window. Saved names, routes, order, colours and positions are shared. The v21 OS saves each window's selected view, page and navigation with its geometry. OS/monitor restarts, temporary disconnections and rejoining do not reset a saved board to the general overview. Select a board once after upgrading from older versions that did not save navigation; subsequent checkpoints restore it. Live IO state still comes from the clients.
 
 ## View settings
 
