@@ -108,6 +108,18 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     end
 
     function tests.appearance_snap_flyout_chooses_grid_before_position_and_keeps_resize_move_on_root()
+        local function same(a,b)
+            if type(a)~="table" then return a==b end
+            if type(b)~="table" then return false end
+            for key,value in pairs(a) do if not same(value,b[key]) then return false end end
+            for key in pairs(b) do if a[key]==nil then return false end end
+            return true
+        end
+        local function snapshot(value)
+            if type(value)~="table" then return value end
+            local result={}; for key,item in pairs(value) do result[key]=snapshot(item) end
+            return result
+        end
         local t = setup(true, 81, 25)
         local id = t.open("coffee", "top", 3, 4, 32, 12)
         local function choose(mode)
@@ -120,12 +132,12 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
                     if hit.item and hit.item.value == "choose_" .. Desktop.gridForMode(mode) then choice = hit end
                 end
                 assert(choice)
-                local previous = serialize(t.window(id))
+                local previous = snapshot(t.window(id))
                 local root = {}
                 for _, hit in ipairs(model.menuHits) do if hit.item then root[hit.item.value] = true end end
                 assert(root.custom and root.move and root.restore and root.fullscreen, "Resize/Move/Restore/Fullscreen must stay at the first level")
                 t.touch("top", choice.x2, choice.y2 or choice.y)
-                equal(serialize(t.window(id)), previous, "Picking a grid alone must not change geometry")
+                assert(same(t.window(id), previous), "Picking a grid alone must not change geometry")
                 for _, hit in ipairs(model.menuHits) do
                     assert(not hit.item or (hit.item.value ~= "custom" and hit.item.value ~= "move"), "Position screen contains only panes and navigation")
                 end

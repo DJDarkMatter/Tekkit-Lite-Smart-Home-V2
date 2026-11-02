@@ -1403,6 +1403,7 @@ assert(hostLoadfile("tests_switchboard.lua"))()(tests, newBus, monitor, serializ
 assert(hostLoadfile("tests_sensors.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_me_storage.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_me_monitor.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
+assert(hostLoadfile("tests_solar_farm.lua"))()(tests, newBus, monitor, serialize, unserialize, equal, githubFile)
 assert(hostLoadfile("tests_relay.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_console.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_clock.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)

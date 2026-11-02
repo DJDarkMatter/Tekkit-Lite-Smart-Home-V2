@@ -166,3 +166,9 @@ The full archive retains sixty-three unique root files and twenty embedded core 
 No new distributed files. Updated runtime/build: `lib_sensor.lua`, `tools_build_installer.py`, generated `install.lua`. Updated tests: `tests_sensors.lua`, `tests_run.lua`. Updated guides: `README.md`, `documentation_sensors.md`, `documentation_review.md`, and this map.
 
 The full archive retains all sixty-three flat root files and the installer contains twenty core sources without apps. Reinstall only the inspected sensor role using a fresh v28 installer. Each report sample now owns independent target metadata, including nested position fields, so legacy CraftOS can serialize the complete report. The test harness now rejects every repeated table reference, matching old serialization behavior across all roles. Existing fullscreen, app sources, saved settings/startup and report timing/bounds remain intact.
+
+## Solar farm overview (v29 app release)
+
+New files: `apps_solar_farm.lua`, `tests_solar_farm.lua`, `documentation_solar_farm.md`. Updated tests: `tests_run.lua`, `tests_appearance.lua`. Updated guides: `README.md`, `documentation_design.md`, `documentation_me_storage.md`, `documentation_review.md`, and this map.
+
+The complete archive now has 66 unique root files. `install.lua` and its twenty embedded core sources remain unchanged at bundled-v28; the existing installer downloads the explicitly requested `solar_farm` app from GitHub. Update no OS/client roles for this release. The optional app uses a separate `appStates.solar_farm` record inside the existing central checkpoint for its selected main/farm sources, pins, identities, filter settings, history and alarms. Current ME inventories/baselines stay runtime-only. It replaces the planned SMF production app with farm inventory and filtered main-ME net stock-rate estimates; machinery control stays external.
