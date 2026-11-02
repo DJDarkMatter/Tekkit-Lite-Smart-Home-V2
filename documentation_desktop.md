@@ -1,8 +1,8 @@
 # Monitor desktops and windows
 
-The main OS owns all window positions, taskbars, menus and hit testing. Monitor clients relay touches and render addressed colour frames. Each monitor has an independent desktop and a taskbar on its bottom row. Advanced monitors show filled panels, coloured title bars/buttons and wire swatches through CC 1.5's character-cell foreground/background API. Standard monitors receive a monochrome fallback.
+The main OS owns all window positions, taskbars, menus and hit testing. Monitor clients relay touches and render addressed colour frames. Each monitor has an independent desktop and a taskbar on its bottom row while using framed windows. Advanced monitors show filled panels, coloured title bars/buttons and wire swatches through CC 1.5's character-cell foreground/background API. Standard monitors receive a monochrome fallback.
 
-Bundled-v12 updates the `server` role for global border/taskbar colours and the `monitor` role for calibration reset/live testing. Coffee, resizing, taskbar dimensions and text positions are unchanged. Existing bundled-v8 monitor bridges remain compatible with the display frames; update the monitor role for the new calibration controls. Role installation extracts embedded files without GitHub requests; optional app installation uses the confirmed working API route first.
+Bundled-v27 updates the `server` role for the `#` control, per-corner nudges and fullscreen. Update Coffee separately for its denser compact view. Existing monitor bridges remain compatible with the display frames. Role installation extracts embedded files without GitHub requests; optional app installation uses the confirmed working API route first.
 
 ## Desktop appearance and OS settings
 
@@ -20,12 +20,12 @@ Window borders and the taskbar default to gray. Text switches between white and 
 
 ## Three title-bar buttons
 
-The title begins at the far left. The buttons are at the far right: `-`, `+`, `X`.
+The title begins at the far left. The buttons are at the far right: `-`, `#`, `X`.
 
 | Control | Behavior |
 | --- | --- |
 | `-` | Minimize this view. Restore it through its taskbar button. |
-| `+` | Open graphical grid choices, then select a position. Restore, Resize, Move and Cancel stay on the first screen. |
+| `#` | Open graphical grid choices, then select a position. Fullscreen, Restore, Resize, Move and Cancel stay on the first screen. |
 | Red `X` | Close only this view. Ordinary apps stop when their last view closes, across all monitors. Background services such as Coffee keep running with zero views. |
 
 The launcher focuses an existing view on this monitor if one is already open. Other monitors' views are unaffected. Closing a switchboard-like UI retains existing logical output states; an app's optional shutdown hook can define additional behavior.
@@ -38,13 +38,19 @@ Incompatible panes are gray; selecting them does not alter the window. Grids wit
 
 Restore returns to the previous layout/free rectangle. Repeating the current preset does not overwrite the restore target.
 
+### Fullscreen (v27)
+
+Choose **Fullscreen** on the layout menu's first screen. The app fills all character cells with its content; its title, frame and taskbar are hidden. Tap the very top-right character cell to restore the previous window. There is no exit button drawn over that cell. The tap is consumed by the OS, while other edge cells and the bottom row act as ordinary app content.
+
+Each monitor keeps its own fullscreen selection. Other windows keep running behind it. Fullscreen, the previous snap/free layout and its restore target, and the app's selected page are saved centrally. Resolution changes recompute the full content size. If a monitor becomes too small for the app, an error view retains the top-right exit; the framed window becomes available again when the monitor is large enough. A failed exit checkpoint keeps fullscreen for retry. Alarm/timer popups retain priority over the exit tap until dismissed.
+
 ## Custom size and position
 
-1. Open the title-bar `+` and select `Resize` on its first screen.
-2. Click one corner of the desired window, then its opposite corner.
-3. Inspect the outline and size. Click `[OK]` on the bottom row to apply, or `[Cancel]` to keep the old layout.
+1. Open the title-bar `#` and select `Resize` on its first screen.
+2. Tap the first corner. Use the arrow pad to nudge it one character at a time; `[OK]` fixes this corner.
+3. Tap the opposite corner, nudge it with the same arrows, then `[OK]` applies the window.
 
-An undersized selection is rejected. You can choose a different second corner before applying. These touches are captured by the OS and do not activate app buttons underneath. App background work continues throughout placement.
+The top line reports the active corner's coordinates; `+` marks each picked point. Arrows disappear at the monitor/workspace edges. The arrow pad stays put while a point is being nudged. **Place** repicks the current corner. An undersized selection is red and cannot be applied; adjust or repick the second corner. `[Cancel]` at either stage keeps the old window. The first confirmation never changes the live window. These touches are captured by the OS and do not activate app buttons underneath. App background work continues throughout placement.
 
 For moving without resizing, choose `Move`, or click the title text at the left. Click a coarse destination for the top-left corner. The green preview then has one-cell arrow controls on its sides. Each arrow disappears when its side touches the workspace boundary; the bottom taskbar is excluded. Once placed, other desktop clicks do not jump the preview. Use **Place** at the top right to pick another coarse position. **OK** commits the preview; **Cancel** keeps the old window. Moving never changes size.
 
@@ -56,7 +62,7 @@ Apps receive their current content width/height and render the appropriate layou
 | --- | --- |
 | Every supported size, starting at 12×6 content | Phase heading, remaining time, status, Pause/Resume, Harvest now and Menu. |
 | Width at least 36, height at least 8 | Places the three main controls in a single bottom row; narrower windows use three rows. |
-| Height at least 14 and complete clock width plus four cells fits | Graphical clock with extra clock-background space beside its strokes, matching the chosen UI colour through both edges. Doubles scale at height 20+ only when that complete clock plus clearance fits; long hour counts can use the smaller size or normal text. |
+| At least nine rows before the bottom controls, and complete clock width plus four cells fits | Graphical clock with extra clock-background space beside its strokes, matching the chosen UI colour through both edges. Doubles scale at height 20+ only when that complete clock plus clearance fits; long hour counts can use the smaller size or normal text. |
 | Remaining information area | Shows player presence and harvest counts when space permits. The compact Player: on/off line is included again in v22. Wiring and configured durations stay in Settings. |
 
 Coffee uses a dark content panel with a distinct accent header and spaced controls. Menu has exactly three destinations: **Settings**, **Stats**, **Maintenance**. Settings has player input, harvest output, countdown, harvest time and UI colour; wide settings menus show configured durations in their labels. Stats owns the trip reset. Maintenance owns timer reset and legacy import, with confirmation. Each submenu's Back/Cancel returns to its parent. Pagination is shown only when needed; changing width/height never resets progress or applies an unsaved duration draft.
@@ -75,7 +81,7 @@ V21 keeps that scale/calibration behavior. The supplied 1×1 Coffee screenshot h
 
 ## Touch reliability and calibration
 
-The renderer and hit tester use the same title-button rectangles. App content starts at `(window.x + 1, window.y + 1)`, and both drawing and touches use that origin. Coloured button backgrounds show the full clickable character cell, including padding.
+The renderer and hit tester use the same title-button rectangles. Framed app content starts at `(window.x + 1, window.y + 1)`; fullscreen starts at monitor cell `(1,1)`. Drawing, styles, app touches and IO/sensor/colour pickers use the same content rectangle in either mode. Coloured button backgrounds show the full clickable character cell, including padding.
 
 Each new frame has an increasing ID. A monitor discards older frames; an input revision prevents an old/duplicate tap from advancing a page twice or activating a control on a changed screen. Stale touches request a fresh frame so a lost reply does not leave the UI waiting for the next announcement. The monitor buffers input/modem events during yielding peripheral operations, retaining the revision visible when each touch arrived.
 
@@ -89,10 +95,14 @@ If samples differ too much, Retry/Reset/Cancel appear on the monitor and the old
 
 ## Persistence and app lifecycle
 
-Window geometry, snap mode, restore target, ordering, minimized state, and per-monitor taskbar scroll are saved. Successful layout actions commit immediately; the OS also checkpoints all app/window state at least once a second while running. Placement previews and unapplied settings drafts are transient.
+Window geometry, snap mode, restore target, fullscreen, ordering, minimized state, and per-monitor taskbar scroll are saved. Successful layout actions commit immediately; the OS also checkpoints all app/window state at least once a second while running. Corner/move placement previews are transient; app drafts follow the bounded per-window navigation checkpoint.
 
 Old top-taskbar window positions are migrated once to the new workspace origin. Restored ordinary-app views start their app once at OS boot; an ordinary app with no saved views stays stopped until opened. `backgroundService = true` apps, and apps without any render hook, start automatically when explicitly enabled. Coffee declares this flag.
 
 ## Title spacing (v24)
 
 Every window title begins one character to the right of the outer left edge. The right-hand Minimize, Layout and Close controls retain their positions; the title clips before them. This applies to user apps and built-in OS settings. Global text scale, calibration, taskbar rows and window geometry are unchanged.
+
+## Alarm/timer popups (v25)
+
+App notifications overlay a centred OK window on every monitor, above normal windows, menus and move/resize previews. Touches are modal and do not pass through to those surfaces. OK on one monitor acknowledges that occurrence for all monitors; the next queued occurrence, if any, then appears. Input revisions reject delayed taps from the old popup. Redstone dismissal closes it through the same saved Clock state transition. Popup rendering follows monitor size and does not modify saved desktop geometry, taskbar positions, global text scale or calibration.

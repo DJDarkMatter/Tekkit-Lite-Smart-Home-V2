@@ -35,8 +35,9 @@ end
 local function mode(value) return value=="real" or value=="game" end
 local function validName(value) return type(value)=="string" and #value>0 and #value<=24 and value:find("%S") and not value:find("[%c]") end
 local function signal(value)
-    return type(value)=="table" and (value.kind=="pulse" or value.kind=="pattern")
-        and integer(value.on,1,86400) and integer(value.off,1,86400) and integer(value.total,1,MAX_DURATION)
+    return type(value)=="table" and (value.kind=="constant" or value.kind=="pattern")
+        and integer(value.on,value.kind=="constant" and 0 or 1,86400)
+        and integer(value.off,1,86400) and integer(value.total,0,MAX_DURATION)
 end
 local function find(list,id) for index,item in ipairs(list or {}) do if item.id==id then return item,index end end end
 local function each(state,fn)
@@ -45,10 +46,10 @@ local function each(state,fn)
 end
 local function outputName(item,kind) return appName.."_"..kind.."_"..item.id end
 local function wire(value) return value.clientId..":"..value.side..":"..tostring(value.color or "digital") end
-local function signalLength(item) return item.signal.kind=="pulse" and item.signal.on or item.signal.total end
+local function signalLength(item) return item.signal.kind=="constant" and item.signal.on or item.signal.total end
 local function signalOn(item)
-    if not item.ring or item.ring.elapsed>=signalLength(item) then return false end
-    return item.signal.kind=="pulse" or item.ring.elapsed%(item.signal.on+item.signal.off)<item.signal.on
+    if not item.ring or signalLength(item)>0 and item.ring.elapsed>=signalLength(item) then return false end
+    return item.signal.kind=="constant" or item.ring.elapsed%(item.signal.on+item.signal.off)<item.signal.on
 end
 local function trim(state,previous)
     local keep=state.settings.history
@@ -56,7 +57,7 @@ local function trim(state,previous)
         local item=state.timers[i]
         if item.status=="done" or item.status=="cancelled" then
             local old=previous and find(previous.timers,item.id)
-            if not item.ring and not (old and old.ring) then
+            if not item.ring and not item.alert and not (old and (old.ring or old.alert)) then
                 if keep==0 then table.remove(state.timers,i) else keep=keep-1 end
             end
         end
@@ -79,15 +80,43 @@ local function sample(state,api)
     end
     return {seconds=seconds,civilDay=civilDay,hasDay=hasDay,absolute=civilDay*86400+seconds}
 end
+local function alertKey(item,kind) return kind.."_"..digits(item.id).."_"..digits(item.alert.id) end
+local function publish(state,api)
+    local entries={}
+    each(state,function(item,kind)
+        if item.alert then entries[#entries+1]={key=alertKey(item,kind),title=kind=="alarm" and "Alarm" or "Timer",message=item.name,id=item.alert.id} end
+    end)
+    table.sort(entries,function(a,b) return a.id<b.id end)
+    return api.setNotifications(appName,entries)
+end
+local function raiseAlert(state,item,api)
+    if item.alert then return end -- One outstanding occurrence per alarm/timer.
+    item.alert={id=state.nextAlertId,inputArmed=item.dismissInput and api.readInput(item.dismissInput)==false or false}
+    state.nextAlertId=state.nextAlertId+1
+    if item.route then item.ring={elapsed=0} end
+end
+local function wireChanges(state,touched,api)
+    local groups={}
+    each(state,function(item,kind)
+        if item.route and touched[wire(item.route)] then
+            local key=wire(item.route)
+            groups[key]=groups[key] or {name=outputName(item,kind),value=false}
+            groups[key].value=groups[key].value or signalOn(item)
+        end
+    end)
+    local changes={}
+    for _,change in pairs(groups) do if api.getOutput(change.name)~=change.value then changes[#changes+1]=change end end
+    return changes
+end
 local function commit(state,api,change,changes,view)
     local old=copy(state); change()
-    local ok,err=api.updateOutputs(changes or {})
+    local ok,err=api.updateOutputs(type(changes)=="function" and changes() or changes or {})
     if not ok then
         restore(state,old); lastError="Save/output failed: "..tostring(err)
         if view then view.message,view.back,view.screen=lastError,view.screen or "home","message" end
         return false,err
     end
-    lastError=nil; api.invalidateAppViews(appName)
+    lastError=nil; assert(publish(state,api)); api.invalidateAppViews(appName)
     return true
 end
 local function mapping(item,kind)
@@ -101,27 +130,43 @@ local function offChanges(state,item,kind)
 end
 function app.init(state,api,context)
     ready=false; lastError,retryElapsed=nil,0
-    assert(api.updateOutputs and api.getDiagnostics,"Clock requires bundled-v24 OS")
+    assert(api.updateOutputs and api.setNotifications,"Clock requires bundled-v25 OS")
     appName=context and context.appName or "clock"
     if state.version==nil then
-        state.version,state.alarms,state.timers,state.nextId=1,{},{},1
+        state.version,state.alarms,state.timers,state.nextId,state.nextAlertId=2,{},{},1,1
         state.stopwatch={mode="real",elapsed=0,running=false,laps={},lapCounter=0}
         state.settings={history=20}
     end
-    assert(state.version==1 and type(state.alarms)=="table" and #state.alarms<=64 and type(state.timers)=="table" and #state.timers<=114
+    local legacy=state.version==1
+    if legacy then state.nextAlertId=1 end
+    assert((legacy or state.version==2) and type(state.alarms)=="table" and #state.alarms<=64 and type(state.timers)=="table" and #state.timers<=114
         and type(state.settings)=="table" and ({[10]=true,[20]=true,[50]=true})[state.settings.history],"Invalid saved clock")
-    local ids,maxId={},0
+    local ids,maxId,alerts,maxAlert={},0,{},0
     each(state,function(item,kind)
+        if type(item)=="table" and type(item.signal)=="table" and item.signal.kind=="pulse" then item.signal.kind="constant" end
         assert(type(item)=="table" and integer(item.id,1,2147483000) and not ids[item.id] and validName(item.name)
-            and integer(item.revision,1,2147483000) and signal(item.signal) and (item.route==nil or route(item.route)),"Invalid saved clock entry")
+            and integer(item.revision,1,2147483000) and signal(item.signal) and (item.route==nil or route(item.route))
+            and (item.dismissInput==nil or route(item.dismissInput)),"Invalid saved clock entry")
         ids[item.id],maxId=true,math.max(maxId,item.id)
         if kind=="alarm" then
             assert(integer(item.minute,0,1439) and type(item.enabled)=="boolean" and type(item.daily)=="boolean"
                 and (item.lastDay==nil or integer(item.lastDay,0,2147483648)),"Invalid saved alarm")
         else assert(mode(item.mode) and integer(item.duration,1,MAX_DURATION) and number(item.remaining,0,item.duration)
             and ({running=true,paused=true,done=true,cancelled=true})[item.status],"Invalid saved timer") end
-        if item.ring then assert(type(item.ring)=="table" and number(item.ring.elapsed,0,MAX_DURATION) and item.route,"Invalid saved signal") end
+        if item.ring then
+            assert(type(item.ring)=="table" and number(item.ring.elapsed,0,9007199254740991) and item.route,"Invalid saved signal")
+            if legacy then local progress=item.ring; raiseAlert(state,item,api); item.ring=progress end
+            assert(item.alert,"A saved signal requires a pending alert")
+        end
+        if item.alert then
+            assert(type(item.alert)=="table" and integer(item.alert.id,1,2147483000) and not alerts[item.alert.id]
+                and type(item.alert.inputArmed)=="boolean","Invalid saved clock alert")
+            alerts[item.alert.id],maxAlert=true,math.max(maxAlert,item.alert.id)
+            item.alert.inputArmed=false -- Reconnect/boot HIGH is not a new press.
+        end
     end)
+    assert(integer(state.nextAlertId,maxAlert+1,2147483001),"Invalid saved alert IDs")
+    state.version=2
     assert(integer(state.nextId,maxId+1,2147483001),"Invalid saved clock IDs")
     local sw=state.stopwatch
     assert(type(sw)=="table" and mode(sw.mode) and number(sw.elapsed,0,9007199254740991) and type(sw.running)=="boolean"
@@ -141,6 +186,7 @@ function app.init(state,api,context)
     end)
     if #changes>0 then assert(api.updateOutputs(changes)) end
     ready=true
+    assert(publish(state,api))
 end
 function app.background(dt,state,api)
     if not ready then return end
@@ -160,7 +206,7 @@ function app.background(dt,state,api)
         if item.ring then
             touched[wire(item.route)]=true
             item.ring.elapsed=item.ring.elapsed+dt
-            if item.ring.elapsed+0.000001>=signalLength(item) then item.ring=nil; important=true end
+            if signalLength(item)>0 and item.ring.elapsed+0.000001>=signalLength(item) then item.ring=nil; important=true end
         end
     end)
     for _,item in ipairs(state.alarms) do
@@ -171,7 +217,7 @@ function app.background(dt,state,api)
             if due>previous.absolute+0.000001 and due<=current.absolute+0.000001 and (item.lastDay==nil or item.lastDay<dueDay) then
                 item.lastDay,item.revision=dueDay,item.revision+1
                 if not item.daily then item.enabled=false end
-                if item.route then item.ring={elapsed=0}; touched[wire(item.route)]=true end
+                if not item.alert then raiseAlert(state,item,api); if item.route then touched[wire(item.route)]=true end end
                 important=true
             end
         end
@@ -181,23 +227,26 @@ function app.background(dt,state,api)
             item.remaining=math.max(0,item.remaining-(item.mode=="game" and gameDt or dt))
             if item.remaining<0.000001 then
                 item.remaining,item.status=0,"done"
-                if item.route then item.ring={elapsed=0}; touched[wire(item.route)]=true end
+                if not item.alert then raiseAlert(state,item,api); if item.route then touched[wire(item.route)]=true end end
                 important=true
             end
         end
     end
     local sw=state.stopwatch
     if sw.running then sw.elapsed=sw.elapsed+(sw.mode=="game" and gameDt or dt) end
-    local groups={}
-    each(state,function(item,kind)
-        if item.route and touched[wire(item.route)] then
-            local key=wire(item.route)
-            groups[key]=groups[key] or {name=outputName(item,kind),value=false}
-            groups[key].value=groups[key].value or signalOn(item)
+    each(state,function(item)
+        if item.alert and item.dismissInput then
+            local input=api.readInput(item.dismissInput)
+            if input==false then item.alert.inputArmed=true
+            elseif input==nil then item.alert.inputArmed=false
+            elseif item.alert.inputArmed then
+                if item.route and item.ring then touched[wire(item.route)]=true end
+                item.alert,item.ring,item.revision=nil,nil,item.revision+1
+                important=true
+            end
         end
     end)
-    local changes={}
-    for _,change in pairs(groups) do if api.getOutput(change.name)~=change.value then changes[#changes+1]=change end end
+    local changes=wireChanges(state,touched,api)
     -- Remove mappings of history entries that trim away, without leaving aliases.
     trim(state,old)
     local retained={}; each(state,function(item,kind) retained[outputName(item,kind)]=true end)
@@ -208,23 +257,25 @@ function app.background(dt,state,api)
             restore(state,old); retryElapsed=retryElapsed+dt; lastError="Checkpoint pending: "..tostring(err)
         else lastError,retryElapsed=nil,0 end
     else retryElapsed=0 end
+    assert(publish(state,api))
 end
 local function notice(view,text,back) view.message,view.back,view.screen=text,back or view.screen or "home","message" end
 local function draftFor(item,kind)
     return {kind=kind,id=item and item.id,revision=item and item.revision,
         name=item and item.name or (kind=="alarm" and "Alarm" or "Timer"),minute=item and item.minute or 360,
         enabled=item==nil or item.enabled,daily=item==nil or item.daily,mode=item and item.mode or "real",
-        duration=item and item.duration or 60,route=item and copy(item.route),
-        signal=item and copy(item.signal) or {kind="pulse",on=2,off=2,total=10}}
+        duration=item and item.duration or 60,route=item and copy(item.route),dismissInput=item and copy(item.dismissInput),
+        signal=item and copy(item.signal) or {kind="constant",on=2,off=2,total=10}}
 end
 function app.handleIOSelection(key,address,state,api,context)
-    if key~="signal" or not context.view.draft then return false,"Editor was closed" end
-    if not route(address) then return false,"Invalid output route" end
-    context.view.draft.route=copy(address)
+    if (key~="signal" and key~="dismiss") or not context.view.draft then return false,"Editor was closed" end
+    if not route(address) then return false,"Invalid IO route" end
+    context.view.draft[key=="dismiss" and "dismissInput" or "route"]=copy(address)
     return true -- Draft only; Save applies and checkpoints the route.
 end
 local function build(width,height,state,api,context)
     local view=context.view; view.pages=view.pages or {}
+    if view.draft and view.draft.signal and view.draft.signal.kind=="pulse" then view.draft.signal.kind="constant" end
     local screen=view.screen or "home"
     local kind=view.kind or "alarm"
     local item=find(kind=="alarm" and state.alarms or state.timers,view.id)
@@ -284,7 +335,7 @@ local function build(width,height,state,api,context)
             local row=list[screen=="timers" and (#list-index+1) or index]
             if row then
                 local y=2+(i-1)*rowH
-                local bg=row.ring and 2 or (row.enabled==true or row.status=="running") and accent or 128
+                local bg=row.alert and 2 or (row.enabled==true or row.status=="running") and accent or 128
                 local label=screen=="alarms" and alarmTime(row.minute).." "..(row.enabled and "ON" or "OFF")
                     or (row.status=="done" and "Done" or row.status=="cancelled" and "Cancelled" or duration(math.ceil(row.remaining))..(row.status=="paused" and " ||" or ""))
                 ui.style(1,y,width,rowH,api.ui.contrast(bg),bg)
@@ -310,9 +361,9 @@ local function build(width,height,state,api,context)
                 {item.status=="running" and "Pause" or item.status=="paused" and "Resume" or "Restart","timerToggle"}}
             if item.status=="running" or item.status=="paused" then rows[#rows+1]={"Cancel timer","cancelTimer"} end
         end
-        if item.ring then rows[#rows+1]={"Stop output signal","stopSignal",nil,true,16384} end
+        if item.alert then rows[#rows+1]={"Dismiss / OK","stopSignal",nil,true,16384} end
         rows[#rows+1]={"Output / signal details","routeInfo"}
-        rows[#rows+1]={"Edit","edit",nil,not item.ring and (kind=="alarm" or item.status~="running")}
+        rows[#rows+1]={"Edit","edit",nil,not item.alert and (kind=="alarm" or item.status~="running")}
         rows[#rows+1]={"Delete","delete"}
         menu(item.name,rows,"detail:"..item.id,height-1,{{"Back",kind=="alarm" and "alarms" or "timers"}})
     elseif screen=="edit" then
@@ -328,11 +379,13 @@ local function build(width,height,state,api,context)
         end
         rows[#rows+1]={draft.route and "Output: "..draft.route.clientId or "Select output","route"}
         if draft.route then rows[#rows+1]={"Disconnect output","disconnect"} end
-        rows[#rows+1]={draft.signal.kind=="pulse" and "Signal: Pulse" or "Signal: Pattern","draftSignal"}
-        rows[#rows+1]={"ON: "..duration(draft.signal.on),"field","on"}
+        rows[#rows+1]={draft.dismissInput and "Dismiss: "..draft.dismissInput.clientId or "Select dismiss input","dismissInput"}
+        if draft.dismissInput then rows[#rows+1]={"Clear dismiss input","clearDismissInput"} end
+        rows[#rows+1]={draft.signal.kind=="constant" and "Signal: Constant" or "Signal: Pattern","draftSignal"}
+        rows[#rows+1]={draft.signal.kind=="constant" and ("Length: "..(draft.signal.on==0 and "Until OK" or duration(draft.signal.on))) or "ON: "..duration(draft.signal.on),"field","on"}
         if draft.signal.kind=="pattern" then
             rows[#rows+1]={"OFF: "..duration(draft.signal.off),"field","off"}
-            rows[#rows+1]={"Total: "..duration(draft.signal.total),"field","total"}
+            rows[#rows+1]={"Total: "..(draft.signal.total==0 and "Until OK" or duration(draft.signal.total)),"field","total"}
         end
         menu(draft.kind=="alarm" and "Alarm settings" or "Timer settings",rows,"edit",height-1,
             {{draft.id and "Save" or draft.kind=="timer" and "Start" or "Save","saveDraft"},{"Cancel","cancelDraft"}})
@@ -364,8 +417,9 @@ local function build(width,height,state,api,context)
     elseif screen=="routeInfo" then
         local output=item.route
         local lines={output and (output.clientId.." / "..output.side.." / "..(output.color and api.ui.colourName(output.color) or "Digital")) or "No output selected",
-            "Mode: "..item.signal.kind,"ON: "..item.signal.on.." real seconds"}
-        if item.signal.kind=="pattern" then lines[#lines+1]="OFF: "..item.signal.off.." real seconds"; lines[#lines+1]="Total: "..item.signal.total.." real seconds" end
+            "Mode: "..(item.signal.kind=="constant" and "Constant" or "Pattern"),
+            item.signal.kind=="constant" and (signalLength(item)==0 and "Length: Until dismissed" or "Length: "..item.signal.on.." real seconds") or "ON: "..item.signal.on.." real seconds"}
+        if item.signal.kind=="pattern" then lines[#lines+1]="OFF: "..item.signal.off.." real seconds"; lines[#lines+1]=item.signal.total==0 and "Total: Until dismissed" or "Total: "..item.signal.total.." real seconds" end
         if output then
             local found
             for _,entry in ipairs(api.getOutputs()) do if entry.name==outputName(item,kind) then found=entry end end
@@ -373,6 +427,11 @@ local function build(width,height,state,api,context)
             lines[#lines+1]="Client: "..(found and found.online and "Online" or "Offline")
             lines[#lines+1]="Acknowledged: "..(found and found.confirmed and "Yes" or "Pending")
         end
+        if item.dismissInput then
+            local input=item.dismissInput
+            lines[#lines+1]="Dismiss: "..input.clientId.." / "..input.side.." / "..(input.color and api.ui.colourName(input.color) or "Digital")
+        else lines[#lines+1]="Dismiss input: Not selected" end
+        lines[#lines+1]=item.alert and "Popup: Awaiting OK / input" or "Popup: None"
         lines[#lines+1]=item.ring and "Signal active: "..duration(item.ring.elapsed).." elapsed" or "No active signal"
         info("Output signal",lines,"routeInfo","detail")
     elseif screen=="stopwatch" then
@@ -404,7 +463,7 @@ local function build(width,height,state,api,context)
             "Background service: active even with no windows. Outputs use the shared IO cooldown. Offline signals are not replayed after their time has expired."},"status","home")
     elseif screen=="about" or screen=="message" then
         info("Clock information",{screen=="message" and view.message or
-            "Alarms use world HH:MM and repeat daily or once. Timers and stopwatch choose real computer uptime or sampled game-clock seconds. Patterns always use real seconds, minimum 1 second ON/OFF. Saves resume countdowns, stopwatch, laps and active patterns from the last checkpoint; no time is counted while the OS is off. Missed alarms during downtime are skipped. Large time-set/sleep jumps rebase without catch-up, and an alarm fires at most once per observed world day. Missing world time pauses game clocks only. Shared output routes are allowed; overlapping Clock signals on one wire are combined. Unrelated apps still share that physical wire. Close stops only this window."},"info",screen=="message" and "messageBack" or "settings")
+            "Alarms use world HH:MM and repeat daily or once. Timers and stopwatch choose real computer uptime or sampled game-clock seconds. Every trigger shows an OK popup on all monitors. OK or a fresh selected input press dismisses it everywhere. Constant length 0 or Pattern total 0 runs until dismissed. Pattern ON/OFF use real seconds, at least 1 each. Saves resume countdowns, stopwatch, laps and active patterns from the last checkpoint; no time is counted while the OS is off. Missed alarms during downtime are skipped. Large time-set/sleep jumps rebase without catch-up, and an alarm fires at most once per observed world day. Missing world time pauses game clocks only. Shared output routes are allowed; overlapping Clock signals on one wire are combined. Unrelated apps still share that physical wire. Close stops only this window."},"info",screen=="message" and "messageBack" or "settings")
     end
     return ui.lines,ui.hits
 end
@@ -414,10 +473,11 @@ function app.render(w,h,state,api,context)
 end
 local function saveDraft(state,api,view)
     local draft=view.draft
-    if not validName(draft.name) or not signal(draft.signal) or (draft.route and not route(draft.route)) then notice(view,"Invalid settings","edit"); return end
+    if not validName(draft.name) or not signal(draft.signal) or (draft.route and not route(draft.route))
+        or (draft.dismissInput and not route(draft.dismissInput)) then notice(view,"Invalid settings","edit"); return end
     local list=draft.kind=="alarm" and state.alarms or state.timers
     local item=find(list,draft.id)
-    if draft.id and (not item or item.revision~=draft.revision or item.ring or draft.kind=="timer" and item.status=="running") then
+    if draft.id and (not item or item.revision~=draft.revision or item.alert or draft.kind=="timer" and item.status=="running") then
         notice(view,"Entry changed or is running; reopen settings","detail"); return
     end
     if not item and #list>=64 then notice(view,"Maximum 64 entries; delete old timers/alarms first","edit"); return end
@@ -428,6 +488,7 @@ local function saveDraft(state,api,view)
     local ok=commit(state,api,function()
         if not item then list[#list+1]=created; state.nextId=state.nextId+1 end
         created.name,created.route,created.signal,created.revision=draft.name,copy(draft.route),copy(draft.signal),created.revision+1
+        created.dismissInput=copy(draft.dismissInput)
         if draft.kind=="alarm" then
             if created.minute~=draft.minute then created.lastDay=nil end
             created.minute,created.enabled,created.daily=draft.minute,draft.enabled,draft.daily
@@ -438,6 +499,16 @@ local function saveDraft(state,api,view)
         end
     end,changes,view)
     if ok then view.id,view.kind,view.screen,view.pages,view.draft=created.id,draft.kind,"detail",{},nil end
+end
+function app.handleNotification(key,state,api)
+    local selected
+    each(state,function(item,kind) if item.alert and alertKey(item,kind)==key then selected=item end end)
+    if not selected then return publish(state,api) end
+    local touched={}
+    if selected.route and selected.ring then touched[wire(selected.route)]=true end
+    return commit(state,api,function()
+        selected.ring,selected.alert,selected.revision=nil,nil,selected.revision+1
+    end,function() return wireChanges(state,touched,api) end)
 end
 function app.handleTouch(x,y,w,h,state,api,context)
     if not ready then return false end
@@ -457,9 +528,12 @@ function app.handleTouch(x,y,w,h,state,api,context)
     elseif action=="draftMode" then view.draft.mode=view.draft.mode=="real" and "game" or "real"
     elseif action=="draftDaily" then view.draft.daily=not view.draft.daily
     elseif action=="draftEnabled" then view.draft.enabled=not view.draft.enabled
-    elseif action=="draftSignal" then view.draft.signal.kind=view.draft.signal.kind=="pulse" and "pattern" or "pulse"
+    elseif action=="draftSignal" then view.draft.signal.kind=view.draft.signal.kind=="constant" and "pattern" or "constant"
+        if view.draft.signal.kind=="pattern" and view.draft.signal.on==0 then view.draft.signal.on=1 end
     elseif action=="route" then local ok,err=api.pickIO(context.windowId,"signal","output",view.draft.route); if not ok then notice(view,err,"edit") end
     elseif action=="disconnect" then view.draft.route=nil
+    elseif action=="dismissInput" then local ok,err=api.pickIO(context.windowId,"dismiss","input",view.draft.dismissInput); if not ok then notice(view,err,"edit") end
+    elseif action=="clearDismissInput" then view.draft.dismissInput=nil
     elseif action=="field" then
         local val=value=="minute" and two(math.floor(view.draft.minute/60))..two(view.draft.minute%60) or view.draft[value] or view.draft.signal[value]
         view.number={key=value,draft=tostring(val)}; view.screen="number"
@@ -469,9 +543,10 @@ function app.handleTouch(x,y,w,h,state,api,context)
         elseif #field.draft<8 then field.draft=field.draft..value end
     elseif action=="setNumber" then
         local field=view.number; local val=tonumber(field.draft)
-        local valid=integer(val,field.key=="minute" and 0 or 1,(field.key=="on" or field.key=="off") and 86400 or MAX_DURATION)
+        local allowZero=field.key=="minute" or field.key=="total" or field.key=="on" and view.draft.signal.kind=="constant"
+        local valid=integer(val,allowZero and 0 or 1,(field.key=="on" or field.key=="off") and 86400 or MAX_DURATION)
         if field.key=="minute" then valid=val and integer(val,0,2359) and val%100<60; if valid then val=math.floor(val/100)*60+val%100 end end
-        if not valid then notice(view,field.key=="minute" and "Use HHMM, 0000-2359" or "Use whole seconds, at least 1","number")
+        if not valid then notice(view,field.key=="minute" and "Use HHMM, 0000-2359" or (allowZero and "Use whole seconds; 0 = until OK" or "Use whole seconds, at least 1"),"number")
         else if field.key=="on" or field.key=="off" or field.key=="total" then view.draft.signal[field.key]=val else view.draft[field.key]=val end; view.screen="edit" end
     elseif action=="name" then view.keyboard={draft=view.draft.name,bank=0,page=1}; view.screen="keyboard"
     elseif action=="key" or action=="space" then if #view.keyboard.draft<24 then view.keyboard.draft=view.keyboard.draft..(action=="space" and " " or value) end
@@ -490,11 +565,11 @@ function app.handleTouch(x,y,w,h,state,api,context)
             if item.status=="running" then item.status="paused"
             elseif item.status=="paused" then item.status="running"
             else item.remaining,item.status=item.duration,"running" end
-            item.ring=nil; item.revision=item.revision+1
+            item.ring,item.alert=nil,nil; item.revision=item.revision+1
         end,changes,view)
     elseif (action=="cancelTimer" or action=="stopSignal") and item then
         local changes=offChanges(state,item,kind)
-        commit(state,api,function() item.ring=nil; if action=="cancelTimer" then item.status="cancelled" end; item.revision=item.revision+1 end,changes,view)
+        commit(state,api,function() item.ring,item.alert=nil,nil; if action=="cancelTimer" then item.status="cancelled" end; item.revision=item.revision+1 end,changes,view)
     elseif action=="confirmDelete" and item then
         local changes=offChanges(state,item,kind)
         -- One explicit value for a surviving Clock reference when another signal
@@ -531,7 +606,7 @@ function app.handleTouch(x,y,w,h,state,api,context)
         state.settings.history=state.settings.history==10 and 20 or state.settings.history==20 and 50 or 10; trim(state)
         each(state,function(entry,k) retained[outputName(entry,k)]=true end)
         each(old,function(entry,k) if entry.route and not retained[outputName(entry,k)] then changes[#changes+1]={name=outputName(entry,k),remove=true} end end)
-        local ok,err=api.updateOutputs(changes); if not ok then restore(state,old); notice(view,tostring(err),"settings") else api.invalidateAppViews(appName) end
+        local ok,err=api.updateOutputs(changes); if not ok then restore(state,old); notice(view,tostring(err),"settings") else assert(publish(state,api)); api.invalidateAppViews(appName) end
     elseif action=="accent" then local ok,err=api.pickColour(context.windowId); if not ok then notice(view,err) end
     elseif action=="messageBack" then view.screen=view.back or "home"
     elseif action~="noop" then view.screen=action end

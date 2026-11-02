@@ -113,7 +113,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(t.id, "toggle", b.id); t.bus.advance(1); equal(t.io.bundled.left, 1)
         t.view(t.id).id = a.id
         local text = table.concat(t.content(t.id), "\n")
-        assert(text:find("48 036", 1, true) and text:find("49 300", 1, true) and text:find("02:41:45", 1, true))
+        assert(text:find("48 036", 1, true) and text:find("49 300", 1, true) and not text:find("Remaining", 1, true))
     end
     function tests.sensor_direct_and_yielding_peripherals_work_without_yielding_through_pcall()
         for _, options in ipairs({{async = false}, {yielding = true}}) do
@@ -155,7 +155,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local entry = t.add(t.id); t.machine.details["1,0,0"].RemainingTime = nil
         t.bus.advance(3)
         equal(t.api.getSensorReading(entry.sensor).reactor.remaining, nil)
-        assert(table.concat(t.content(t.id), "\n"):find("Unavailable", 1, true))
+        assert(not table.concat(t.content(t.id), "\n"):find("Remaining", 1, true))
         t.machine.targets["1,0,0"] = nil; t.machine.details["1,0,0"] = nil
         t.bus.advance(6); equal(t.api.getSensorReading(entry.sensor).status, "missing")
     end
@@ -521,11 +521,12 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(#t.state.reactors, 1); equal(#t.sensor.client.watches, 1)
         equal(t.sensor.client.watches[1].target, "1,0,0")
         local text = table.concat(t.content(t.id), "\n")
-        for _, expected in ipairs({"Remaining: Unavailable", "To melting*: 1 264", "To MaxHeat: 9 964", "Emitted: 1.23 MEU",
+        for _, expected in ipairs({"To melting*: 1 264", "To MaxHeat: 9 964", "Emitted: 1.23 MEU",
             "Received: 0 EU", "Sensor: sensor_14", "Side: top", "Target: 1,0,0"}) do
             assert(text:find(expected, 1, true), "Missing detail: " .. expected)
         end
         equal(t.api.getSensorReading(entry.sensor).reactor.remaining, nil)
+        assert(not text:find("Remaining",1,true))
         assert(not text:find("Switch ON", 1, true) and not text:find("Switch OFF", 1, true))
     end
 
@@ -585,4 +586,139 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.machine.details["1,0,0"].RemainingTime = nil; t.bus.advance(3)
         equal(t.api.getSensorReading(t.state.reactors[1].sensor).reactor.remaining, nil)
     end
+    function tests.reactors_show_available_extra_metrics_responsively_and_omit_remaining_everywhere()
+        local t=setup(); local entry=t.add(t.id)
+        local data=t.machine.details["1,0,0"]
+        data.Chambers,data.Cooling,data.Enabled,data.TotalFuelUsed=6,120,true,37389404
+        data.RawName,data.Position="ic2.reactor",{X=1,Y=-2,Z=3}
+        data.EnergyEmitted,data.EnergySunken=1234567,0
+        t.bus.advance(3)
+        for _,size in ipairs({{12,6},{24,10},{50,18},{79,25}}) do
+            for _,screen in ipairs({"home","reactor","palette"}) do
+                local view={id=entry.id,screen=screen,pages={},colourField="panel",colourDraft=1}
+                local context={appName="reactors",windowId=t.id,view=view}
+                local texts={}
+                for page=1,40 do
+                    view.pages.metrics=page
+                    local lines=t.app.render(size[1],size[2],t.state,t.api,context)
+                    local text=table.concat(lines,"\n"); texts[#texts+1]=text
+                    assert(not text:find("Remaining",1,true)); assert(not text:find("Time field",1,true))
+                    assert(not text:find("n/a",1,true)); assert(not text:find("nil",1,true))
+                    local nextPage=false
+                    for _,hit in ipairs(lines.hits) do if hit.action=="page" and hit.enabled~=false and hit.value.key=="metrics" and hit.value.delta==1 then nextPage=true end end
+                    if not nextPage then break end
+                end
+                if screen=="reactor" then
+                    local text=table.concat(texts,"\n")
+                    if size[1]>=50 then
+                        for _,value in ipairs({"Chambers: 6","Cooling: 120","Enabled: On","Total Fuel Used:","37 389 404","Position: 1, -2, 3","Raw type: ic2.reactor"}) do assert(text:find(value,1,true),value) end
+                    end
+                end
+            end
+        end
+        equal(t.api.getSensorReading(entry.sensor).reactor.remaining,9705,"Only presentation changes; raw readings remain intact")
+    end
+    local function inspectionFixture(options)
+        options=options or {}
+        local bus=newBus()
+        local card={card="openccsensors.item.industrialcraftsensor",async=options.async,yielding=options.yielding,
+            targets={["1,0,0"]={Name="Mass Fabricator",RawName="tile.blockMachine.massFab"},["2,0,0"]={Name="Nuclear Reactor",RawName="ic2.reactor"}},
+            details={["1,0,0"]={Name="Mass Fabricator",RawName="tile.blockMachine.massFab",Energy=19333170,MaxEnergy=1100000,Progress=100,ProducedTotal=100},
+                ["2,0,0"]={Heat=42,MaxHeat=10000,Active=false,Output=0}},errors=options.errors,hang=options.hang}
+        if options.configure then options.configure(card) end
+        local comp=bus.computer(14,"sensor",{sensors=options.noSensor and {} or {top=card}})
+        local sensorConfig=serialize({clientId="keep_sensor_id",bootCounter=52,custom="keep"})
+        local networkConfig=serialize({networkId="keep_network",channel=45231,serverId=10})
+        comp.disk.files["configs_sensor.txt"],comp.disk.files["configs_network.txt"]=sensorConfig,networkConfig
+        if options.alter then options.alter(comp,bus,card) end
+        local t={bus=bus,comp=comp,card=card}
+        function t.start(args)
+            comp.thread=coroutine.create(function() assert(comp.env.loadfile("clients_sensor_client.lua"))("inspect",unpack(args or {})) end)
+            local ok,err=coroutine.resume(comp.thread)
+            if not ok then return false,err end
+            bus.pump(); return true
+        end
+        function t.finish()
+            bus.advance(40)
+            equal(coroutine.status(comp.thread),"dead","Inspection must complete")
+            local report=assert(unserialize(comp.disk.files["diagnostics_sensor.txt"] or ""),"Expected readable report")
+            equal(comp.disk.files["configs_sensor.txt"],sensorConfig)
+            equal(comp.disk.files["configs_network.txt"],networkConfig)
+            equal(comp.disk.files["configs_transport.txt"],nil,"Inspection never starts a network transport")
+            equal(comp.disk.files.startup,nil)
+            equal(#comp.redstoneWrites,0); equal(#bus.wire,0); equal(next(comp.open),nil)
+            assert(#comp.disk.files["diagnostics_sensor.txt"]<=131072)
+            return report
+        end
+        return t
+    end
+    function tests.sensor_inspection_uses_real_legacy_async_direct_and_yielding_getters_without_network_or_config_changes()
+        for _,options in ipairs({{}, {async=false}, {yielding=true}}) do
+            local t=inspectionFixture(options); assert(t.start()); local report=t.finish()
+            equal(report.computerId,14); equal(report.discoveryComplete,true); equal(report.matchedTargets,1); equal(#report.samples,1)
+            equal(report.samples[1].target.key,"1,0,0"); equal(report.ports[1].targetCount,2)
+            for _,reading in ipairs(report.samples[1].readings) do
+                equal(reading.status,"ok"); equal(reading.data.ProducedTotal,100); equal(reading.data.Energy,19333170)
+            end
+            local reads=0; for _,call in ipairs(t.comp.sensorCalls) do if call.method=="getTargetDetails" then reads=reads+1; equal(call.target,"1,0,0") end end
+            equal(reads,2,"Default samples only matched Mass Fabricators")
+        end
+    end
+    function tests.sensor_inspection_records_separate_timed_samples_instead_of_reusing_a_live_table_or_inventing_rates()
+        local t=inspectionFixture(); assert(t.start()); t.bus.advance(1)
+        t.card.details["1,0,0"].ProducedTotal=107
+        local report=t.finish(); local first,second=unpack(report.samples[1].readings)
+        equal(first.data.ProducedTotal,100); equal(second.data.ProducedTotal,107)
+        assert(second.receivedAt-first.receivedAt>=2)
+        equal(first.productionRate,nil); equal(second.productionRate,nil)
+    end
+    function tests.sensor_inspection_reports_timeouts_missing_cards_and_no_sensors_without_hanging_or_returning_zero()
+        for _,options in ipairs({{hang="getTargetDetails"},{errors={getTargetDetails="No access"}},{noSensor=true},{configure=function(card) card.card=nil end}}) do
+            local t=inspectionFixture(options); assert(t.start()); local report=t.finish()
+            if options.noSensor or not t.card.card then equal(#report.samples,0)
+            else
+                equal(#report.samples,1)
+                for _,reading in ipairs(report.samples[1].readings) do equal(reading.status,"error"); equal(reading.data,nil); assert(reading.error) end
+            end
+        end
+    end
+    function tests.sensor_inspection_captures_custom_peripheral_method_names_without_calling_machine_methods()
+        local t=inspectionFixture({alter=function(comp)
+            local getType,wrap=comp.env.peripheral.getType,comp.env.peripheral.wrap
+            comp.env.peripheral.getType=function(side) return side=="front" and "custom_smf" or getType(side) end
+            comp.env.peripheral.getMethods=function(side) return side=="front" and {"setLevel","getProducedTotal"} or {"getSensorName","getTargets","getTargetDetails"} end
+            comp.env.peripheral.wrap=function(side) assert(side~="front","Never wrap/call unknown machine methods"); return wrap(side) end
+        end})
+        assert(t.start()); local report=t.finish(); local found
+        for _,entry in ipairs(report.peripherals) do if entry.side=="front" then found=entry end end
+        equal(found.type,"custom_smf"); equal(found.methods[1],"getProducedTotal"); equal(found.methods[2],"setLevel")
+    end
+    function tests.sensor_inspection_can_select_an_exact_target_or_all_targets_and_marks_target_bounds_explicitly()
+        local t=inspectionFixture(); assert(t.start({"top","2,0,0"})); local report=t.finish()
+        equal(#report.samples,1); equal(report.samples[1].readings[1].data.Heat,42)
+        t=inspectionFixture(); assert(t.start({"all"})); report=t.finish(); equal(#report.samples,2)
+        t=inspectionFixture({configure=function(card)
+            card.targets,card.details={},{}
+            for i=1,40 do card.targets[i..",0,0"]={Name="Mass Fabricator",RawName="tile.massFab"}; card.details[i..",0,0"]={ProducedTotal=i} end
+        end})
+        assert(t.start()); report=t.finish(); equal(report.matchedTargets,40); equal(#report.samples,32); equal(report.targetsOmitted,8)
+    end
+    function tests.sensor_inspection_preserves_scalar_counters_and_explicit_partial_status_for_oversized_details()
+        local t=inspectionFixture({configure=function(card)
+            local value={ProducedTotal=123}
+            for i=1,100 do value["Detail"..i]=string.rep("x",2000) end
+            card.details["1,0,0"]=value
+        end})
+        assert(t.start()); local report=t.finish()
+        for _,reading in ipairs(report.samples[1].readings) do
+            equal(reading.status,"partial"); equal(reading.partial,true); equal(reading.data.ProducedTotal,123); assert(reading.error)
+        end
+    end
+    function tests.sensor_inspection_fails_before_queries_if_report_cannot_be_saved_and_rejects_invalid_arguments()
+        local t=inspectionFixture({alter=function(comp) comp.disk.failWrite=true end})
+        local ok,err=t.start(); equal(ok,false); assert(tostring(err):find("Cannot save report",1,true)); equal(#t.comp.sensorCalls,0)
+        equal(t.comp.disk.files["diagnostics_sensor.txt"],nil); equal(t.comp.disk.files["configs_transport.txt"],nil)
+        t=inspectionFixture(); ok=t.start({"all","1,0,0"}); equal(ok,false); equal(#t.comp.sensorCalls,0)
+    end
+
 end

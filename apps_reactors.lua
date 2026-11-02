@@ -21,13 +21,13 @@ local function wire(entry, api)
     for _, item in ipairs(api.getOutputs()) do if item.name == logical(entry) and same(item, entry.outputAddress) then return item end end
 end
 local function number(value)
-    if type(value) ~= "number" then return "?" end
-    return tostring(math.floor(value)):reverse():gsub("(%d%d%d)", "%1 "):reverse():gsub("^ ", "")
-end
-local function clock(value)
-    if type(value) ~= "number" then return "Unavailable" end
-    value = math.max(0, math.floor(value))
-    return string.format("%02d:%02d:%02d", math.floor(value / 3600), math.floor(value / 60) % 60, value % 60)
+    if type(value) ~= "number" or value~=value or math.abs(value)==math.huge then return "?" end
+    local negative=value<0; value=math.floor(math.abs(value))
+    if value>9007199254740991 then return (negative and "-" or "")..tostring(value) end
+    local out={}
+    repeat local digit=value%10; out[#out+1]=("0123456789"):sub(digit+1,digit+1); value=math.floor(value/10) until value==0
+    local text=table.concat(out):gsub("(%d%d%d)","%1 "):reverse():gsub("^ ","")
+    return (negative and "-" or "")..text
 end
 local function energy(value, compact)
     for _, unit in ipairs({{1000000000000000000, "EEU"}, {1000000000000000, "PEU"}, {1000000000000, "TEU"},
@@ -143,13 +143,42 @@ local function build(width, height, state, api, context)
         end
         return page, total
     end
-    local function metrics(reactor)
+    local function metrics(reactor, compact, includePercent)
         reactor = reactor or {}
-        local compact = width < 24
-        return {(compact and "T: " or "Heat: ") .. number(reactor.heat), (compact and "Max: " or "MaxHeat: ") .. number(reactor.maxHeat),
+        local values={(compact and "T: " or "Heat: ") .. number(reactor.heat), (compact and "Max: " or "MaxHeat: ") .. number(reactor.maxHeat),
             (compact and (reactor.meltingDerived and "M*: " or "M: ") or reactor.meltingDerived and "Melting*: " or "Melting: ") .. number(reactor.melting),
-            (compact and "Out: " or "Output: ") .. number(reactor.output) .. " EU/t",
-            (compact and "R: " or "Remaining: ") .. (compact and reactor.remaining == nil and "n/a" or clock(reactor.remaining))}
+            (compact and "Out: " or "Output: ") .. number(reactor.output) .. " EU/t"}
+        if reactor.heat then
+            if includePercent~=false then values[#values+1]=string.format(compact and "Heat: %.1f%%" or "Heat level: %.1f%%",reactor.percent) end
+            values[#values+1]=(compact and "M+" or "To melting")..(reactor.meltingDerived and "*: " or ": ")..number(reactor.heatToMelting)
+            values[#values+1]=(compact and "Max+: " or "To MaxHeat: ")..number(reactor.heatToMax)
+        end
+        if reactor.energyEmitted~=nil then values[#values+1]=(compact and "Emit: " or "Emitted: ")..energy(reactor.energyEmitted,compact) end
+        if reactor.energySunken~=nil then values[#values+1]=(compact and "In: " or "Received: ")..energy(reactor.energySunken,compact) end
+        return values
+    end
+    local function extraFields(data)
+        local excluded={heat=true,temperature=true,maxheat=true,maximumheat=true,output=true,euoutput=true,active=true,isactive=true,
+            heatpercentage=true,melting=true,meltingpoint=true,meltingtemperature=true,energyemitted=true,energysunken=true,energysunk=true,
+            name=true,rawname=true,type=true,position=true}
+        local keys,values={},{}
+        for key,value in pairs(data or {}) do
+            if type(key)=="string" then
+                local name=key:lower():gsub("[^%a]","")
+                if not excluded[name] and not name:find("remaining",1,true) and not name:find("timeleft",1,true)
+                    and (type(value)=="number" and value==value and math.abs(value)<math.huge or type(value)=="boolean" or type(value)=="string") then keys[#keys+1]=key end
+            end
+        end
+        table.sort(keys)
+        for i=1,math.min(32,#keys) do
+            local key=keys[i]; local value=data[key]
+            if type(value)=="boolean" then value=value and "On" or "Off"
+            elseif type(value)=="number" and value==math.floor(value) then value=number(value)
+            else value=tostring(value):gsub("[%c]"," "):sub(1,160) end
+            values[#values+1]=key:gsub("(%l)(%u)","%1 %2"):gsub("_"," ")..": "..value
+        end
+        if #keys>32 then values[#values+1]="More fields in Raw readings" end
+        return values
     end
     local function reading(item)
         local result = api.getSensorReading(item.sensor)
@@ -176,12 +205,15 @@ local function build(width, height, state, api, context)
             footer("Settings", "settings")
         else
             ui.style(1, 2, width, bottom - 1, 1, 32768)
+            local visible=math.min(slots,#state.reactors-(page-1)*slots)
+            local drawColumns=math.min(columns,visible)
+            local drawRows=math.min(rows,math.ceil(visible/drawColumns))
             for slot = 1, slots do
                 local item = state.reactors[(page - 1) * slots + slot]
                 if item then
-                    local col, row = (slot - 1) % columns, math.floor((slot - 1) / columns)
-                    local x1, x2 = 1 + math.floor(col * width / columns) + (col > 0 and 1 or 0), math.floor((col + 1) * width / columns)
-                    local y1, y2 = 2 + math.floor(row * (bottom - 1) / rows) + (row > 0 and 1 or 0), 1 + math.floor((row + 1) * (bottom - 1) / rows)
+                    local col, row = (slot - 1) % drawColumns, math.floor((slot - 1) / drawColumns)
+                    local x1, x2 = 1 + math.floor(col * width / drawColumns) + (col > 0 and 1 or 0), math.floor((col + 1) * width / drawColumns)
+                    local y1, y2 = 2 + math.floor(row * (bottom - 1) / drawRows) + (row > 0 and 1 or 0), 1 + math.floor((row + 1) * (bottom - 1) / drawRows)
                     local w, rh = x2 - x1 + 1, y2 - y1 + 1
                     ui.style(x1, y1, w, rh, contrast, state.panelColour)
                     ui.style(x1, y1, w, 1, api.ui.contrast(accent), accent)
@@ -191,8 +223,9 @@ local function build(width, height, state, api, context)
                     local label = status.status ~= "ok" and "?" or active == nil and "?" or active and "On" or "Off"
                     put(x2 - 2, y1, label, 3)
                     ui.style(x2 - 2, y1, 3, 1, 32768, label == "On" and 32 or label == "Off" and 16384 or 2)
-                    local values = metrics(status.reactor)
-                    for index = 1, math.min(5, rh - 2) do put(x1, y1 + index, values[index], w) end
+                    local values = metrics(status.reactor,w<24)
+                    for _,text in ipairs(extraFields(status.data)) do values[#values+1]=text end
+                    for index = 1, math.min(#values, rh - 2) do put(x1, y1 + index, values[index], w) end
                     if status.status ~= "ok" then
                         put(x1, math.min(y2 - 1, y1 + 1), status.error or "Sensor unavailable", w)
                         ui.style(x1, y1 + 1, w, math.max(1, rh - 2), 128, state.panelColour)
@@ -215,26 +248,30 @@ local function build(width, height, state, api, context)
         local columns = width >= 50 and 2 or 1
         local inset, gutter = width >= 24 and 2 or 0, columns > 1 and 2 or 0
         local span = math.floor((width - 2 * inset - gutter) / columns)
-        local values = metrics(value)
         local compact = width < 24
-        if value.heat then
-            values[#values + 1] = (compact and "M+" or "To melting") .. (value.meltingDerived and "*: " or ": ") .. number(value.heatToMelting)
-            values[#values + 1] = (compact and "Max+: " or "To MaxHeat: ") .. number(value.heatToMax)
-            if height < 13 then values[#values + 1] = string.format(compact and "Heat: %.1f%%" or "Heat level: %.1f%%", value.percent) end
-        end
-        if value.energyEmitted ~= nil then values[#values + 1] = (compact and "Emit: " or "Emitted: ") .. energy(value.energyEmitted, compact) end
-        if value.energySunken ~= nil then values[#values + 1] = (compact and "In: " or "Received: ") .. energy(value.energySunken, compact) end
+        local values = metrics(value,compact,height<13)
+        for _,text in ipairs(extraFields(status.data)) do values[#values+1]=text end
         values[#values + 1] = (compact and "S: " or "Sensor: ") .. entry.sensor.clientId
         values[#values + 1] = "Side: " .. entry.sensor.side
         values[#values + 1] = (compact and "At: " or "Target: ") .. entry.sensor.target
         if status.target then values[#values + 1] = "Type: " .. status.target.type end
-        if value.remainingField then values[#values + 1] = "Time field: " .. value.remainingField end
+        if status.data and type(status.data.RawName)=="string" then values[#values+1]="Raw type: "..status.data.RawName end
+        local position=status.data and status.data.Position or status.target and status.target.position
+        if type(position)=="table" and type(position.X)=="number" and type(position.Y)=="number" and type(position.Z)=="number" then
+            values[#values+1]="Position: "..number(position.X)..", "..number(position.Y)..", "..number(position.Z)
+        end
         local wrapped = {}
         for _, text in ipairs(values) do
-            repeat
-                wrapped[#wrapped + 1] = text:sub(1, span)
-                text = #text > span and "  " .. text:sub(span + 1) or ""
-            until text == ""
+            local label,payload=text:match("^(.-:)%s+(.+)$")
+            if #text>span and label and #label<=span and #payload<=span then
+                wrapped[#wrapped+1]=label
+                wrapped[#wrapped+1]=(#payload+2<=span and "  " or "")..payload
+            else
+                repeat
+                    wrapped[#wrapped + 1] = text:sub(1, span)
+                    text = #text > span and "  " .. text:sub(span + 1) or ""
+                until text == ""
+            end
         end
         values = wrapped
         local statusRow = height >= 9 and height - 2 or nil
@@ -288,7 +325,7 @@ local function build(width, height, state, api, context)
             ui.style(1, height - 5, width, 4, api.ui.contrast(previewPanel), previewPanel)
             ui.style(1, height - 5, width, 1, api.ui.contrast(previewAccent), previewAccent)
             ui.text(height - 5, "Preview", true); ui.text(height - 4, "Heat: 48 036 / 58 000", true)
-            ui.text(height - 3, "Output: 30 EU/t", true); ui.text(height - 2, "Remaining: 02:41:45", true)
+            ui.text(height - 3, "Output: 30 EU/t", true); ui.text(height - 2, "To melting*: 1 264", true)
         end
         button(height, "Apply", "applyPanel", nil, 1, math.floor(width / 2), true, previewAccent)
         button(height, "Cancel", "settings", nil, math.floor(width / 2) + 1, width)
@@ -352,7 +389,7 @@ local function build(width, height, state, api, context)
             if #lines >= 256 then lines[256] = "More fields omitted" end
             if #lines == 0 then lines[1] = status.error or "No reading yet" end
         else
-            local message = screen == "about" and "Melting* is 85% of maximum heat. To melting/max shows heat headroom; negative means above that threshold. Emitted/received are the card's EU counters, not saved app totals. Old IC2 cards supply no fuel lifetime or inventory, for core or chamber. Remaining needs an explicit time field; adding chambers cannot supply it. Raw readings expands nested fields. ON/OFF shows requested output; the header shows actual reactor activity." or view.message
+            local message = screen == "about" and "Melting* is 85% of maximum heat. To melting/max shows heat headroom; negative means above that threshold. Emitted/received are the card's EU counters, not saved app totals. Old IC2 cards supply no fuel lifetime or inventory, for core or chamber. Fuel lifetime is not displayed. Extra scalar sensor fields appear when reported; nested structures remain in Raw readings. Raw readings expands nested fields. ON/OFF shows requested output; the header shows actual reactor activity." or view.message
             repeat lines[#lines + 1], message = message:sub(1, width), message:sub(width + 1) until message == ""
         end
         ui.heading(screen == "raw" and "Sensor fields" or "Information", accent)

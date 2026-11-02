@@ -2,6 +2,13 @@
 local storage = dofile("lib_storage.lua")
 local Network = dofile("lib_network.lua")
 local Sensor = dofile("lib_sensor.lua")
+local args = {...}
+if args[1] == "inspect" then
+    assert(not args[4], "Usage: clients_sensor_client.lua inspect [all|SIDE [TARGET]]")
+    Sensor.inspect(args[2], args[3])
+    return
+end
+assert(args[1] == nil, "Usage: clients_sensor_client.lua [inspect [all|SIDE [TARGET]]]")
 local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
 local config = storage.config("configs_sensor.txt", {clientId = "sensor_" .. os.getComputerID(),
     announceInterval = 5, timeout = 15, discoveryInterval = 5, pollInterval = 1, requestTimeout = 4, bootCounter = 0})

@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v24`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v27`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -67,6 +67,40 @@ The installer decodes the API's base64 content using Lua 5.1, checks the filenam
 These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
 
 Optional apps are [Coffee](documentation_coffee.md), [Switchboard](documentation_switchboard.md), and [Reactors](documentation_reactors.md). Use `inst app coffee`, `inst app switchboard` or `inst app reactors` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers IO, durations and colour settings. Switchboard offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and appearance settings. Reactors selects sensor targets and separate IO switches; see [sensor setup](documentation_sensors.md) and [the reactor guide](documentation_reactors.md), including card-dependent remaining-time data. All three app sources stay unchanged in bundled-v16. Update the OS and endpoint roles to use [wireless relays](documentation_relay.md); existing direct clients remain compatible. Apps, calibration and desktop geometry need no changes for relaying.
+
+### Version 27: corner nudges and fullscreen
+
+The title-bar layout control is `#` again. Resize now confirms each corner separately: tap a point, adjust it with the one-cell arrow pad, OK; then repeat for the opposite corner. The second OK applies the window. Place repicks the current corner; Cancel keeps the previous window.
+
+The layout menu adds **Fullscreen** on its first screen. The app uses every monitor cell, including the former frame and taskbar. Tap the very top-right cell to restore the previous window; the app's own content remains visible in that cell. Fullscreen and its previous layout/navigation survive restarts, resolution changes and reconnection. Alarm popups remain modal above fullscreen. Coffee uses extra rows for counters on 1×1 screens and can show its graphical clock on shorter windows when all important information fits.
+
+Upload this full package to GitHub and replace/download the single bundled-v27 installer. On the central OS, stop it with Ctrl+T, then run `cd /`, `inst server`, `inst app coffee`, and `reboot`. Existing monitor/IO/relay clients can keep their current versions. The v26 sensor inspection command below remains included; use `inst sensor` on the SMF sensor computer before collecting the report.
+
+### Version 26: SMF inspection and responsive Reactor details
+
+The existing sensor client gains `clients_sensor_client.lua inspect`. It records attached peripheral types/method names, sensor cards/targets and two timestamped native detail samples for detected Mass Fabricators in `diagnostics_sensor.txt`. The report is local; it changes no startup/configuration, sends no network messages and issues no redstone or machine-control commands. It handles legacy queued/yielding OCS getters through the existing request queue. Large/failed readings are explicitly marked; default inspection covers at most 32 matched targets per run.
+
+After uploading this complete package to GitHub and updating/downloading the one bundled-v26 installer, stop the sensor client with Ctrl+T on a computer whose IndustrialCraft sensor card can see the SMFs. Run:
+
+```text
+cd /
+inst sensor
+clients_sensor_client.lua inspect
+pastebin put diagnostics_sensor.txt
+reboot
+```
+
+Reactors also removes Remaining from every operational view and adds available extra sensor fields/headroom on roomy cards and paged details. Upload the updated apps_reactors.lua, run `inst app reactors` on the central OS and reboot it; the display change does not require updating the server role.
+
+Share the report paste ID for analysis. Normal sensor service is paused during inspection and resumes on reboot through its existing startup. Only the inspected sensor role and Reactors app changed at runtime; other roles/apps need no update. No extra program or app Pastebin is needed. See [inspection options](documentation_sensors.md).
+
+The remaining SMF/HV work is now one planned Production overview app. It will observe SMF output, farm-made solar panels from UU, final HV output and network stocks as separate stages. Its item buildup alarms must work on either ME and accept remembered/manually registered items even when absent. Farm switches, transfer thresholds, bus modes and buffer-control rules remain external. This version supplies the investigation tool; the production app is not installed or implemented yet.
+
+### Version 25: Clock popups and manual dismissal
+
+Clock alarms/timers now display an **OK** popup on every monitor. OK on any monitor stops that occurrence and closes its popup everywhere; several alerts queue. **Pulse** is renamed **Constant**. Constant length **0** or Pattern total **0** runs until dismissed, either by OK or a fresh press on an independently selected **dismiss input** (IO client/side/colour or Digital). Finite signals still expire normally while their popup awaits acknowledgement. Pending popups and indefinite progress survive restarts. Existing Pulse settings migrate without resetting timers or routes.
+
+Upload the complete v25 archive's root files to GitHub and replace the single installer paste with the new `install.lua`. Download a fresh bundled-v25 `inst` on the central OS, quit the OS, run `inst server` and `inst app clock`, then reboot. Existing startup/settings remain. Client programs and other app sources do not change. See [Clock setup and dismissal behaviour](documentation_clock.md).
 
 ### Version 24: ME layouts, diagnostics and clocks
 
@@ -169,7 +203,7 @@ The desktop initially has no user apps. `[+]` always offers **OS settings**, whe
 
 The taskbar's clock reads Minecraft world time from the OS computer's built-in `os.time()`; no time sensor or extra computer is required. This is the in-game day/night clock, not real-world local time. If that API is unavailable, an online sensor's `gameTime` value remains a fallback. The original `?:??` appeared because the earlier OS waited exclusively for that unimplemented sensor source.
 
-Every monitor has a bottom taskbar with `[+]`, local window buttons, overflow arrows and a clock when space permits. The title is at the far left on the selected window-border colour, with contrasting text; controls are at the far right: `-` minimize, `+` layouts, red `X` close this view. A normal app stops after its last view closes across all monitors; Coffee is a background service and keeps running. The layout flyout first offers grid diagrams (1×1 through 3×3), then a separate position screen. Restore, Resize, Move and Cancel stay on the first level. Click title text for Move, choose a coarse position, then use one-cell arrows on the green preview. Arrows disappear at workspace boundaries. Place picks another coarse position; OK commits and Cancel discards. See [desktop controls](documentation_desktop.md).
+Every monitor has a bottom taskbar with `[+]`, local window buttons, overflow arrows and a clock when space permits. The title is at the far left on the selected window-border colour, with contrasting text; controls are at the far right: `-` minimize, `#` layouts, red `X` close this view. A normal app stops after its last view closes across all monitors; Coffee is a background service and keeps running. The layout flyout first offers grid diagrams (1×1 through 3×3), then a separate position screen. Fullscreen, Restore, Resize, Move and Cancel stay on the first level. Fullscreen hides the frame/taskbar until the very top-right cell is tapped. Click title text for Move, choose a coarse position, then use one-cell arrows on the green preview. Arrows disappear at workspace boundaries. Place picks another coarse position; OK commits and Cancel discards. See [desktop controls](documentation_desktop.md).
 
 Coffee's Pause/Resume, Harvest now and Menu controls remain available at every supported size. Menu has Settings, Stats and Maintenance without duplicate routes. Wide windows put the main controls in one row; roomy windows add a graphical timer. The main view shows player presence and harvest counts; timing configuration and wiring stay in Settings. Each app should offer UI colour in its Settings; the OS supplies a reusable palette and saves one shared accent per app. Coffee uses it for its heading, timer and primary control.
 
@@ -191,7 +225,7 @@ save
 quit
 ```
 
-Window sizes in these commands include the frame. `move` and `resize` clamp to the monitor and app limits. The taskbar reserves the last row. Layouts and free rectangles adapt to each monitor's resolution. Window layouts and app state restore after restarting; window IDs are recovered without overwriting restored windows.
+Window sizes in these commands include the frame. `move` and `resize` clamp to the monitor and app limits and return fullscreen windows to framed mode. Framed layouts reserve the taskbar's last row; fullscreen uses it for the app. Layouts and free rectangles adapt to each monitor's resolution. Window layouts and app state restore after restarting; window IDs are recovered without overwriting restored windows.
 
 ## What is implemented
 

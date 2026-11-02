@@ -70,3 +70,33 @@ The sensor role never writes redstone. Reactor switches use independently select
 The independent [ME monitors app](documentation_me_monitor.md) requests the ae_items profile from the same AE access-point target used by capacity views. Its compact rows preserve raw identity, damage, name and count with the native capacity fields. The hub shares one physical poll, choosing default/raw over ae_items over ae_storage. Capacity readers can request only summary fields from a richer cached sample. Update the OS and AE sensor roles for this profile; relay/monitor/IO programs do not change.
 
 Typed item snapshots allow up to 8,192 entries, 60,000 cleaned values and 64 twelve-thousand-character fragments, with atomic assembly and profile/base checks. Native/default and storage-only profiles retain their existing smaller limits. Item polls run no faster than two seconds. Missing/oversized/invalid catalogs report errors rather than publishing a partial item list as zero. NBT is not exposed by the old card; equal raw-name/damage variants cannot be distinguished. See the monitor guide for sorting, selection and count semantics.
+
+## Read-only local inspection (bundled-v26)
+
+For investigating custom machine interfaces, use the existing sensor client program's inspection mode. On a sensor computer with an IndustrialCraft card in range of the SMFs, stop its normal program with Ctrl+T, install the current sensor role using the fresh bundled-v26 installer, then run:
+
+```text
+cd /
+inst sensor
+clients_sensor_client.lua inspect
+pastebin put diagnostics_sensor.txt
+reboot
+```
+
+The report paste is data to share for diagnosis, not another program to install. Inspection never uploads it automatically. Existing startup is retained; reboot resumes the ordinary sensor role. During the standalone command that sensor client is not connected to the OS, so its live readings may become stale/offline. Other clients continue operating.
+
+The command records all six sides' peripheral types and available method names. It invokes only known OCS getters: getSensorName, getTargets and getTargetDetails. It does not call arbitrary custom methods, change machine settings, actuate redstone, open modem channels or join the wireless network. Sensor/network IDs, boot counters, settings and startup are untouched. Only diagnostics_sensor.txt and its normal temporary/recovery backup files are written.
+
+Default selection matches Mass Fabricator identities in sensor target labels/raw names and obtains two timed passes separated by a two-second pause. This is unprojected native detail data when it fits, not a calculation of real production. Additional options are:
+
+```text
+clients_sensor_client.lua inspect all
+clients_sensor_client.lua inspect top
+clients_sensor_client.lua inspect top "1,0,0"
+```
+
+All selects all targets; a side selects that side; side plus exact target selects one catalog key. Use the report's discovery list to find exact keys. No match still produces a useful card/target report. The same serial coroutine/ocs_success/ocs_error engine handles direct, queued and yielding getters, including timeouts and expired IDs. Sensor/card changes invalidate an inspection result.
+
+Bounds are explicit: at most 32 sampled targets and 64 catalog summaries per report, 32 method names per side, normally 16 KiB per full detail reading and 128 KiB for the complete report. Excessive details use a marked scalar preview, prioritizing numeric/boolean fields; a full report can omit payloads with an explicit error. Omitted target counts are recorded, so a larger installation can inspect individual sides/targets separately. These diagnostic bounds are not a four-machine limit for the planned production UI. Failures are recorded as errors rather than fabricated zero counters.
+
+The report is incrementally checkpointed, so interrupted inspections can retain a partial report. If the first report cannot be written, the command fails before issuing sensor queries. It does not read the player's Minecraft GUI or TAB overlay: those can only be compared with data actually exposed by a peripheral/sensor/server integration.

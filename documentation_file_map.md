@@ -142,3 +142,21 @@ Updated existing tests: `tests_run.lua`, `tests_desktop.lua`, `tests_me_monitor.
 Updated existing guides: `README.md`, `documentation_api.md`, `documentation_desktop.md`, `documentation_me_monitor.md`, `documentation_me_storage.md`, `documentation_review.md`, and this map.
 
 All sixty-three root files are included in the complete package. The installer retains twenty core sources and no apps. Update only the central server role and explicitly install `me_storage`, `me_monitor`, `system` and `clock`. No client, Coffee, Switchboard or Reactors files change. Existing configs and state filenames remain unchanged; the optional new apps add independent appStates entries. ME selections, colours, clocks, routes and per-window navigation are checkpointed centrally; live telemetry remains runtime-only.
+
+## Clock popups and indefinite signals (bundled-v25)
+
+No new files. Updated runtime/build: `apps_clock.lua`, `lib_server.lua`, `tools_build_installer.py`, generated `install.lua`. Updated tests: `tests_clock.lua`, `tests_run.lua`. Updated guides: `README.md`, `documentation_api.md`, `documentation_clock.md`, `documentation_desktop.md`, `documentation_review.md`, and this map.
+
+The complete archive still includes all sixty-three flat root files. The installer retains twenty core sources and no apps. Update only the central server role and explicitly install `clock`. All client programs and other app sources are unchanged. Clock's schema migrates v24 Pulse to Constant and adds persisted per-occurrence alerts plus selectable dismiss inputs. Runtime popup mirrors require no new state/config file. Existing durations, routes, stopwatch/laps, app/window settings and the IO cooldown are retained.
+
+## SMF inspection, Reactor metrics and revised production plan (bundled-v26)
+
+No new distributed files. Updated runtime/build: clients_sensor_client.lua, lib_sensor.lua, apps_reactors.lua, tools_build_installer.py, generated install.lua. Updated tests: tests_sensors.lua, tests_run.lua. Updated guides: README.md, documentation_api.md, documentation_design.md, documentation_me_storage.md, documentation_sensors.md, documentation_reactors.md, documentation_review.md, and this map.
+
+The archive still includes all sixty-three unique root files; twenty core sources and no apps are embedded in the installer. Update the sensor role being inspected, and explicitly install reactors on the central OS for the display correction. Other client roles, the central OS core and other app sources are unchanged. The standalone command creates diagnostics_sensor.txt locally, plus its existing storage writer's temporary/backup files, and does not alter saved settings/startup/IDs or operate machine outputs. The Production overview is documented as one future app; it is not included as a new runtime app in this version.
+
+## Corner nudges and fullscreen (bundled-v27)
+
+No new distributed files. Updated runtime/build: `lib_desktop.lua`, `lib_server.lua`, `apps_coffee.lua`, `tools_build_installer.py`, generated `install.lua`. Updated tests: `tests_desktop.lua`, `tests_appearance.lua`, `tests_run.lua`. Updated guides: `README.md`, `documentation_desktop.md`, `documentation_api.md`, `documentation_coffee.md`, `documentation_design.md`, `documentation_review.md`, and this map.
+
+The full archive retains sixty-three unique root files and twenty embedded core sources without apps. Update the central server role and explicitly install Coffee for its compact counters/shorter graphical clock layouts. Client programs are compatible without reinstallation. The sensor role retains the v26 inspection command for the upcoming SMF report. Fullscreen adds a saved flag inside existing window records, keeping the framed layout/restore targets and view navigation. The frame/taskbar stay hidden until a top-right exit tap; notifications remain modal. Each custom corner is picked, nudged and confirmed separately, with the second confirmation committing the window.

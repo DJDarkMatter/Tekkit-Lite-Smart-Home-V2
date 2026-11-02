@@ -12,9 +12,9 @@ Communication between OS and all clients uses ComputerCraft's wireless network.
 
 Apps are stored as files on the main OS computer's storage. The OS loads app files and manages their execution and display.
 
-Bundled-v21 also checkpoints each window's app navigation (selected view/page and plain UI drafts) together with geometry. Existing Switchboard views restore on their original monitors after restart/reconnect. Live readings remain separate and must arrive again. The optional [ME storage overview and independent four-app measurement plan](documentation_me_storage.md) use the generic sensor hub; no ME app is part of a default OS installation.
+Bundled-v21 also checkpoints each window's app navigation (selected view/page and plain UI drafts) together with geometry. Existing Switchboard views restore on their original monitors after restart/reconnect. Live readings remain separate and must arrive again. The optional [ME storage overview and current ME measurement plan](documentation_me_storage.md) use the generic sensor hub; no ME app is part of a default OS installation.
 
-Bundled-v22 implements the second independent app, [ME item monitors](documentation_me_monitor.md). It provides saved source-selectable grid views, per-tile item bindings, both-direction Name/Amount sorting, search and ordinary decimal quantities. It shares sensor reads with the capacity app through the compact ae_items profile, while maintaining separate app state. The two production apps remain future work. Coffee's player line is restored and its clock clearance matches the clock background; Cells surveyed is removed only from the capacity dashboard.
+Bundled-v22 implements the second independent app, [ME item monitors](documentation_me_monitor.md). It provides saved source-selectable grid views, per-tile item bindings, both-direction Name/Amount sorting, search and ordinary decimal quantities. It shares sensor reads with the capacity app through the compact ae_items profile, while maintaining separate app state. The remaining production work is now one combined Production overview app (see section 9), pending machine-interface inspection. Coffee's player line is restored and its clock clearance matches the clock background; Cells surveyed is removed only from the capacity dashboard.
 
 ## 2. Client Types
 
@@ -71,6 +71,7 @@ Every monitor has its own desktop managed centrally by the OS:
 ### Window Properties
 - Resizable within app-defined min/max limits
 - Top-right controls: minimize, layout menu, close this view; title at the far left. Last-view close stops ordinary apps; background services continue
+- The layout control is `#`. Fullscreen uses the entire monitor without frame/taskbar and exits through an invisible top-right touch cell; previous geometry/navigation is retained.
 - Positioned by OS based on available space
 
 ### App Size Categories
@@ -164,18 +165,17 @@ This abstraction allows adding IO clients or moving cables without changing apps
 
 The optional [Switchboard](documentation_switchboard.md) starts with paged saved-view cards, Add view and bottom Settings. Adding a client/side creates all sixteen bundled switches, initially OFF, as one saved operation. Empty views offer independent 1–16 column/row selection and per-switch routing to client/side/colour. Preferred grids page at small monitor/window sizes, including 2×2 pages on a 13×7 content area. Names use a responsive touch keyboard. View settings offer rename, switch editing/routing, grid changes, order, All OFF and confirmed deletion. App settings cover UI/background/button-border/unwired colours, density and All OFF across this app only. Bundled tiles retain their wire colours. Shared configuration and output intent survive restarts and window closures; navigation/drafts stay per window. Duplicate routes share one physical state across views and monitors. Adding a copy adopts the current wire state; released wires clear only after their last reference is removed and saved. Bundled-v14 adds live draft previews for every Switchboard colour setting, active/inactive status colours, and stable acknowledgement through routine announcements. Calibration and window/taskbar geometry are unchanged.
 
-## 9. Mass Fabricators and Solar
+## 9. Production overview: Mass Fabricators and Solar
 
-Sensors wired to IO clients feed data to OS:
-- UU-matter production rates per mass fabricator
-- Solar generation per panel
-- Long-term and short-term production averages
+The remaining SMF and HV apps are combined into one planned Production overview. It supports an expandable paginated SMF list, generic selected products, selected main/farm ME networks and optional transfer-chest observations. Installed sensors can be shared with the other ME apps through the OS cache.
 
-OS maintains averages, apps display the data. Manual reset via UI after upgrades.
+SMF-produced UU/direct solar products, solar panels crafted at the farm from raw UU, tier conversions and final HV output are separate stages. Finished HV returns to main ME. A SMF-only figure is not whole-chain production; adding all intermediate item counts would double count material.
 
-### Reactor overview, implemented in bundled-v15
+Observe flow without implementing the installation's Solar farm, HV farm, Use minium switches, UU reserve rules, preformatted-cell buffer limits or other machinery-control conditions. Stack-mode bus/chest/bus connections are retained. No-flow is normal; fresh observed stock and verified counters drive the display. Gross rates require sufficient measured evidence, and missing/stale periods remain unknown.
 
-The optional [Reactors app](documentation_reactors.md) has saved overview cards, Add reactor, Settings and per-reactor details. Setup selects a sensor client/side/target; multiple entries can use one card. Each reactor separately selects an arbitrary IO client/side/Digital-or-bundled output for its manual switch. Displayed actual On/Off is independent of requested switch intent. The readout follows the supplied heat/max/melting/EU-output/remaining-time reference, using a marked 85%-of-max melting calculation when needed and showing unavailable remaining time if the sensor does not supply it. Small windows page metrics/cards, names use a touch keyboard, and both colour settings have draft previews. Bindings, names, colours, switches and OS geometry persist; live readings must arrive again. The normal app releases subscriptions after its last window closes while saved manual output intent remains applied. No automatic reactor control or ME app is introduced in this update.
+Configurable buildup alarms work per item on either ME, including items absent from current stock. Current/learned item catalogs and sample/manual identity registration avoid a hardcoded product list. Selected IO output/dismiss input, Constant/Pattern signalling, zero-duration indefinite signalling and queued persistent OK popups follow Clock behaviour. Threshold episode/reset state prevents immediate re-alerting after acknowledgement.
+
+Production histories must continue with windows closed and survive restarts without treating saved telemetry as fresh. The first implementation step is the v26 read-only sensor inspection; the production UI/counter adapter remains pending its report. Details and limits are in documentation_me_storage.md.
 
 ## 10. Persistence
 
@@ -199,4 +199,4 @@ This document is the target architecture, not a claim that every feature is impl
 
 ## Implemented desktop controls
 
-The [desktop guide](documentation_desktop.md) describes the coloured bottom taskbar, left title and top-right controls, two-step graphical grid/position selection through 3×3, two-corner custom sizing, coarse placement followed by one-cell move nudges, normalized saved layouts and adaptive app views. Resize and Move stay on the layout menu's first level. Boundary arrows disappear; previews commit only on OK. The OS composes foreground/background colour surfaces per monitor; clients only paint and relay input. Ordered frames, buffered events and input revisions prevent stale screens/touches from reversing UI actions. Optional measured touch calibration stays on each monitor computer. Coffee is a declared background service; ordinary apps run only while at least one view exists.
+The [desktop guide](documentation_desktop.md) describes the coloured bottom taskbar, left title and top-right controls, two-step graphical grid/position selection through 3×3, two-corner custom sizing, coarse placement followed by one-cell move nudges, normalized saved layouts and adaptive app views. Resize, Move and Fullscreen stay on the layout menu's first level. Custom sizing taps/nudges/confirms each corner in turn; only the second confirmation changes the window. Boundary arrows disappear. Fullscreen is saved per window, uses every monitor cell and preserves the framed restore chain. The OS composes foreground/background colour surfaces per monitor; clients only paint and relay input. Ordered frames, buffered events and input revisions prevent stale screens/touches from reversing UI actions. Optional measured touch calibration stays on each monitor computer. Coffee is a declared background service; ordinary apps run only while at least one view exists.

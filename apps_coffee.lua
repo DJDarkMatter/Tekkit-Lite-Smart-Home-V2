@@ -265,11 +265,12 @@ local function build(width, height, state, api, context)
         local remaining = state.phase == "harvest" and state.harvestRemaining or state.remainingTime
         local value = clock(remaining)
         ui.heading(state.phase == "harvest" and "Harvesting" or "Next harvest", accent)
-        local large = width >= clockWidth(value) + 4 and height >= 14
-        local timeRow = height >= 10 and 3 or 2
+        local large = width >= clockWidth(value) + 4 and limit >= 9
+        local spaced = width >= 30 and height >= 10
+        local timeRow = spaced and 3 or 2
         local statusRow = large and 2 + largeClock(ui, width, height, value, accent, api.ui.contrast(accent))
-            or height >= 10 and 5 or 3
-        local infoRow = statusRow + (height >= 10 and 2 or 1)
+            or spaced and 5 or 3
+        local infoRow = statusRow + (spaced and 2 or 1)
         if not large then ui.text(timeRow, value, true) end
         local status = saveError and "Save failed" or notice or runtimeStatus
         if width < 20 then
@@ -300,6 +301,7 @@ local function build(width, height, state, api, context)
                 ui.text(infoRow, "Player: " .. (width < 16 and (player == nil and "?" or player and "on" or "off") or presence), true)
             end
             if infoRow + 1 <= limit then ui.text(infoRow + 1, "Total: " .. state.totalHarvests, true) end
+            if infoRow + 2 <= limit then ui.text(infoRow + 2, "Trip: " .. state.tripHarvests, true) end
         end
         if inline then
             local third = math.floor((width - 2) / 3)

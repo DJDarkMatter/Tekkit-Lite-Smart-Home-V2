@@ -24,7 +24,21 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
             local win=t.central.server.state.windows[id]
             return t.app.render(win.width-2,win.height-2,t.state,t.api,t.context(id))
         end
+        function t.popup(side)
+            t.paint()
+            local mon=t.central.server.monitors["monitor_13:"..(side or "top")]
+            return mon and mon.notification
+        end
+        function t.ack(side)
+            local popup=assert(t.popup(side),"Expected popup")
+            bus.queue(t.display,{"monitor_touch",side or "top",math.floor((popup.ok.x1+popup.ok.x2)/2),popup.ok.y}); bus.pump()
+        end
+        function t.ackAll()
+            for _=1,128 do if not t.popup() then return end; t.ack() end
+            error("Popup queue did not clear")
+        end
         function t.click(id,action,value)
+            if not options.manualAlerts then t.ackAll() end
             for _=1,80 do
                 t.paint(); local dialog=t.central.server.dialogs[id]
                 local hits=dialog and dialog.hits or t.content(id).hits
@@ -162,6 +176,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         for i=1,22 do
             t.new(t.id,"timer",{duration=1},1); t.bus.advance(4)
         end
+        t.ackAll(); t.bus.advance(1)
         equal(#t.state.timers,21); equal(t.state.timers[1].id,active.id)
         local outputs=t.api.getOutputs(); equal(#outputs,20)
         for _,output in ipairs(outputs) do equal(output.value,false) end
@@ -190,6 +205,12 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         t.click(t.id,"setNumber"); equal(t.view(t.id).screen,"message")
         t.click(t.id,"messageBack"); t.click(t.id,"digit","Clr"); t.click(t.id,"digit","3"); t.click(t.id,"setNumber")
         t.click(t.id,"route"); t.click(t.id,"select","io_11"); t.click(t.id,"select","front"); t.click(t.id,"select",32768); t.click(t.id,"use")
+        t.click(t.id,"field","total"); t.click(t.id,"digit","Clr"); t.click(t.id,"digit","0"); t.click(t.id,"setNumber")
+        equal(t.view(t.id).draft.signal.total,0)
+        t.click(t.id,"draftSignal"); t.click(t.id,"field","on"); t.click(t.id,"digit","Clr"); t.click(t.id,"digit","0"); t.click(t.id,"setNumber")
+        equal(t.view(t.id).draft.signal.on,0); equal(t.view(t.id).screen,"edit")
+        assert(table.concat(t.content(t.id),"\n"):find("Constant",1,true))
+        t.click(t.id,"draftSignal"); equal(t.view(t.id).draft.signal.on,1)
         t.click(t.id,"saveDraft")
         local alarm=t.state.alarms[1]; equal(alarm.minute,435); equal(alarm.signal.kind,"pattern"); equal(alarm.signal.off,3); equal(alarm.route.color,32768)
         assert(t.api.save()); t.startCentral(t.central.disk)
@@ -222,6 +243,150 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local alarm=t.new(t.id,"alarm",{minute=1},1)
         t.bus.advance(2); assert(alarm.lastDay~=nil)
         local day=alarm.lastDay; t.bus.advance(3); equal(alarm.lastDay,day)
+    end
+    function tests.clock_popups_fire_without_windows_or_output_routes_and_dismiss_globally()
+        local t=setup({rate=0,manualAlerts=true})
+        local timer=t.new(t.id,"timer",{name="No IO needed",duration=1})
+        assert(t.api.closeWindow(t.id)); equal(next(t.central.server.state.windows),nil)
+        t.bus.advance(1)
+        assert(timer.alert); equal(timer.ring,nil)
+        local top,left=t.popup(),t.popup("left"); assert(top and left); equal(top.key,left.key)
+        assert(table.concat(t.top.lines,"\n"):find("No IO needed",1,true)); assert(table.concat(t.left.lines,"\n"):find("OK",1,true))
+        t.ack("left"); equal(timer.alert,nil); equal(t.popup(),nil); equal(t.popup("left"),nil)
+        equal(next(t.central.server.state.windows),nil); equal(#t.api.getOutputs(),0)
+    end
+    function tests.clock_constant_zero_runs_until_ok_and_finite_constant_keeps_its_popup_after_output_ends()
+        local t=setup({rate=0,manualAlerts=true})
+        local timer=t.new(t.id,"timer",{duration=1,signal={kind="constant",on=0,off=1,total=10}},1)
+        t.bus.advance(20); assert(timer.ring); assert(timer.alert); equal(t.output(timer,"timer"),true)
+        t.ack(); equal(timer.ring,nil); equal(timer.alert,nil); equal(t.output(timer,"timer"),false)
+        t.bus.advance(1); equal(t.bridge.bundled.front,0)
+        local finite=t.new(t.id,"timer",{duration=1,signal={kind="constant",on=1,off=1,total=10}},2)
+        t.bus.advance(3); equal(finite.ring,nil); assert(finite.alert); equal(t.output(finite,"timer"),false)
+        assert(t.popup()); t.ack(); equal(finite.alert,nil)
+    end
+    function tests.clock_pattern_zero_keeps_cycling_and_can_be_dismissed_during_an_off_phase()
+        local t=setup({rate=0,manualAlerts=true})
+        local timer=t.new(t.id,"timer",{duration=1,signal={kind="pattern",on=1,off=2,total=0}},1)
+        t.bus.advance(1.1); equal(t.output(timer,"timer"),true)
+        t.bus.advance(1); equal(t.output(timer,"timer"),false); assert(t.popup())
+        t.bus.advance(2); equal(t.output(timer,"timer"),true)
+        t.bus.advance(1); equal(t.output(timer,"timer"),false)
+        t.ack("left"); equal(timer.alert,nil); equal(timer.ring,nil)
+        t.bus.advance(10); equal(t.output(timer,"timer"),false); equal(t.bridge.bundled.front,0)
+    end
+    function tests.clock_selectable_bundled_dismiss_input_stops_the_signal_and_closes_every_popup()
+        local t=setup({rate=0,manualAlerts=true})
+        t.click(t.id,"timers"); t.click(t.id,"new","timer")
+        t.view(t.id).draft.duration=1; t.view(t.id).draft.signal={kind="constant",on=0,off=1,total=10}
+        t.click(t.id,"route"); t.click(t.id,"select","io_11"); t.click(t.id,"select","front"); t.click(t.id,"select",1); t.click(t.id,"use")
+        t.click(t.id,"dismissInput"); t.click(t.id,"select","io_11"); t.click(t.id,"select","left"); t.click(t.id,"select",4); t.click(t.id,"use")
+        t.click(t.id,"saveDraft"); local timer=t.state.timers[1]
+        equal(timer.dismissInput.clientId,"io_11"); equal(timer.dismissInput.side,"left"); equal(timer.dismissInput.color,4)
+        local saved=unserialize(t.central.disk.files["configs_os_state.txt"]).appStates.clock
+        equal(saved.timers[1].dismissInput.color,4)
+        t.bus.advance(1); assert(timer.alert); equal(t.output(timer,"timer"),true)
+        t.bridge.bundledInputs.left=2; t.bus.queue(t.bridge,{"redstone"}); t.bus.advance(0.5); assert(timer.alert)
+        t.bridge.bundledInputs.left=4; t.bus.queue(t.bridge,{"redstone"}); t.bus.advance(0.5)
+        equal(timer.alert,nil); equal(timer.ring,nil); equal(t.popup(),nil); equal(t.popup("left"),nil); equal(t.output(timer,"timer"),false)
+        t.bus.advance(1); equal(t.bridge.bundled.front,0)
+    end
+    function tests.clock_dismiss_input_requires_a_new_press_after_held_high_offline_or_restart()
+        local t=setup({rate=0,manualAlerts=true})
+        t.bridge.digitalInputs.left=true; t.bus.queue(t.bridge,{"redstone"}); t.bus.advance(0.5)
+        local timer=t.new(t.id,"timer",{duration=1,signal={kind="constant",on=0,off=1,total=10},dismissInput={clientId="io_11",side="left"}},1)
+        t.bus.advance(2); assert(timer.alert); equal(timer.alert.inputArmed,false)
+        t.bridge.digitalInputs.left=false; t.bus.queue(t.bridge,{"redstone"}); t.bus.advance(0.5); equal(timer.alert.inputArmed,true)
+        assert(t.api.save()); t.startCentral(t.central.disk)
+        timer=t.state.timers[1]; equal(timer.alert.inputArmed,false)
+        t.bridge.digitalInputs.left=true; t.bus.queue(t.bridge,{"redstone"}); t.bus.advance(5); assert(timer.alert)
+        t.bridge.digitalInputs.left=false; t.bus.queue(t.bridge,{"redstone"}); t.bus.advance(0.5); equal(timer.alert.inputArmed,true)
+        t.bridge.active=false; t.bus.advance(16); equal(timer.alert.inputArmed,false)
+        t.bridge=t.bus.computer(11,"io",{disk=t.bridge.disk,modemSide="right"})
+        t.bridge.digitalInputs.left=true; t.bridge:start(); t.bus.advance(1); assert(timer.alert)
+        t.bridge.digitalInputs.left=false; t.bus.queue(t.bridge,{"redstone"}); t.bus.advance(0.5)
+        t.bridge.digitalInputs.left=true; t.bus.queue(t.bridge,{"redstone"}); t.bus.advance(0.5)
+        equal(timer.alert,nil); equal(timer.ring,nil); equal(t.popup(),nil)
+    end
+    function tests.clock_popup_queue_and_indefinite_phase_restore_after_reboot_and_reach_late_monitors()
+        local t=setup({rate=0,manualAlerts=true})
+        local timer=t.new(t.id,"timer",{duration=1,signal={kind="pattern",on=1,off=1,total=0}},1)
+        t.bus.advance(2.5); assert(t.api.save())
+        local id,progress=timer.alert.id,timer.ring.elapsed
+        t.central.active=false; t.bus.advance(20); t.startCentral(t.central.disk)
+        timer=t.state.timers[1]; equal(timer.alert.id,id); equal(timer.ring.elapsed,progress)
+        t.bus.advance(5); assert(t.popup()); assert(t.popup("left"))
+        local late=t.bus.computer(16,"monitor",{monitors={top=monitor(20,10)}}):start(); t.paint()
+        assert(t.central.server.monitors["monitor_16:top"].notification)
+        t.ack("left"); equal(timer.alert,nil); equal(timer.ring,nil)
+        equal(t.central.server.monitors["monitor_16:top"].notification,nil)
+        equal(t.popup(),nil); equal(t.output(timer,"timer"),false)
+    end
+    function tests.clock_old_pulse_states_migrate_without_resetting_progress_or_alerting_for_finished_history()
+        local t=setup({rate=0,manualAlerts=true})
+        local timer=t.new(t.id,"timer",{duration=1,signal={kind="constant",on=10,off=1,total=10}},1)
+        t.new(t.id,"timer",{duration=1})
+        t.bus.advance(1.5); assert(t.api.save())
+        local saved=unserialize(t.central.disk.files["configs_os_state.txt"])
+        local old=saved.appStates.clock; old.version,old.nextAlertId=1,nil
+        for _,item in ipairs(old.timers) do item.signal.kind,item.alert="pulse",nil end
+        local progress=old.timers[1].ring.elapsed
+        t.central.disk.files["configs_os_state.txt"]=serialize(saved); t.startCentral(t.central.disk)
+        equal(t.state.version,2); equal(t.state.timers[1].signal.kind,"constant"); equal(t.state.timers[1].ring.elapsed,progress)
+        assert(t.state.timers[1].alert); equal(t.state.timers[2].alert,nil)
+        equal(#t.central.server.notifications.clock,1)
+    end
+    function tests.clock_ok_and_redstone_dismissal_keep_popup_and_output_until_the_checkpoint_succeeds()
+        local t=setup({rate=0,manualAlerts=true})
+        local timer=t.new(t.id,"timer",{duration=1,signal={kind="constant",on=0,off=1,total=10}},1)
+        t.bus.advance(1); local id=timer.alert.id
+        t.central.disk.failWrite=true; t.ack("left")
+        equal(t.state.timers[1].alert.id,id); equal(t.output(t.state.timers[1],"timer"),true); assert(t.popup()); assert(t.popup("left"))
+        assert(t.central.server.monitors["monitor_13:left"].notificationError)
+        t.central.disk.failWrite=false; t.ack("left"); equal(t.state.timers[1].alert,nil); equal(t.output(t.state.timers[1],"timer"),false)
+        local second=t.new(t.id,"timer",{duration=1,signal={kind="constant",on=0,off=1,total=10},dismissInput={clientId="io_11",side="left"}},2)
+        t.bus.advance(1); assert(second.alert.inputArmed)
+        t.central.disk.failWrite=true; t.bridge.digitalInputs.left=true; t.bus.queue(t.bridge,{"redstone"}); t.bus.advance(1)
+        assert(t.state.timers[2].alert); equal(t.output(t.state.timers[2],"timer"),true)
+        t.central.disk.failWrite=false; t.bus.advance(0.5)
+        equal(t.state.timers[2].alert,nil); equal(t.output(t.state.timers[2],"timer"),false); equal(t.popup(),nil)
+    end
+    function tests.clock_ok_on_one_shared_signal_leaves_the_other_popup_and_signal_running()
+        local t=setup({rate=0,manualAlerts=true})
+        local a=t.new(t.id,"timer",{name="First",duration=1,signal={kind="constant",on=0,off=1,total=10}},1)
+        local b=t.new(t.id,"timer",{name="Second",duration=2,signal={kind="constant",on=0,off=1,total=10}},1)
+        t.bus.advance(2.5); assert(a.alert and b.alert); local first=t.popup().key
+        t.ack("left"); equal(a.alert,nil); assert(b.alert); equal(t.output(a,"timer"),true); equal(t.output(b,"timer"),true)
+        assert(t.popup().key~=first); equal(t.popup().key,t.popup("left").key)
+        t.ack(); equal(b.alert,nil); equal(t.output(a,"timer"),false); equal(t.popup(),nil)
+    end
+    function tests.clock_repeated_or_stale_popup_taps_never_acknowledge_the_next_alarm_or_click_through()
+        local t=setup({rate=0,manualAlerts=true})
+        local a=t.new(t.id,"timer",{duration=1}); local b=t.new(t.id,"timer",{duration=1})
+        t.bus.advance(1)
+        local popup=t.popup()
+        for _=1,4 do t.bus.queue(t.display,{"monitor_touch","top",popup.ok.x1,popup.ok.y}) end
+        t.bus.pump(); equal(a.alert,nil); assert(b.alert)
+        local packet; for _,p in ipairs(t.bus.wire) do if p.sender.id==13 and p.message.type=="touch" then packet=p end end
+        for _=1,3 do t.bus.queue(t.central,{"modem_message",t.central.modemSide,45231,packet.reply,packet.raw,12}) end
+        t.bus.pump(); assert(b.alert); t.ack(); equal(b.alert,nil)
+    end
+    function tests.clock_popup_geometry_tracks_resizes_and_invalid_publications_cannot_replace_pending_alerts()
+        local t=setup({rate=0,manualAlerts=true}); local timer=t.new(t.id,"timer",{duration=1})
+        t.bus.advance(1); local original=t.popup().key
+        equal(t.api.setNotifications("clock",{{key="same",title="A",message="B"},{key="same",title="C",message="D"}}),false)
+        equal(t.api.setNotifications("clock",{{key="bad",title="A\n",message="B"}}),false)
+        equal(t.popup().key,original)
+        local mon=t.central.server.monitors["monitor_13:top"]
+        for _,size in ipairs({{1,2},{8,4},{13,7},{20,10},{64,26}}) do
+            mon.width,mon.height=size[1],size[2]
+            -- Render directly to avoid sending sizes unlike the physical mock.
+            t.central.server.refreshMonitors(true); t.bus.events={}
+            local p=mon.notification
+            assert(p.x>=1 and p.y>=1 and p.x+p.width-1<=size[1] and p.y+p.height-1<=size[2])
+            assert(p.ok.x1>=p.x and p.ok.x2<=p.x+p.width-1 and p.ok.y>=p.y and p.ok.y<=p.y+p.height-1)
+        end
+        mon.width,mon.height=64,26; t.paint(); t.ack(); equal(timer.alert,nil)
     end
     function tests.clock_all_screens_keep_touch_rectangles_and_styles_disjoint_at_every_supported_size()
         local t=setup(); local alarm=t.new(t.id,"alarm",{minute=600},1)

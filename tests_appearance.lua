@@ -123,7 +123,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
                 local previous = serialize(t.window(id))
                 local root = {}
                 for _, hit in ipairs(model.menuHits) do if hit.item then root[hit.item.value] = true end end
-                assert(root.custom and root.move and root.restore, "Resize/Move/Restore must stay at the first level")
+                assert(root.custom and root.move and root.restore and root.fullscreen, "Resize/Move/Restore/Fullscreen must stay at the first level")
                 t.touch("top", choice.x2, choice.y2 or choice.y)
                 equal(serialize(t.window(id)), previous, "Picking a grid alone must not change geometry")
                 for _, hit in ipairs(model.menuHits) do
@@ -225,7 +225,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local app = {minWidth = 8, minHeight = 2}
         local grids = {false, "1x1", "2x1", "1x2", "2x2", "3x1", "1x3", "3x2", "2x3", "3x3"}
         for _, width in ipairs({10, 15, 25, 27, 40, 43, 81}) do
-            for _, height in ipairs({6, 9, 10, 11, 18, 25}) do
+            for _, height in ipairs({6, 9, 10, 11, 12, 18, 25}) do
                 for _, grid in ipairs(grids) do
                     local monitor = {width = width, height = height}
                     local win = {x = 1, y = 1, width = width, height = height - 1, layout = "normal"}
@@ -241,6 +241,9 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
                         end
                         for index, hit in ipairs(hits) do
                             assert(hit.x1 >= rect.x and hit.x2 < rect.x + rect.width and (hit.y1 or hit.y) >= rect.y and (hit.y2 or hit.y) < rect.y + rect.height)
+                            if hit.item and hit.item.value=="fullscreen" and width>=14 and height>=12 then
+                                assert(lines[hit.y-rect.y+1]:find("Fullscreen",1,true),"Fullscreen label must fit on narrow graphical menus")
+                            end
                             for other = index + 1, #hits do
                                 local h = hits[other]
                                 assert(hit.x2 < h.x1 or h.x2 < hit.x1 or (hit.y2 or hit.y) < (h.y1 or h.y) or (h.y2 or h.y) < (hit.y1 or hit.y), "Layout hit regions overlap")
@@ -320,7 +323,11 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             assert(t.api.setWindowBorderColour(accent)); assert(t.api.setTaskbarColour(bg)); t.paint()
             equal(t.top.bg[win.y][win.x], accent)
             assert(t.top.fg[win.y + 1][win.x + 1] ~= t.top.bg[win.y + 1][win.x + 1])
-            assert(t.top.fg[win.y + 2][win.x + 1] ~= t.top.bg[win.y + 2][win.x + 1])
+            for y=win.y+1,win.y+win.height-2 do for x=win.x+1,win.x+win.width-2 do
+                if t.top.lines[y]:sub(x,x)~=" " then
+                    assert(t.top.fg[y][x]~=t.top.bg[y][x],"Coffee text must contrast; graphical clock gutters contain no text")
+                end
+            end end
         end
     end
 

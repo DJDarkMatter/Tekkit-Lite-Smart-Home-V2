@@ -10,7 +10,7 @@ end
 function Desktop.controls(win)
     local x = win.x + win.width - 9
     return {{x1 = x, x2 = x + 2, action = "minimize", label = " - "},
-        {x1 = x + 3, x2 = x + 5, action = "layout", label = " + "},
+        {x1 = x + 3, x2 = x + 5, action = "layout", label = " # "},
         {x1 = x + 6, x2 = x + 8, action = "close", label = " X "}}
 end
 
@@ -27,6 +27,17 @@ function Desktop.fits(rect, app, monitor)
         and rect.height <= maxH and rect.x >= 1 and rect.y >= 1
         and rect.x + rect.width - 1 <= monitor.width
         and rect.y + rect.height - 1 < monitor.height
+end
+
+function Desktop.fullscreen(app, monitor)
+    if monitor.width < (app.minWidth or 8) or monitor.height < (app.minHeight or 2) then return nil end
+    return {x = 1, y = 1, width = monitor.width, height = monitor.height}
+end
+
+function Desktop.contentRect(win)
+    local inset = win.fullscreen and 0 or 1
+    return {x = win.x + inset, y = win.y + inset,
+        width = win.width - inset * 2, height = win.height - inset * 2}
 end
 
 function Desktop.relative(rect, monitor)
@@ -108,11 +119,28 @@ function Desktop.layoutOptions(win, app, monitor, selectedGrid)
             options[#options + 1] = {label = name, value = "choose_" .. name, enabled = enabled}
         end
         options[#options + 1] = {label = "Restore", value = "restore", enabled = win.layout ~= nil and win.layout ~= "normal"}
+        options[#options + 1] = {label = "Fullscreen", value = "fullscreen", enabled = Desktop.fullscreen(app, monitor) ~= nil}
         options[#options + 1] = {label = "Resize", value = "custom", enabled = true}
         options[#options + 1] = {label = "Move", value = "move", enabled = true}
     end
     options[#options + 1] = {label = "Cancel", value = "cancel", enabled = true}
     return options
+end
+
+-- A compact pad stays in its chosen corner while nudging. It is placed away
+-- from the selected point and never covers the confirmation/taskbar row.
+function Desktop.pointArrows(point, monitor, anchor)
+    local area, hits = Desktop.area(monitor), {}
+    anchor = anchor or {x = point.x > area.width / 2 and 1 or area.width - 4,
+        y = point.y > area.height / 2 and 2 or area.height - 2}
+    local function add(x, y, label, dx, dy)
+        hits[#hits + 1] = {x1 = x, x2 = x + #label - 1, y = y, label = label, dx = dx, dy = dy}
+    end
+    if point.x > 1 then add(anchor.x, anchor.y + 1, "<", -1, 0) end
+    if point.x < area.width then add(anchor.x + 4, anchor.y + 1, ">", 1, 0) end
+    if point.y > 1 then add(anchor.x + 1, anchor.y, " ^ ", 0, -1) end
+    if point.y < area.height then add(anchor.x + 1, anchor.y + 2, " v ", 0, 1) end
+    return hits, anchor
 end
 
 function Desktop.moveArrows(rect, monitor)
@@ -132,15 +160,15 @@ end
 function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
     local area, options = Desktop.area(monitor), Desktop.layoutOptions(win, app, monitor, selectedGrid)
     local gridColumns, gridRows = gridSize(selectedGrid)
-    if (area.height < 10 and not gridColumns) or (gridColumns and area.height < gridRows * 2 + 3) then
+    if (area.height < 11 and not gridColumns) or (gridColumns and area.height < gridRows * 2 + 3) then
         return Desktop.menu(monitor, title or (gridColumns and selectedGrid .. " position" or "Layout"), options, page,
             {x = win.x, y = win.y + 1})
     end
     local width = math.min(gridColumns and 35 or 43, area.width)
     local columns = width >= 40 and 3 or width >= 27 and 2 or 1
-    local height = math.min(area.height, gridColumns and math.max(9, gridRows * 3 + 4) or 3 + math.ceil(#grids / columns) * 6)
-    local rows = math.max(1, math.floor((height - 3) / 6))
-    if rows * columns < #grids then rows = math.max(1, math.floor((height - 4) / 6)) end
+    local height = math.min(area.height, gridColumns and math.max(9, gridRows * 3 + 4) or 4 + math.ceil(#grids / columns) * 6)
+    local rows = math.max(1, math.floor((height - 4) / 6))
+    if rows * columns < #grids then rows = math.max(1, math.floor((height - 5) / 6)) end
     local perPage, pages = rows * columns, gridColumns and 1 or math.ceil(#grids / (rows * columns))
     page = clamp(page or 1, 1, pages)
     local rect = {x = clamp(win.x + win.width - width, 1, area.width - width + 1),
@@ -198,8 +226,8 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
     end
     local half = math.floor(width / 2)
     if pages > 1 then
-        ui.button(height - 2, "< Prev", "previous", 1, half, page > 1)
-        ui.button(height - 2, "Next >", "next", half + 1, width, page < pages)
+        ui.button(height - 3, "< Prev", "previous", 1, half, page > 1)
+        ui.button(height - 3, "Next >", "next", half + 1, width, page < pages)
     end
     local function action(y, x1, x2, mode, label)
         ui.button(y, label, "item", x1, x2, byMode[mode].enabled)
@@ -207,12 +235,20 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
     end
     if gridColumns then
         action(height, 1, half, "back", "Back")
-    else
+        action(height, half + 1, width, "cancel", "Cancel")
+    elseif width < 22 then
+        action(height - 2, 1, width, "fullscreen", "Fullscreen")
         action(height - 1, 1, half, "restore", "Restore")
         action(height - 1, half + 1, width, "custom", "Resize")
         action(height, 1, half, "move", "Move")
+        action(height, half + 1, width, "cancel", "Cancel")
+    else
+        action(height - 2, 1, half, "fullscreen", "Fullscreen")
+        action(height - 2, half + 1, width, "restore", "Restore")
+        action(height - 1, 1, half, "custom", "Resize")
+        action(height - 1, half + 1, width, "move", "Move")
+        action(height, 1, width, "cancel", "Cancel")
     end
-    action(height, half + 1, width, "cancel", "Cancel")
     for _, hit in ipairs(ui.hits) do
         hit.x1, hit.x2, hit.y = hit.x1 + rect.x - 1, hit.x2 + rect.x - 1, hit.y + rect.y - 1
         if hit.y1 then hit.y1, hit.y2 = hit.y1 + rect.y - 1, hit.y2 + rect.y - 1 end

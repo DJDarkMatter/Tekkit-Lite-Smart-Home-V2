@@ -5,8 +5,16 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         init=function(s) s.starts=(s.starts or 0)+1; s.ticks=s.ticks or 0; s.touches=s.touches or 0 end,
         background=function(dt,s) s.ticks=s.ticks+dt end,
         shutdown=function(s) s.stops=(s.stops or 0)+1 end,
-        render=function(w,h,s) return {"Pane",tostring(s.ticks)} end,
-        handleTouch=function(x,y,w,h,s) s.touches=s.touches+1; return true end}]]
+        render=function(w,h,s,api,c)
+            s.rendered={width=w,height=h,fullscreen=c.fullscreen}
+            local ui=api.ui.content(w,h); ui.style(1,1,w,h,1,2048)
+            ui.text(1,"Pane"); ui.text(h,"Bottom")
+            ui.lines[1]=ui.lines[1]:sub(1,w-1).."!"
+            return ui.lines end,
+        handleTouch=function(x,y,w,h,s,api,c)
+            s.touches=s.touches+1; s.lastTouch={x=x,y=y,width=w,height=h,fullscreen=c.fullscreen}; return true end,
+        handleNotification=function(key,s,api,c)
+            s.acks=(s.acks or 0)+1; api.setNotifications(c.appName,{}); return true end}]]
     local serviceSource = [[return {backgroundService=true,minWidth=8,minHeight=2,
         init=function(s) s.ticks=s.ticks or 0 end,background=function(dt,s) s.ticks=s.ticks+dt end,
         render=function() return {"Service"} end}]]
@@ -22,7 +30,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local display = bus.computer(13, "monitor", {monitors = {top = top, left = left}}):start()
         local test = {bus = bus, central = central, display = display, top = top, left = left, api = central.server.api}
         function test.paint() central.server.refreshMonitors(true); bus.pump() end
-        function test.touch(side, x, y) bus.queue(display, {"monitor_touch", side, x, y}); bus.pump() end
+        function test.touch(side, x, y) bus.queue(test.display, {"monitor_touch", side, x, y}); bus.pump() end
         function test.open(name, side, x, y, w, h)
             local id = assert(test.api.openApp(name or "pane", "monitor_13:" .. (side or "top"), x, y, w, h))
             test.paint(); return id
@@ -70,7 +78,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local id = t.open()
         local win = t.window(id)
         equal(t.top.lines[win.y]:sub(win.x, win.x + 4), " pane")
-        equal(t.top.lines[win.y]:sub(win.x + win.width - 9, win.x + win.width - 1), " -  +  X ")
+        equal(t.top.lines[win.y]:sub(win.x + win.width - 9, win.x + win.width - 1), " -  #  X ")
         equal(t.top.lines[t.top.height]:sub(1, 3), "[+]")
         assert(t.top.lines[t.top.height]:find("pane", 1, true))
         t.touch("top", win.x + win.width - 8, win.y)
@@ -202,18 +210,19 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local id = t.open("pane", "top", 1, 1, 22, 10)
         local win = t.window(id)
         t.layout(id, "custom")
-        t.touch("top", 10, 4); t.touch("top", 39, 15)
+        t.touch("top", 10, 4); t.touch("top", 2, t.top.height); t.touch("top", 39, 15)
         equal(t.model().placement.preview.width, 30)
         equal(t.top.bg[5][10], 32, "Valid resize previews have a coloured outline")
         equal(win.width, 22, "Preview must not move the live window")
         t.touch("top", 6, t.top.height)
         equal(t.model().placement, nil); equal(win.width, 22)
         t.layout(id, "custom")
-        t.touch("top", 12, 5); t.touch("top", 14, 7)
+        t.touch("top", 12, 5); t.touch("top", 2, t.top.height); t.touch("top", 14, 7)
         equal(t.model().placement.valid, false)
         equal(t.top.bg[6][12], 16384, "Invalid resize previews are red")
         t.touch("top", 2, t.top.height)
         equal(win.width, 22)
+        t.touch("top", t.top.width, 1) -- Place picks the second corner again.
         t.touch("top", 41, 17)
         equal(t.model().placement.valid, true)
         t.central.disk.failWrite = true
@@ -228,6 +237,165 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.central.server.state.appStates.pane.touches, 0, "Placement taps must not reach the app")
         local saved = unserialize(t.central.disk.files["configs_os_state.txt"])
         equal(saved.windows[id].width, 30)
+    end
+
+    function tests.desktop_custom_corners_each_nudge_confirm_and_hide_arrows_at_workspace_edges()
+        local t = setup(40, 20)
+        local id = t.open("pane", "top", 3, 3, 20, 10)
+        t.layout(id, "custom")
+        local p = t.model().placement
+        local function arrow(dx,dy)
+            for _,hit in ipairs(p.hits) do
+                if hit.dx==dx and hit.dy==dy then t.touch("top",hit.x1,hit.y); return end
+            end
+            error("Missing corner nudge")
+        end
+        t.touch("top",3,3)
+        equal(p.first,nil); equal(p.preview,nil); equal(p.point.x,3)
+        t.touch("top",20,9); equal(p.point.x,3,"A nudge draft must not jump on another empty-area tap")
+        arrow(1,0); arrow(0,1); equal(p.point.x,4); equal(p.point.y,4)
+        for _=1,3 do arrow(-1,0); arrow(0,-1) end
+        equal(p.point.x,1); equal(p.point.y,1)
+        for _,hit in ipairs(p.hits) do assert(hit.dx~=-1 and hit.dy~=-1,"No arrows beyond the top/left edges") end
+        equal(t.window(id).x,3)
+        t.touch("top",2,t.top.height)
+        equal(p.first.x,1); equal(p.first.y,1); equal(p.point,nil); equal(p.preview,nil)
+        t.touch("top",38,17)
+        arrow(1,0); arrow(1,0); arrow(0,1); arrow(0,1)
+        equal(p.point.x,40); equal(p.point.y,19)
+        equal(p.preview.width,40); equal(p.preview.height,19)
+        for _,hit in ipairs(p.hits) do assert(hit.dx~=1 and hit.dy~=1,"No arrows into the taskbar or past the right edge") end
+        equal(t.window(id).width,20,"Neither corner changes the live window before final confirmation")
+        arrow(-1,0); arrow(0,-1)
+        t.touch("top",2,t.top.height)
+        equal(t.model().placement,nil)
+        equal(t.window(id).x,1); equal(t.window(id).y,1); equal(t.window(id).width,39); equal(t.window(id).height,18)
+        equal(t.central.server.state.appStates.pane.touches,0)
+    end
+
+    function tests.desktop_fullscreen_has_no_chrome_uses_all_cells_and_consumes_only_the_exit_cell()
+        local t=setup(15,10)
+        local other=t.open("pane","left",2,2,20,8)
+        local id=t.open("pane","top",3,2,12,6)
+        t.layout(id,"fullscreen")
+        local win,state=t.window(id),t.central.server.state.appStates.pane
+        equal(win.fullscreen,true); equal(win.x,1); equal(win.y,1); equal(win.width,15); equal(win.height,10)
+        equal(#t.model().taskbar,0); equal(t.top.lines[1]:sub(15,15),"!","The app's own top-right cell stays visible")
+        equal(t.top.lines[10]:sub(1,6),"Bottom")
+        for _,y in ipairs({1,10}) do for _,x in ipairs({1,15}) do equal(t.top.bg[y][x],2048) end end
+        equal(t.model("left").fullscreen,nil); assert(#t.model("left").taskbar>0); equal(t.window(other).fullscreen,nil)
+        -- Both monitors share the fixture app state; paint the fullscreen one last.
+        t.touch("top",1,1); equal(state.lastTouch.x,1); equal(state.lastTouch.y,1)
+        equal(state.lastTouch.width,15); equal(state.lastTouch.height,10); equal(state.lastTouch.fullscreen,true)
+        t.touch("top",14,1); equal(state.lastTouch.x,14)
+        t.touch("top",1,10); equal(state.lastTouch.y,10); equal(state.lastTouch.x,1)
+        t.touch("top",15,10); equal(state.lastTouch.x,15); equal(state.lastTouch.y,10)
+        local touches=state.touches
+        t.touch("top",15,1)
+        equal(state.touches,touches,"Exit must not activate the app or underlying title controls")
+        equal(win.fullscreen,nil); equal(win.x,3); equal(win.y,2); equal(win.width,12); equal(win.height,6)
+        equal(t.top.lines[10]:sub(1,3),"[+]")
+    end
+
+    function tests.desktop_fullscreen_survives_restart_resize_disconnect_and_preserves_the_snap_restore_chain()
+        local t=setup(81,25)
+        local id=t.open("pane","top",3,4,25,10)
+        local relative=serialize(t.window(id).relative)
+        t.layout(id,"right"); t.layout(id,"fullscreen")
+        assert(t.api.layoutWindow(id,"fullscreen")) -- Idempotent; keep every restore target.
+        local saved=unserialize(t.central.disk.files["configs_os_state.txt"])
+        equal(saved.windows[id].fullscreen,true); equal(saved.windows[id].layout,"right")
+        equal(serialize(saved.windows[id].relative),relative)
+        local restarted=t.bus.computer(10,"server",{disk=t.central.disk}):start()
+        t.bus.advance(6)
+        local win=restarted.server.state.windows[id]
+        equal(win.fullscreen,true); equal(win.width,81); equal(win.height,25)
+        t.top.width,t.top.height=101,31; t.bus.advance(1)
+        equal(win.width,101); equal(win.height,31)
+        t.display.active=false; t.bus.advance(16)
+        equal(restarted.server.monitors[win.monitorId].online,false); equal(win.fullscreen,true)
+        t.display=t.bus.computer(13,"monitor",{disk=t.display.disk,monitors={top=t.top,left=t.left}}):start()
+        t.bus.advance(1)
+        equal(restarted.server.monitors[win.monitorId].fullscreen,id)
+        t.touch("top",101,1)
+        equal(win.fullscreen,nil); equal(win.layout,"right"); equal(win.x,51); equal(win.width,51); equal(win.height,30)
+        assert(restarted.server.api.layoutWindow(id,"restore"))
+        equal(win.layout,"normal"); equal(win.width,31); equal(win.height,13)
+        equal(serialize(win.relative),relative)
+    end
+
+    function tests.desktop_fullscreen_popups_take_priority_and_failed_exit_saves_keep_fullscreen()
+        local t=setup(40,18)
+        local id=t.open()
+        t.layout(id,"fullscreen")
+        assert(t.api.setNotifications("pane",{{key="alarm",title="Alarm",message="Test notification"}})); t.paint()
+        local state=t.central.server.state.appStates.pane
+        local popup=assert(t.model().notification)
+        t.touch("top",40,1); equal(t.window(id).fullscreen,true); equal(state.touches,0)
+        t.touch("top",1,18); equal(state.touches,0)
+        t.touch("top",popup.ok.x1,popup.ok.y)
+        equal(state.acks,1); equal(t.model().notification,nil); equal(t.window(id).fullscreen,true)
+        t.central.disk.failWrite=true
+        t.touch("top",40,1); equal(t.window(id).fullscreen,true); equal(state.touches,0)
+        t.central.disk.failWrite=false
+        t.touch("top",40,1); equal(t.window(id).fullscreen,nil); equal(state.touches,0)
+    end
+
+    function tests.desktop_fullscreen_small_coffee_uses_extra_rows_for_player_and_harvest_counts()
+        local t=setup(15,10,{coffee=true})
+        local id=t.open("coffee")
+        local state=t.central.server.state.appStates.coffee
+        state.totalHarvests,state.tripHarvests=42,7
+        t.layout(id,"fullscreen")
+        local frame=table.concat(t.top.lines,"\n")
+        assert(frame:find("Player:",1,true)); assert(frame:find("Total: 42",1,true)); assert(frame:find("Trip: 7",1,true))
+        assert(frame:find("04:00:00",1,true)); assert(frame:find("Pause",1,true)); assert(frame:find("Harvest now",1,true))
+        equal(t.top.lines[10]:match("^%s*(.-)%s*$"),"Menu")
+        t.touch("top",8,10); equal(t.central.server.views[id].page,"menu","Bottom-row app controls must remain interactive")
+        t.touch("top",15,1); equal(t.window(id).fullscreen,nil); equal(t.central.server.views[id].page,"menu")
+    end
+
+    function tests.desktop_fullscreen_colour_and_io_pickers_use_the_same_origin_as_the_app()
+        local t=setup(15,10,{coffee=true})
+        t.bus.computer(11,"io"):start()
+        local id=t.open("coffee")
+        t.layout(id,"fullscreen")
+        assert(t.api.pickColour(id)); t.paint()
+        local dialog=t.central.server.dialogs[id]
+        local selected
+        for _,hit in ipairs(dialog.hits) do if hit.action=="colour" and hit.value==2 then selected=hit end end
+        assert(selected); t.touch("top",selected.x1,selected.y)
+        equal(t.api.getAppColour("coffee"),2); equal(t.central.server.dialogs[id],nil)
+        assert(t.api.pickIO(id,"outputAddress","output")); t.paint()
+        local function pick(action,value)
+            local nextHit
+            for _=1,10 do
+                dialog=t.central.server.dialogs[id]
+                for _,hit in ipairs(dialog.hits) do
+                    if hit.action==action and (value==nil or hit.value==value) then t.touch("top",hit.x1,hit.y); return end
+                    if hit.action=="next" then nextHit=hit end
+                end
+                assert(nextHit); t.touch("top",nextHit.x1,nextHit.y)
+            end
+            error("Missing fullscreen picker control")
+        end
+        pick("select","io_11"); pick("select","front"); pick("select",1); pick("use")
+        local address=t.central.server.state.appStates.coffee.outputAddress
+        equal(address.clientId,"io_11"); equal(address.side,"front"); equal(address.color,1)
+        equal(t.central.server.dialogs[id],nil); equal(t.window(id).fullscreen,true)
+    end
+
+    function tests.desktop_fullscreen_exit_remains_available_when_a_resized_monitor_cannot_fit_the_app()
+        local t=setup(40,18)
+        local id=t.open()
+        t.layout(id,"fullscreen")
+        t.top.width,t.top.height=7,3; t.bus.advance(1)
+        equal(t.window(id).fullscreen,true); equal(t.window(id).tooSmall,true)
+        t.touch("top",7,1)
+        equal(t.window(id).fullscreen,nil); equal(t.model().fullscreen,nil)
+        assert(#t.model().taskbar>0,"Exit must return to the desktop even if the normal window no longer fits")
+        t.top.width,t.top.height=40,18; t.bus.advance(1)
+        equal(t.window(id).doesNotFit,false); equal(t.window(id).width,22)
     end
 
     function tests.desktop_title_move_uses_one_destination_and_keeps_size_inside_desktop()
