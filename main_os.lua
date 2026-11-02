@@ -21,7 +21,7 @@ console.log("Type help for commands; clear clears this console")
 -- The bottom-row editor owns its cursor independently of asynchronous logs.
 -- Network/timer events continue while commands are being edited.
 parallel.waitForAny(function()
-    local timer = os.startTimer(config.tickInterval)
+    local timer = os.startTimer(server.nextTickInterval())
     while true do
         local event, p1, p2, p3, p4 = os.pullEvent()
         if event == "modem_message" then
@@ -29,7 +29,7 @@ parallel.waitForAny(function()
             if message then server.handle(message, p3, os.clock()) end
         elseif event == "timer" and p1 == timer then
             server.tick(os.clock())
-            timer = os.startTimer(config.tickInterval)
+            timer = os.startTimer(server.nextTickInterval())
         elseif event == "peripheral" or event == "peripheral_detach" then
             net.peripheralChanged(p1)
         end

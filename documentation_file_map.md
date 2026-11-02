@@ -172,3 +172,40 @@ The full archive retains all sixty-three flat root files and the installer conta
 New files: `apps_solar_farm.lua`, `tests_solar_farm.lua`, `documentation_solar_farm.md`. Updated tests: `tests_run.lua`, `tests_appearance.lua`. Updated guides: `README.md`, `documentation_design.md`, `documentation_me_storage.md`, `documentation_review.md`, and this map.
 
 The complete archive now has 66 unique root files. `install.lua` and its twenty embedded core sources remain unchanged at bundled-v28; the existing installer downloads the explicitly requested `solar_farm` app from GitHub. Update no OS/client roles for this release. The optional app uses a separate `appStates.solar_farm` record inside the existing central checkpoint for its selected main/farm sources, pins, identities, filter settings, history and alarms. Current ME inventories/baselines stay runtime-only. It replaces the planned SMF production app with farm inventory and filtered main-ME net stock-rate estimates; machinery control stays external.
+
+## Solar overview, Level emitter and Screensaver (v30)
+
+The complete release contains **74 unique root files**. The single `install.lua` is now **bundled-v30**, with 21 embedded core sources and **no apps**. Update only the central server role, then explicitly download the three apps before reboot. Existing monitor, IO, sensor and relay roles need no update for this release. See [Solar farm update commands](documentation_solar_farm.md).
+
+New files:
+
+- `apps_level_emitter.lua`
+- `apps_screensaver.lua`
+- `lib_me.lua`
+- `tests_app_helpers.lua`
+- `tests_level_emitter.lua`
+- `tests_screensaver.lua`
+- `documentation_level_emitter.md`
+- `documentation_screensaver.md`
+
+Changed files:
+
+- `apps_solar_farm.lua`
+- `lib_server.lua`
+- `lib_desktop.lua`
+- `lib_gui.lua`
+- `main_os.lua`
+- `install.lua`
+- `tools_build_installer.py`
+- `tests_run.lua`
+- `tests_solar_farm.lua`
+- `README.md`
+- `documentation_api.md`
+- `documentation_design.md`
+- `documentation_desktop.md`
+- `documentation_me_storage.md`
+- `documentation_solar_farm.md`
+- `documentation_review.md`
+- `documentation_file_map.md`
+
+Solar farm state is now schema 2. Level emitter owns `appStates.level_emitter`, including imported Solar alarms, exact ME/item/IO bindings and pending signals. It preserves legacy logical output names during the atomic migration. Solar farm keeps selected sources, farm pins, per-pin Stick preferences, HV pin/Stick preference, withdrawal settings and sparse history. Screensaver keeps only its next-design rotation in `appStates.screensaver`; its windows never restore automatically. Normal app windows and other app namespaces remain in the existing central checkpoint.

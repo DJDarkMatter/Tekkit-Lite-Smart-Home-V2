@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v28
+-- SmartHome OS installer: bundled-v30
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -493,6 +493,81 @@ function Gui.palette(width, height, current, title)
     ui.button(height, "Back", "cancel")
     return ui.lines, ui.hits
 end
+-- Common app forms keep drawing and hit regions together at 12x6 and above.
+function Gui.form(width,height,view,accent,background,panel)
+    local ui=Gui.content(width,height); view.pages=view.pages or {}
+    background,panel=background or 32768,panel or 128
+    ui.style(1,1,width,height,Gui.contrast(background),background)
+    function ui.put(x,y,value,span,center)
+        if y<1 or y>height or span<1 then return end
+        local text=tostring(value):gsub("[%c]"," "):sub(1,span)
+        if center then x=x+math.max(0,math.floor((span-#text)/2)) end
+        ui.lines[y]=ui.lines[y]:sub(1,x-1)..text..ui.lines[y]:sub(x+#text)
+    end
+    function ui.action(y,text,action,value,x1,x2,enabled,bg)
+        ui.button(y,text,action,x1,x2,enabled,bg or panel,nil,value)
+    end
+    function ui.footer(rows)
+        for i,row in ipairs(rows) do ui.action(height,row[1],row[2],row[3],1+math.floor((i-1)*width/#rows),math.floor(i*width/#rows),row[4],row[5]) end
+    end
+    function ui.page(key,count,slots,y,draw)
+        local pages=math.max(1,math.ceil(count/slots))
+        local current=math.max(1,math.min(view.pages[key] or 1,pages)); view.pages[key]=current
+        if pages>1 and draw~=false then
+            local wing=math.max(2,math.floor(width/4))
+            ui.action(y,"<","page",{key=key,page=current-1},1,wing,current>1)
+            ui.action(y,">","page",{key=key,page=current+1},width-wing+1,width,current<pages)
+            ui.put(wing+1,y,current.."/"..pages,width-2*wing,true)
+        end
+        return (current-1)*slots,current,pages
+    end
+    function ui.menu(title,rows,key,footer)
+        ui.heading(title,accent)
+        local slots=#rows<=height-2 and height-2 or height-3
+        local first=ui.page(key,#rows,slots,height-1)
+        for i=1,slots do local row=rows[first+i]; if row then ui.action(i+1,row[1],row[2],row[3],nil,nil,row[4],row[5]) end end
+        ui.footer(footer or {{"Back","home"}})
+    end
+    function ui.info(title,lines,key,back)
+        local wrapped={}
+        for _,line in ipairs(lines) do
+            line=tostring(line):gsub("[%c]"," ")
+            repeat
+                local cut=#line>width and line:sub(1,width):match("^.*()%s")
+                if cut and cut>1 then wrapped[#wrapped+1],line=line:sub(1,cut-1),line:sub(cut+1)
+                else wrapped[#wrapped+1],line=line:sub(1,width),line:sub(width+1) end
+            until line==""
+        end
+        ui.heading(title,accent)
+        local slots=#wrapped<=height-2 and height-2 or height-3
+        local first=ui.page(key,#wrapped,slots,height-1)
+        for i=1,slots do ui.put(1,i+1,wrapped[first+i] or "",width) end
+        ui.footer({{"Back",back}})
+    end
+    function ui.numberPad(title,draft,back)
+        ui.heading(title,accent); ui.put(1,2,draft=="" and "0" or draft,width,true)
+        for i,key in ipairs({"1","2","3","4","5","6","7","8","9","Clr","0","Del"}) do
+            local col,row=(i-1)%4,math.floor((i-1)/4)
+            ui.action(3+row,key,"digit",key,1+math.floor(col*width/4),math.floor((col+1)*width/4),true,accent)
+        end
+        ui.footer({{"Set","setNumber"},{"Back",back}})
+    end
+    function ui.keyboard(k)
+        local bank=k.bank==2 and "1234567890-_/.:" or k.bank==1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
+        ui.heading(k.draft=="" and "Type here" or k.draft:sub(-width),accent)
+        local cols,rows=math.max(4,math.min(10,math.floor(width/2))),math.max(1,math.min(3,height-4))
+        local slots=cols*rows; local pages=math.ceil(#bank/slots); k.page=math.max(1,math.min(k.page or 1,pages))
+        for i=1,slots do local ch=bank:sub((k.page-1)*slots+i,(k.page-1)*slots+i); if ch~="" then
+            local col,row=(i-1)%cols,math.floor((i-1)/cols)
+            ui.action(2+row,ch,"key",ch,1+math.floor(col*width/cols),math.floor((col+1)*width/cols),true,accent)
+        end end
+        for i,row in ipairs({{"ABC","bank"},{"Sp","space"},{"Del","backspace"},{k.page.."/"..pages,"keyPage"}}) do
+            ui.action(height-1,row[1],row[2],nil,1+math.floor((i-1)*width/4),math.floor(i*width/4))
+        end
+        ui.footer({{"Set","saveText"},{"Clr","clearText"},{"Back",k.back}})
+    end
+    return ui
+end
 function Gui.code(colour, fallback)
     for index = 0, 15 do if colour == 2 ^ index then return digits:sub(index + 1, index + 1) end end
     return fallback
@@ -576,6 +651,198 @@ function Gui.drawRow(screen, y, text, fg, bg, colour, paint)
     end
 end
 return Gui
+]=],
+    ["lib_me.lua"] = [=[-- Shared AE1 item identities, safe snapshots and bounded stock-rate history.
+local MAX=9007199254740991
+local function copy(value)
+    if type(value)~="table" then return value end
+    local result={}; for key,item in pairs(value) do result[key]=copy(item) end; return result
+end
+local function restore(state,old)
+    local keys={}; for key in pairs(state) do keys[#keys+1]=key end
+    for _,key in ipairs(keys) do state[key]=nil end
+    for key,value in pairs(old) do state[key]=value end
+end
+local function number(v,lo,hi) return type(v)=="number" and v==v and v>=lo and v<=hi end
+local function integer(v,lo,hi) return number(v,lo,hi) and v==math.floor(v) end
+local function digits(v)
+    v=math.floor(math.abs(v)); local out={}
+    repeat local n=v%10; out[#out+1]=("0123456789"):sub(n+1,n+1); v=math.floor(v/10) until v==0
+    return table.concat(out):reverse()
+end
+local function amount(v,width)
+    if v==nil then return "--" end
+    local raw=(v<0 and "-" or "")..digits(v)
+    local text=digits(v):reverse():gsub("(%d%d%d)","%1 "):reverse():gsub("^ ","")
+    text=(v<0 and "-" or "")..text
+    return width and #text>width and raw or text
+end
+local function rateText(v,width)
+    if v==nil then return "--/h" end
+    local whole=math.floor(math.abs(v))
+    local tenth=math.floor((math.abs(v)-whole)*10+0.5)
+    if tenth==10 then whole,tenth=whole+1,0 end
+    local text=(v<0 and "-" or v>0 and "+" or "")..amount(whole).."."..digits(tenth).."/h"
+    if width and #text>width then text=(v<0 and "-" or v>0 and "+" or "")..digits(whole).."/h" end
+    return text
+end
+local function colour(v) for i=0,15 do if v==2^i then return true end end; return false end
+local function textValue(v,limit) return type(v)=="string" and #v>0 and #v<=limit and not v:find("[%c]") end
+local function label(v) return textValue(v,24) and v:find("%S") end
+local sides={top=true,bottom=true,left=true,right=true,front=true,back=true}
+local function address(v) return type(v)=="table" and textValue(v.clientId,64) and sides[v.side] and textValue(v.target,128) end
+local function route(v) return type(v)=="table" and textValue(v.clientId,64) and sides[v.side] and (v.color==nil or colour(v.color)) end
+local function sourceKey(v) return #v.clientId..":"..v.clientId..v.side..":"..v.target end
+local function itemKey(raw,damage,name)
+    local identity=raw~="" and raw~="unknown" and raw or "name:"..name
+    return #identity..":"..identity..":"..digits(damage)
+end
+local function itemValid(v)
+    return type(v)=="table" and type(v.raw)=="string" and #v.raw<=256 and not v.raw:find("[%c]")
+        and textValue(v.name,256) and integer(v.damage,0,2147483647) and v.key==itemKey(v.raw,v.damage,v.name)
+end
+local function identity(v) return {key=v.key,raw=v.raw,damage=v.damage,name=v.name} end
+local function find(list,id) for index,item in ipairs(list) do if item.id==id then return item,index end end end
+local function catalog(reading)
+    local data=reading.data or {}
+    if reading.status~="ok" then return nil,reading.error or reading.status end
+    if data.Powered==false then return nil,"ME unpowered" end
+    if data.ItemsOmitted or type(data.Items)~="table" then return nil,"Waiting for complete item list" end
+    if data.ItemsFormat and data.ItemsFormat~="ae_compact_v1" then return nil,"Unknown item format" end
+    local compact=data.ItemsFormat=="ae_compact_v1"
+    local result,seen,total={},0,0
+    for _,row in pairs(data.Items) do
+        seen=seen+1
+        if seen>8192 or type(row)~="table" then return nil,"Invalid item list" end
+        local raw,name,damage,count
+        if compact then raw,damage,name,count=row[1],row[2],row[3],row[4]
+        else raw,name,damage,count=row.RawName or "",row.Name or row.RawName,row.DamageValue or row.Damagevalue or 0,row.Size end
+        if type(raw)~="string" or #raw>256 or raw:find("[%c]") or type(name)~="string" or #name>256
+            or not integer(damage,0,2147483647) or not integer(count,0,MAX) then return nil,"Invalid item identity/count" end
+        name=name:gsub("[%c]"," "); if name=="" then name=raw~="" and raw or "Unknown item" end
+        local key=itemKey(raw,damage,name)
+        local item=result[key]
+        if not item then item={key=key,raw=raw,damage=damage,name=name,count=0}; result[key]=item end
+        if not integer(item.count+count,0,MAX) or not integer(total+count,0,MAX) then return nil,"Item count overflow" end
+        item.count,total=item.count+count,total+count
+        if name:lower()<item.name:lower() then item.name=name end
+    end
+    return result,nil,total
+end
+
+local Me={MAX=MAX,copy=copy,restore=restore,number=number,integer=integer,digits=digits,amount=amount,rateText=rateText,
+    colour=colour,textValue=textValue,label=label,address=address,route=route,sourceKey=sourceKey,itemKey=itemKey,
+    itemValid=itemValid,identity=identity,find=find,catalog=catalog}
+function Me.boots(api)
+    local result={}; for _,client in ipairs(api.getSensorClients()) do result[client.id]=client.bootId end; return result
+end
+function Me.snapshot(cache,api,binding,boots)
+    if not address(binding) then return {status="unconfigured",error="Select an ME source",items={}} end
+    local key=sourceKey(binding)..":"..tostring((boots or Me.boots(api))[binding.clientId])
+    -- Forget prior boot snapshots of this address. They are never fresh data and
+    -- retaining many large catalogs across client restarts wastes OS memory.
+    local remove={}
+    for other,value in pairs(cache) do if other~=key and value.address==sourceKey(binding) then remove[#remove+1]=other end end
+    for _,other in ipairs(remove) do cache[other]=nil end
+    local saved=cache[key] or {key=key,items={}}
+    saved.address=sourceKey(binding)
+    cache[key]=saved
+    local reading=api.getSensorReading(binding)
+    local oldStatus=saved.status
+    saved.status,saved.error,saved.age=reading.status,reading.error,reading.age
+    saved.sequence,saved.time=reading.sequence,reading.time
+    if reading.status~="ok" then return saved end
+    if reading.data and reading.data.Powered==false then saved.status,saved.error="unpowered","ME unpowered"; return saved end
+    if oldStatus~="ok" or saved.dataSequence~=reading.dataSequence then
+        local items,err,total=catalog(reading)
+        if not items then saved.status,saved.error="unsupported",err; return saved end
+        saved.items,saved.total,saved.dataSequence=items,total,reading.dataSequence
+    end
+    saved.data=reading.data
+    return saved
+end
+function Me.count(snapshot,key)
+    if not snapshot or snapshot.status~="ok" or not key then return nil end
+    return snapshot.items[key] and snapshot.items[key].count or 0
+end
+function Me.isHVSolar(item)
+    local raw=(item.raw or ""):gsub("(%l)(%u)","%1 %2")
+    local name=(raw.." "..(item.name or "")):lower()
+    if not name:find("solar",1,true) then return false end
+    local flat=name:gsub("[^%w]","")
+    return name:match("%f[%a]hv%f[%A]")~=nil or flat:find("highvoltage",1,true)~=nil or flat:find("hochspannung",1,true)~=nil
+end
+-- Sparse minute buckets share valid coverage for every item in a complete ME
+-- snapshot. Only nonzero deltas and per-item excluded intervals need records.
+local Rates={}
+function Rates.new() return {buckets={},keys={},nextKey=1} end
+local function trim(history,time)
+    while #history.buckets>0 and history.buckets[1].minute<math.floor(time/60)-59 do table.remove(history.buckets,1) end
+    local used,cost={},0
+    for _,bucket in ipairs(history.buckets) do
+        cost=cost+80
+        for id in pairs(bucket.values) do used[id]=true; cost=cost+160 end
+    end
+    local remove={}
+    for key,id in pairs(history.keys) do
+        if not used[id] then remove[#remove+1]=key else cost=cost+2*#key+100 end
+    end
+    for _,key in ipairs(remove) do history.keys[key]=nil end
+    return cost
+end
+function Rates.record(history,time,dt,changes)
+    if not number(dt,0.001,10) then return false end
+    trim(history,time)
+    local minute=math.floor(time/60)
+    local bucket=history.buckets[#history.buckets]
+    if not bucket or bucket.minute~=minute then bucket={minute=minute,seconds=0,values={}}; history.buckets[#history.buckets+1]=bucket end
+    bucket.seconds=bucket.seconds+dt
+    for key,change in pairs(changes) do
+        local id=history.keys[key]
+        if not id then id=history.nextKey; history.nextKey=id+1; history.keys[key]=id end
+        local row=bucket.values[id] or {0,0,0,0}; bucket.values[id]=row
+        row[1]=row[1]+(change.skip and 0 or change.delta)
+        if change.skip then row[2],row[3],row[4]=row[2]+dt,row[3]+1,row[4]+math.abs(change.delta) end
+        if not number(row[1],-MAX,MAX) or not number(row[4],0,MAX) then
+            history.buckets,history.keys,history.limited={},{},true; return false
+        end
+    end
+    local cost=trim(history,time)
+    while cost>196608 and #history.buckets>1 do table.remove(history.buckets,1); history.limited=true; cost=trim(history,time) end
+    if cost>196608 then history.buckets,history.keys,history.limited={},{},true; return false end
+    return true
+end
+function Rates.sum(history,key,time,window)
+    local id=history.keys[key]
+    local delta,seconds,drops,removed=0,0,0,0
+    local first=math.floor(time/60)-window/60+1
+    for _,bucket in ipairs(history.buckets) do if bucket.minute>=first then
+        local row=id and bucket.values[id]
+        seconds=seconds+bucket.seconds-(row and row[2] or 0)
+        if row then delta,drops,removed=delta+row[1],drops+row[3],removed+row[4] end
+    end end
+    return delta,math.max(0,seconds),drops,removed
+end
+function Rates.valid(history)
+    if type(history)~="table" or type(history.buckets)~="table" or #history.buckets>60 or type(history.keys)~="table"
+        or not integer(history.nextKey,1,MAX) then return false end
+    local ids={}; for key,id in pairs(history.keys) do
+        if not textValue(key,600) or not integer(id,1,history.nextKey-1) or ids[id] then return false end; ids[id]=true
+    end
+    local last=-1
+    for _,bucket in ipairs(history.buckets) do
+        if type(bucket)~="table" or not integer(bucket.minute,0,MAX) or bucket.minute<=last
+            or not number(bucket.seconds,0,120) or type(bucket.values)~="table" then return false end
+        last=bucket.minute
+        for id,row in pairs(bucket.values) do
+            if not ids[id] or type(row)~="table" or not number(row[1],-MAX,MAX) or not number(row[2],0,bucket.seconds+0.001)
+                or not integer(row[3],0,MAX) or not number(row[4],0,MAX) then return false end
+        end
+    end
+    return true
+end
+Me.Rates=Rates
+return Me
 ]=],
     ["lib_settings.lua"] = [=[-- Built-in OS settings window. This is system UI, not an installed user app.
 local Settings = {title = "OS settings", minWidth = 12, minHeight = 6, preferredWidth = 28, preferredHeight = 10}
@@ -987,6 +1254,7 @@ end
 
 -- Returns a complete taskbar line and exact touch regions, with stable window order.
 function Desktop.taskbar(windows, monitor, clock, saved, active)
+    local visible={}; for _,win in ipairs(windows) do if not win.hideTaskbar then visible[#visible+1]=win end end; windows=visible
     local width = monitor.width
     local line, hits = string.rep(" ", width), {}
     local function put(x, label, stop)
@@ -1173,8 +1441,12 @@ local function validApp(app)
     for _, key in ipairs({"minWidth", "maxWidth", "minHeight", "maxHeight", "preferredWidth", "preferredHeight"}) do
         if app[key] ~= nil and not integer(app[key], 1, 512) then return false end
     end
-    if app.backgroundService ~= nil and type(app.backgroundService) ~= "boolean" then return false end
-    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection", "handleNotification"}) do
+    for _,key in ipairs({"backgroundService","fullscreenOnly","transientWindow","hideTaskbar"}) do
+        if app[key]~=nil and type(app[key])~="boolean" then return false end
+    end
+    if app.animationInterval~=nil and (type(app.animationInterval)~="number" or app.animationInterval~=app.animationInterval
+        or app.animationInterval<0.1 or app.animationInterval>1) then return false end
+    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection", "handleNotification", "onOpen", "onClose"}) do
         if app[key] ~= nil and type(app[key]) ~= "function" then return false end
     end
     return (not app.maxWidth or app.maxWidth >= (app.minWidth or 8))
@@ -1246,14 +1518,40 @@ function Server.new(net, storage, config, logger)
             "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance"}) do saved[name] = state[name] end
         saved.windows = {}
         for id, win in pairs(state.windows) do
-            saved.windows[id] = copy(win)
-            saved.windows[id].viewState = viewSnapshot(server.views[id])
+            if not win.transientWindow then
+                saved.windows[id] = copy(win)
+                saved.windows[id].viewState = viewSnapshot(server.views[id])
+            end
         end
         local ok, err = storage.save(config.saveFile, saved)
         if not ok then log("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
         return ok, err
     end
     api.save = server.save
+    api.fullscreenApps = true
+    -- App-owned, synchronous upgrade transaction. The transform edits detached
+    -- copies; both app namespaces checkpoint together without touching IO maps.
+    function api.migrateAppState(from,to,transform)
+        if from==to or not server.apps[to] or type(transform)~="function" then return false,"Invalid app migration" end
+        local sourceState,targetState=state.appStates[from],state.appStates[to]
+        if type(sourceState)~="table" or type(targetState)~="table" then return false,"App state is unavailable" end
+        local oldSource,oldTarget=copy(sourceState),copy(targetState)
+        local nextSource,nextTarget=copy(sourceState),copy(targetState)
+        local ok,accepted,err=pcall(transform,nextSource,nextTarget)
+        if not ok or accepted~=true then return false,tostring(ok and err or accepted) end
+        local function replace(target,value)
+            local keys={}; for key in pairs(target) do keys[#keys+1]=key end
+            for _,key in ipairs(keys) do target[key]=nil end
+            for key,item in pairs(value) do target[key]=item end
+        end
+        replace(sourceState,nextSource); replace(targetState,nextTarget)
+        ok,err=server.save()
+        if not ok then replace(sourceState,oldSource); replace(targetState,oldTarget); return false,err end
+        server.notifications[from]=nil
+        api.invalidateAppViews(from); api.invalidateAppViews(to)
+        return true
+    end
+    function api.getAppData(name) return copy(state.appStates[name]) end
     function api.invalidateAppViews(name)
         local seen = {}
         for _, win in pairs(state.windows) do
@@ -1713,6 +2011,8 @@ function Server.new(net, storage, config, logger)
         local app = definition(win.appName)
         if not app then win.doesNotFit = true; return false end
         win.title = app.title or win.appName
+        if app.fullscreenOnly then win.fullscreen=true end
+        win.hideTaskbar,win.transientWindow=app.hideTaskbar==true or nil,app.transientWindow==true or nil
         if not validRelative(win.relative) then win.relative = nil end
         local rect
         win.fullscreen = win.fullscreen == true or nil
@@ -1735,6 +2035,7 @@ function Server.new(net, storage, config, logger)
     end
     local function compatible(name, monitor)
         local app = definition(name)
+        if app.fullscreenOnly then return app.render and Desktop.fullscreen(app,monitor)~=nil end
         local minW, minH, maxW, maxH = Desktop.bounds(app, monitor)
         return app.render and maxW >= minW and maxH >= minH
     end
@@ -1756,9 +2057,9 @@ function Server.new(net, storage, config, logger)
         if not monitor or not monitor.online then return nil, "Monitor is offline or unknown" end
         if not compatible(name, monitor) then return nil, "App does not fit this monitor" end
         local win = {id = state.nextWindowId, appName = name, monitorId = monitorId,
-            x = x, y = y, width = width, height = height, order = 0, layout = "normal"}
+            x = x, y = y, width = width, height = height, order = 0, layout = "normal",fullscreen=app.fullscreenOnly==true or nil}
         fit(win, monitor)
-        if not x and not y then
+        if not app.fullscreenOnly and not x and not y then
             local existing, placed = windowsFor(monitorId), false
             for cy = 1, monitor.height - win.height do
                 for cx = 1, monitor.width - win.width + 1 do
@@ -1773,13 +2074,21 @@ function Server.new(net, storage, config, logger)
                 if placed then break end
             end
         end
-        win.relative = Desktop.relative(win, monitor)
+        if not app.fullscreenOnly then win.relative = Desktop.relative(win, monitor) end
         state.windows[win.id], state.nextWindowId = win, win.id + 1
         focus(win)
         local ok, err = server.save()
         if not ok then state.windows[win.id] = nil; return nil, err end
         ok, err = startApp(name)
         if not ok then state.windows[win.id] = nil; server.save(); return nil, err end
+        if app.onOpen then
+            local accepted
+            ok,accepted,err=appCall(name,"onOpen",state.appStates[name],api,viewContext(win))
+            if not ok or accepted==false then
+                state.windows[win.id],server.views[win.id]=nil,nil; stopApp(name); server.save()
+                return nil,tostring(ok and err or accepted)
+            end
+        end
         return win.id
     end
     function api.closeWindow(id)
@@ -1788,6 +2097,7 @@ function Server.new(net, storage, config, logger)
         state.windows[id] = nil
         local ok, err = server.save()
         if not ok then state.windows[id] = win; return false, err end
+        appCall(win.appName,"onClose",state.appStates[win.appName],api,viewContext(win))
         server.views[id], server.dialogs[id] = nil, nil
         local monitor = server.monitors[win.monitorId]
         if monitor then
@@ -1801,6 +2111,9 @@ function Server.new(net, storage, config, logger)
     function api.placeWindow(id, x, y, width, height)
         local win = state.windows[id]
         if not win then return false, "Unknown window" end
+        local app=definition(win.appName)
+        if not app then return false,"App is not available" end
+        if app.fullscreenOnly then return false,"This app always fills its monitor" end
         local monitor = server.monitors[win.monitorId]
         if not monitor or not monitor.online then return false, "Monitor is offline" end
         for _, value in pairs({x = x, y = y, width = width, height = height}) do
@@ -1821,6 +2134,10 @@ function Server.new(net, storage, config, logger)
         local win = state.windows[id]
         if not win then return false, "Unknown window" end
         if not definition(win.appName) then return false, "App is not available" end
+        if definition(win.appName).fullscreenOnly then
+            if mode=="restore" then return api.closeWindow(id) end
+            return mode=="fullscreen",mode~="fullscreen" and "This app always fills its monitor" or nil
+        end
         local monitor = server.monitors[win.monitorId]
         if not monitor or not monitor.online then return false, "Monitor is offline" end
         local previous = copy(win)
@@ -1940,6 +2257,11 @@ function Server.new(net, storage, config, logger)
                         items[#items + 1] = {label = (server.apps[name].title or name) .. (server.running[name] and " *" or ""), value = name, enabled = true}
                     end
                 end
+                table.sort(items,function(a,b)
+                    local left=(a.value=="@settings" and "OS settings" or definition(a.value).title or a.value):lower()
+                    local right=(b.value=="@settings" and "OS settings" or definition(b.value).title or b.value):lower()
+                    return left==right and a.value<b.value or left<right
+                end)
                 if #items == 1 then
                     items[2] = {label = next(server.apps) and "No apps fit" or "No apps installed", enabled = false}
                 end
@@ -2069,7 +2391,8 @@ function Server.new(net, storage, config, logger)
         end
         local fullscreen = fullscreenWindow(id)
         if fullscreen and x == monitor.width and y == 1 then
-            api.layoutWindow(fullscreen.id, "restore")
+            if definition(fullscreen.appName).fullscreenOnly then api.closeWindow(fullscreen.id)
+            else api.layoutWindow(fullscreen.id, "restore") end
             return -- The invisible exit cell never reaches the app underneath.
         end
         local placement = not fullscreen and monitor.placement
@@ -2377,6 +2700,12 @@ function Server.new(net, storage, config, logger)
                 end
             end
         end
+        local discard={}
+        for id,win in pairs(state.windows) do
+            local app=definition(win.appName)
+            if win.transientWindow or app and app.transientWindow then discard[#discard+1]=id end
+        end
+        for _,id in ipairs(discard) do state.windows[id],server.views[id]=nil,nil end
         for _, name in ipairs(sortedKeys(server.apps)) do
             if isService(server.apps[name]) or hasViews(name) then startApp(name) end
         end
@@ -2412,6 +2741,15 @@ function Server.new(net, storage, config, logger)
         server.refreshMonitors(false)
         -- Keep checkpoints within one second even when an older config says 30.
         if now - server.lastSave >= math.min(config.saveInterval, 1) then server.save() end
+    end
+    function server.nextTickInterval()
+        local interval=config.tickInterval or 0.5
+        for _,monitor in pairs(server.monitors) do if monitor.online and monitor.fullscreen then
+            local win=state.windows[monitor.fullscreen]
+            local app=win and definition(win.appName)
+            if app and app.animationInterval then interval=math.min(interval,app.animationInterval) end
+        end end
+        return interval
     end
 
     function server.command(line)
@@ -3027,7 +3365,7 @@ console.log("Type help for commands; clear clears this console")
 -- The bottom-row editor owns its cursor independently of asynchronous logs.
 -- Network/timer events continue while commands are being edited.
 parallel.waitForAny(function()
-    local timer = os.startTimer(config.tickInterval)
+    local timer = os.startTimer(server.nextTickInterval())
     while true do
         local event, p1, p2, p3, p4 = os.pullEvent()
         if event == "modem_message" then
@@ -3035,7 +3373,7 @@ parallel.waitForAny(function()
             if message then server.handle(message, p3, os.clock()) end
         elseif event == "timer" and p1 == timer then
             server.tick(os.clock())
-            timer = os.startTimer(config.tickInterval)
+            timer = os.startTimer(server.nextTickInterval())
         elseif event == "peripheral" or event == "peripheral_detach" then
             net.peripheralChanged(p1)
         end
@@ -4155,7 +4493,7 @@ end
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v28")
+print("SmartHome installer: bundled-v30")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
@@ -4301,6 +4639,7 @@ else
     files = {"lib_storage.lua", "lib_network.lua"}
     if role == "server" or role == "monitor" then files[#files + 1] = "lib_gui.lua" end
     if role == "server" then
+        files[#files + 1] = "lib_me.lua"
         files[#files + 1] = "lib_console.lua"
         files[#files + 1] = "lib_settings.lua"
         files[#files + 1] = "lib_io_picker.lua"

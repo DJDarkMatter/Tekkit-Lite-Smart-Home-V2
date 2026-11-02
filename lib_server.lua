@@ -103,8 +103,12 @@ local function validApp(app)
     for _, key in ipairs({"minWidth", "maxWidth", "minHeight", "maxHeight", "preferredWidth", "preferredHeight"}) do
         if app[key] ~= nil and not integer(app[key], 1, 512) then return false end
     end
-    if app.backgroundService ~= nil and type(app.backgroundService) ~= "boolean" then return false end
-    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection", "handleNotification"}) do
+    for _,key in ipairs({"backgroundService","fullscreenOnly","transientWindow","hideTaskbar"}) do
+        if app[key]~=nil and type(app[key])~="boolean" then return false end
+    end
+    if app.animationInterval~=nil and (type(app.animationInterval)~="number" or app.animationInterval~=app.animationInterval
+        or app.animationInterval<0.1 or app.animationInterval>1) then return false end
+    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection", "handleNotification", "onOpen", "onClose"}) do
         if app[key] ~= nil and type(app[key]) ~= "function" then return false end
     end
     return (not app.maxWidth or app.maxWidth >= (app.minWidth or 8))
@@ -176,14 +180,40 @@ function Server.new(net, storage, config, logger)
             "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance"}) do saved[name] = state[name] end
         saved.windows = {}
         for id, win in pairs(state.windows) do
-            saved.windows[id] = copy(win)
-            saved.windows[id].viewState = viewSnapshot(server.views[id])
+            if not win.transientWindow then
+                saved.windows[id] = copy(win)
+                saved.windows[id].viewState = viewSnapshot(server.views[id])
+            end
         end
         local ok, err = storage.save(config.saveFile, saved)
         if not ok then log("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
         return ok, err
     end
     api.save = server.save
+    api.fullscreenApps = true
+    -- App-owned, synchronous upgrade transaction. The transform edits detached
+    -- copies; both app namespaces checkpoint together without touching IO maps.
+    function api.migrateAppState(from,to,transform)
+        if from==to or not server.apps[to] or type(transform)~="function" then return false,"Invalid app migration" end
+        local sourceState,targetState=state.appStates[from],state.appStates[to]
+        if type(sourceState)~="table" or type(targetState)~="table" then return false,"App state is unavailable" end
+        local oldSource,oldTarget=copy(sourceState),copy(targetState)
+        local nextSource,nextTarget=copy(sourceState),copy(targetState)
+        local ok,accepted,err=pcall(transform,nextSource,nextTarget)
+        if not ok or accepted~=true then return false,tostring(ok and err or accepted) end
+        local function replace(target,value)
+            local keys={}; for key in pairs(target) do keys[#keys+1]=key end
+            for _,key in ipairs(keys) do target[key]=nil end
+            for key,item in pairs(value) do target[key]=item end
+        end
+        replace(sourceState,nextSource); replace(targetState,nextTarget)
+        ok,err=server.save()
+        if not ok then replace(sourceState,oldSource); replace(targetState,oldTarget); return false,err end
+        server.notifications[from]=nil
+        api.invalidateAppViews(from); api.invalidateAppViews(to)
+        return true
+    end
+    function api.getAppData(name) return copy(state.appStates[name]) end
     function api.invalidateAppViews(name)
         local seen = {}
         for _, win in pairs(state.windows) do
@@ -643,6 +673,8 @@ function Server.new(net, storage, config, logger)
         local app = definition(win.appName)
         if not app then win.doesNotFit = true; return false end
         win.title = app.title or win.appName
+        if app.fullscreenOnly then win.fullscreen=true end
+        win.hideTaskbar,win.transientWindow=app.hideTaskbar==true or nil,app.transientWindow==true or nil
         if not validRelative(win.relative) then win.relative = nil end
         local rect
         win.fullscreen = win.fullscreen == true or nil
@@ -665,6 +697,7 @@ function Server.new(net, storage, config, logger)
     end
     local function compatible(name, monitor)
         local app = definition(name)
+        if app.fullscreenOnly then return app.render and Desktop.fullscreen(app,monitor)~=nil end
         local minW, minH, maxW, maxH = Desktop.bounds(app, monitor)
         return app.render and maxW >= minW and maxH >= minH
     end
@@ -686,9 +719,9 @@ function Server.new(net, storage, config, logger)
         if not monitor or not monitor.online then return nil, "Monitor is offline or unknown" end
         if not compatible(name, monitor) then return nil, "App does not fit this monitor" end
         local win = {id = state.nextWindowId, appName = name, monitorId = monitorId,
-            x = x, y = y, width = width, height = height, order = 0, layout = "normal"}
+            x = x, y = y, width = width, height = height, order = 0, layout = "normal",fullscreen=app.fullscreenOnly==true or nil}
         fit(win, monitor)
-        if not x and not y then
+        if not app.fullscreenOnly and not x and not y then
             local existing, placed = windowsFor(monitorId), false
             for cy = 1, monitor.height - win.height do
                 for cx = 1, monitor.width - win.width + 1 do
@@ -703,13 +736,21 @@ function Server.new(net, storage, config, logger)
                 if placed then break end
             end
         end
-        win.relative = Desktop.relative(win, monitor)
+        if not app.fullscreenOnly then win.relative = Desktop.relative(win, monitor) end
         state.windows[win.id], state.nextWindowId = win, win.id + 1
         focus(win)
         local ok, err = server.save()
         if not ok then state.windows[win.id] = nil; return nil, err end
         ok, err = startApp(name)
         if not ok then state.windows[win.id] = nil; server.save(); return nil, err end
+        if app.onOpen then
+            local accepted
+            ok,accepted,err=appCall(name,"onOpen",state.appStates[name],api,viewContext(win))
+            if not ok or accepted==false then
+                state.windows[win.id],server.views[win.id]=nil,nil; stopApp(name); server.save()
+                return nil,tostring(ok and err or accepted)
+            end
+        end
         return win.id
     end
     function api.closeWindow(id)
@@ -718,6 +759,7 @@ function Server.new(net, storage, config, logger)
         state.windows[id] = nil
         local ok, err = server.save()
         if not ok then state.windows[id] = win; return false, err end
+        appCall(win.appName,"onClose",state.appStates[win.appName],api,viewContext(win))
         server.views[id], server.dialogs[id] = nil, nil
         local monitor = server.monitors[win.monitorId]
         if monitor then
@@ -731,6 +773,9 @@ function Server.new(net, storage, config, logger)
     function api.placeWindow(id, x, y, width, height)
         local win = state.windows[id]
         if not win then return false, "Unknown window" end
+        local app=definition(win.appName)
+        if not app then return false,"App is not available" end
+        if app.fullscreenOnly then return false,"This app always fills its monitor" end
         local monitor = server.monitors[win.monitorId]
         if not monitor or not monitor.online then return false, "Monitor is offline" end
         for _, value in pairs({x = x, y = y, width = width, height = height}) do
@@ -751,6 +796,10 @@ function Server.new(net, storage, config, logger)
         local win = state.windows[id]
         if not win then return false, "Unknown window" end
         if not definition(win.appName) then return false, "App is not available" end
+        if definition(win.appName).fullscreenOnly then
+            if mode=="restore" then return api.closeWindow(id) end
+            return mode=="fullscreen",mode~="fullscreen" and "This app always fills its monitor" or nil
+        end
         local monitor = server.monitors[win.monitorId]
         if not monitor or not monitor.online then return false, "Monitor is offline" end
         local previous = copy(win)
@@ -870,6 +919,11 @@ function Server.new(net, storage, config, logger)
                         items[#items + 1] = {label = (server.apps[name].title or name) .. (server.running[name] and " *" or ""), value = name, enabled = true}
                     end
                 end
+                table.sort(items,function(a,b)
+                    local left=(a.value=="@settings" and "OS settings" or definition(a.value).title or a.value):lower()
+                    local right=(b.value=="@settings" and "OS settings" or definition(b.value).title or b.value):lower()
+                    return left==right and a.value<b.value or left<right
+                end)
                 if #items == 1 then
                     items[2] = {label = next(server.apps) and "No apps fit" or "No apps installed", enabled = false}
                 end
@@ -999,7 +1053,8 @@ function Server.new(net, storage, config, logger)
         end
         local fullscreen = fullscreenWindow(id)
         if fullscreen and x == monitor.width and y == 1 then
-            api.layoutWindow(fullscreen.id, "restore")
+            if definition(fullscreen.appName).fullscreenOnly then api.closeWindow(fullscreen.id)
+            else api.layoutWindow(fullscreen.id, "restore") end
             return -- The invisible exit cell never reaches the app underneath.
         end
         local placement = not fullscreen and monitor.placement
@@ -1307,6 +1362,12 @@ function Server.new(net, storage, config, logger)
                 end
             end
         end
+        local discard={}
+        for id,win in pairs(state.windows) do
+            local app=definition(win.appName)
+            if win.transientWindow or app and app.transientWindow then discard[#discard+1]=id end
+        end
+        for _,id in ipairs(discard) do state.windows[id],server.views[id]=nil,nil end
         for _, name in ipairs(sortedKeys(server.apps)) do
             if isService(server.apps[name]) or hasViews(name) then startApp(name) end
         end
@@ -1342,6 +1403,15 @@ function Server.new(net, storage, config, logger)
         server.refreshMonitors(false)
         -- Keep checkpoints within one second even when an older config says 30.
         if now - server.lastSave >= math.min(config.saveInterval, 1) then server.save() end
+    end
+    function server.nextTickInterval()
+        local interval=config.tickInterval or 0.5
+        for _,monitor in pairs(server.monitors) do if monitor.online and monitor.fullscreen then
+            local win=state.windows[monitor.fullscreen]
+            local app=win and definition(win.appName)
+            if app and app.animationInterval then interval=math.min(interval,app.animationInterval) end
+        end end
+        return interval
     end
 
     function server.command(line)

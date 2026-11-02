@@ -1,58 +1,48 @@
 # Solar farm overview
 
-`apps_solar_farm.lua` is an optional single-file app installed as `solar_farm`. It reads two independently selected AE1 networks: **Farm** for inventory overview and **Main** for stock-based speed estimates. It runs centrally and shares the existing `ae_items` sensor feeds with ME monitors. SMF-specific production measurement is outside this app.
+`apps_solar_farm.lua` is the optional `solar_farm` app. Its overview combines farm-ME amounts with **farm-ME net stock-change rates**. Only **HV solar** uses main-ME stock/rate data; it starts pinned with **Stick** enabled. You can turn Stick off or unpin it. No other main-ME item is listed. Machinery control, recipes and direct SMF output measurement remain external.
 
-## Install and select sources
+## Update from v29
 
-Upload the full v29 package to the V2 GitHub repository. On the central OS, stop its program with Ctrl+T, then run:
+Upload the **complete v30 package** to the V2 GitHub repository and replace/download your single Pastebin installer with this package's `install.lua` (banner **bundled-v30**). On the central computer, stop the OS with Ctrl+T, then install everything before rebooting:
 
 ```text
 cd /
+inst server
+inst app level_emitter
 inst app solar_farm
+inst app screensaver
 reboot
 ```
 
-The existing bundled-v28 installer works unchanged. The new app requires a v25-or-newer OS and v22-or-newer AE sensor roles; an installation already using v28 needs no core/client reinstall or new Pastebin paste. User apps remain explicit downloads rather than installer payloads.
+Existing monitor, IO, sensor and relay clients need no update for v30. `inst server` preserves the existing startup; add `--startup` if you need to create it. Role installation still bundles no user apps. Apps are explicit GitHub downloads through the contents API, with raw download as a fallback.
 
-Open **Solar farm** from Start. Select **Main ME** and **Farm ME**, each through sensor client → peripheral side → AE Wireless Access Point target → Use. They may use different sensor computers or two targets visible to one sensor. The same clients/cards may serve the other ME apps. Both role bindings are saved centrally. Selecting the same target for both is allowed for testing and reported in Source details.
+Old Solar farm alarms move automatically into **Level emitter**, with selected ME targets, item identities, names, signal/dismiss routes, pending popups and signal progress. Level emitter keeps each original logical output name so the upgrade does not disconnect an active signal. Both app namespaces checkpoint together; a failed migration save retains the old records. Rebooting again does not import duplicates. Solar farm refuses to replace a v29 state that still contains alarms until Level emitter is installed. Do not uninstall/disable Level emitter while it owns alarms you need.
 
-## Stocks, rates and pinned items
+The main/farm source selections and pin appearance/filter settings survive. Existing HV pins become the fixed HV row. Other old pins become farm pins when the item is observed in the farm; main-only pins remain hidden. Old main-based histories are reset because they no longer measure the same source. The separate Level emitter catalog retains registered absent identities where capacity permits.
 
-**Stocks** browses the farm's complete item catalog with ordinary decimal quantities. **Rate** browses the main network's items and their signed net change per hour. Find opens search, Name/Amount/Rate sorting, ascending/descending order, Refresh list and Manual item. Counts/rates update live while row order stays fixed until Refresh/Sort/Search; a changing value cannot silently move a touch target.
+## Overview and menu
 
-Pin useful items through **Menu → + Pin item**, or from an item's details. Up to 64 pins show farm stock, main net rate and, where space permits, main stock. Each pin can be renamed and coloured. Larger windows use a tiled dashboard; 1×1 screens page pins, and fullscreen can show more cards. Item details show counts, sampled time, excluded drops and a rate-history graph when the window fits it. Graph colours distinguish positive/negative rates, observed zero and missing-data gaps.
+Choose **Menu → ME sources**, then select each sensor client → peripheral side → AE Wireless Access Point target → Use. Sources can share a sensor computer/card with each other and the other ME apps. Selections are saved centrally.
 
-Source details include both source addresses/statuses, item identities, total counted stock, and available native used/free bytes and item room. Detailed drive/cell capacity remains in the independent ME storage app.
+The overview shows an amount and signed net rate for each farm item. Larger windows use aligned Item / Amount / Net rate columns; narrow windows use two rows per item. Pinned items come first, then other items alphabetically. Each pin has a **Stick: On/Off** setting. Sticky items stay above the scrolling rows; other pins scroll normally. HV starts pinned with Stick on and can be edited or unpinned just like the others. If a sticky group fills a small window, the group pages first so every item remains reachable. The footer has **Pin item / Menu**, or **previous / next / Pin item / Menu** when pagination is required. Quantities update without reordering rows by changing amounts. Newly appearing item identities update the overview automatically.
 
-Item identity is RawName plus DamageValue, with a display-name fallback only when a raw name is unavailable. Equivalent stacks are summed, and damage variants remain distinct. The old AE card does not expose NBT, so equal raw-name/damage items with differing NBT cannot be separated. Choose **Manual item** to register an item that is currently absent: enter its exact RawName, damage and display name. Selected identities are saved independently of live amounts. A bounded catalog retains up to 1,024 registered/selected identities; when full, a new item replaces an unreferenced identity, preserving every pinned/alarmed binding.
+Use **Pin item** on the overview or tap an item and choose Pin item. Up to 64 pins can have custom names, colours and withdrawal filters. Pinned/registered farm items remain visible when absent, showing zero only from a fresh complete farm inventory. **Find** searches names/RawNames, sorts Name/Amount both ways, refreshes the selector or registers an absent identity with RawName, damage and display name.
 
-## Meaning of the speed estimates
+The menu contains ME sources, HV item selection, average window, rate unit, withdrawal filter, UI colour, source status and an explanation. Alarm controls live entirely in Level emitter.
 
-These are **filtered main-ME stock changes**, not gross production or per-SMF output. Positive changes include incoming crafted panels and any other additions. Small negative changes include consumption and transfers. Simultaneous additions/removals can cancel, and a player deposit can raise the estimate. Stationary items and intentional full/empty buffers are normal.
+HV solar is selected automatically when exactly one current main-ME item clearly identifies itself as HV/high-voltage solar. If it is absent, ambiguous or named differently, use **Menu → HV solar item** and select/register its precise identity. That explicit selection is saved. HV setup can change its name, colour, withdrawal filter and Stick preference. Unpinning returns it to the ordinary list; Pin item can pin it again. Its amount/rate still comes from the main ME.
 
-The default player-withdrawal filter excludes a downward movement only when it satisfies **both**:
+## What rates measure
 
-- At least **64 items** were removed.
-- The removal is at least **5%** of the preceding stock.
+The default is a **15-minute observed-time average per real hour**; choose 5/15/60 minutes and per second/minute/hour in Menu. Each rate is accepted signed stock change divided by accepted sampled seconds, converted to the selected unit. Minute bucket boundaries make the rolling window approximate. Details report the observed seconds and excluded withdrawals. These are net inventory rates: simultaneous arrivals and consumption can cancel, and a player deposit can raise an estimate. They do not claim gross crafting throughput or convert intermediate items into recipe equivalents.
 
-For example, removing 64 from 200,000 UU is counted as ordinary consumption; removing 100 from 1,000 HV panels is excluded. These defaults are a user-adjustable interpretation of the requested large-drop assumption. Menu changes the global minimum/percentage, and each pin can override either. Its details report the current rule and excluded event/magnitude counts.
+A downward movement is ignored only if it meets **both** the minimum item count (default 64) and percentage of preceding stock (default 5%). The next quantity becomes the baseline immediately, avoiding a false recovery spike. An excluded interval contributes neither delta nor sampled duration for that item. Unchanged fresh heartbeats contribute observed zero changes. Other items in that complete snapshot retain their valid coverage.
 
-An excluded interval contributes neither its stock delta nor sampled duration. The new quantity becomes the baseline immediately; the next increase is measured from that baseline, preventing a false recovery spike. Production concealed within a withdrawal cannot be reconstructed. Changing a filter resets the affected history/smoother so values measured under different rules are not silently combined.
+A missing item in a complete powered inventory is zero. Offline, unpowered, partial or malformed inventories are unknown. Duplicate cached samples add no time or stock changes. Sensor reboots, outages, gaps over ten seconds and OS restarts rebase the first fresh reading without counting the unobserved stock jump. Source changes reset that source's history. Inventories and comparison baselines are runtime-only; saved history is never treated as a fresh sensor reading.
 
-The all-item Main list uses a 30-second exponential smoother. Pins retain up to 60 one-minute history buckets, with selectable 5/15/60-minute observed-time windows. Each average is total accepted delta divided by accepted sampled seconds, multiplied by 3,600. Sampled duration is shown rather than assuming a full window has been observed. Bucket boundaries make these approximate rolling windows.
+History retains at most 60 minute buckets per ME, with a sparse item-key index and a conservative memory budget. Busy inventories shorten history when necessary; an overlarge interval is dropped rather than invented as zero. Source status reports a shortened history. Identity is RawName plus DamageValue; legacy AE1 does not expose NBT discrimination.
 
-Only new sensor samples contribute; repeated reads of the OS cache do not add deltas or time. Unchanged-but-fresh sensor heartbeats do contribute known zero changes. Error, unpowered or incomplete readings are unknown, never fabricated zero inventories. A missing item in a valid complete catalog is zero. Outages, sensor boot changes, intervals over ten seconds and OS restarts rebase the first reading without counting the stock difference through the gap. Source changes reset main histories. Historical buckets persist, but current inventory/baselines are runtime-only; they are never restored as fresh data. The history clock excludes OS downtime and is not a wall-clock audit trail.
+## Background operation
 
-## Item buildup alarms
-
-**Menu → Stock alarms → + Add stock alarm** selects any current or registered item. Each alarm chooses **Main** or **Farm**, an enabled flag, trigger amount, hold seconds and a lower rearm amount. It triggers at/above the high threshold only while fresh stock continuously satisfies it. A gap/unpowered source resets the hold. It rearms at/below its lower threshold after acknowledgement; acknowledging a high stock episode does not immediately trigger it again. Withdrawal filtering affects rate estimates, not these inventory thresholds.
-
-Each occurrence creates a persistent queued OK popup on every monitor, including fullscreen and monitors without a Solar farm window. An optional IO output supports **Constant** and **Pattern** signals. Constant length **0**, or Pattern total **0**, continues until dismissal; positive durations stop the output while the popup still waits for acknowledgement. Pattern on/off periods are at least one real second. Choose an optional IO input for dismissal. It must be observed LOW then HIGH after the alert; an already-high/reconnected input does not silently dismiss a saved alert.
-
-OK or that fresh input press closes the occurrence across monitors and stops its signal. Multiple Solar farm alarms sharing an output are combined, keeping the wire ON while any current signal requires it. Outputs still share the OS's normal routing semantics with other apps and always use the existing per-side IO cooldown. Trigger/acknowledgement changes save before physical output intent is sent. Failed saves retain the prior signal/popup for retry.
-
-## Background operation and persistence
-
-Once explicitly installed, Solar farm starts its background service at OS boot without automatically opening a window. Closing its last window leaves rate tracking, subscriptions and alarms running. Selected sources, pins, item identities, filters, appearance, history, alarm episodes and active signal progress are checkpointed in `configs_os_state.txt`. Normal desktop checkpoints retain each window's page and selection. Active alerts restore after reboot; hold intervals begin again from fresh observations and no elapsed downtime is invented.
-
-The app implements none of the farm's Solar farm/HV farm/Use minium switches, recipe rules, UU reserve thresholds or transport conditions. The only outputs it writes are explicitly configured alarm signals.
+After explicit installation, tracking starts at OS boot without opening a window. Closing every Solar farm window leaves measurements running. Sources, pins, identities, settings, rate history and normal window navigation are checkpointed in `configs_os_state.txt`. All item alarms now belong to Level emitter. Solar farm makes **no output writes** and contains no machinery-control conditions.

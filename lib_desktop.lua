@@ -258,6 +258,7 @@ end
 
 -- Returns a complete taskbar line and exact touch regions, with stable window order.
 function Desktop.taskbar(windows, monitor, clock, saved, active)
+    local visible={}; for _,win in ipairs(windows) do if not win.hideTaskbar then visible[#visible+1]=win end end; windows=visible
     local width = monitor.width
     local line, hits = string.rep(" ", width), {}
     local function put(x, label, stop)

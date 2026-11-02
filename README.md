@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v28`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty-one runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v30`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -39,7 +39,7 @@ For direct file copying instead, preserve these paths:
 | Role | Required files |
 | --- | --- |
 | All roles | `lib_network.lua`, `lib_storage.lua` |
-| Central OS | Also `main_os.lua`, `lib_server.lua`, `lib_console.lua`, `lib_io_picker.lua`, `lib_desktop.lua`, `lib_settings.lua`, `lib_sensor_data.lua`, `lib_sensor_server.lua`, `lib_sensor_picker.lua` |
+| Central OS | Also `main_os.lua`, `lib_me.lua`, `lib_server.lua`, `lib_console.lua`, `lib_io_picker.lua`, `lib_desktop.lua`, `lib_settings.lua`, `lib_sensor_data.lua`, `lib_sensor_server.lua`, `lib_sensor_picker.lua` |
 | IO client | Also `clients_io_client.lua`, `lib_io.lua` |
 | Monitor client | Also `clients_monitor_client.lua`, `lib_monitor.lua` |
 | Sensor client | Also `clients_sensor_client.lua`, `lib_sensor.lua`, `lib_sensor_data.lua` |
@@ -68,7 +68,26 @@ These commands install your chosen file as `apps_APP_NAME.lua` and enable only t
 
 Optional apps are [Coffee](documentation_coffee.md), [Switchboard](documentation_switchboard.md), and [Reactors](documentation_reactors.md). Use `inst app coffee`, `inst app switchboard` or `inst app reactors` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers IO, durations and colour settings. Switchboard offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and appearance settings. Reactors selects sensor targets and separate IO switches; see [sensor setup](documentation_sensors.md) and [the reactor guide](documentation_reactors.md), including card-dependent remaining-time data. All three app sources stay unchanged in bundled-v16. Update the OS and endpoint roles to use [wireless relays](documentation_relay.md); existing direct clients remain compatible. Apps, calibration and desktop geometry need no changes for relaying.
 
-### Version 29: Solar farm overview
+### Version 30: combined Solar overview, Level emitter and Screensaver
+
+[Solar farm](documentation_solar_farm.md) now shows farm amounts and farm net rates together in one paginated list. Only HV solar uses the main ME. It starts pinned with Stick enabled; every pin can toggle Stick or be unpinned. Pin item and Menu share the footer with page arrows when needed. The menu contains the ME sources and rate/display settings.
+
+Item alarms are now the separate [Level emitter](documentation_level_emitter.md) app: select any ME item, Under/Over/Exactly, a level and optional hold/reset, then popup/output/dismiss-input settings. Existing Solar rules, pending alerts and output routes migrate automatically. The manual [Screensaver](documentation_screensaver.md) app offers eight animated patterns, always fullscreen: top-left changes design, top-right closes it. Alarm popups stay above it. It rotates designs on each opening and never auto-opens after reboot. Start sorts apps and OS settings alphabetically by their displayed names.
+
+Upload the full v30 package to GitHub and replace/download your single installer paste with the new `install.lua` (**bundled-v30**). Stop the central OS with Ctrl+T and run:
+
+```text
+cd /
+inst server
+inst app level_emitter
+inst app solar_farm
+inst app screensaver
+reboot
+```
+
+Install all three apps before rebooting so saved alarms can migrate before Solar farm changes schema. No endpoint client update is needed. Core role installation still contains **no apps**; these are explicit GitHub downloads. The complete release has 74 flat root files. See the guides for saved-data details and net-rate limitations.
+
+### Version 29: Solar farm overview (superseded by v30)
 
 The optional [Solar farm overview](documentation_solar_farm.md) replaces the planned SMF production dashboard. Select the main and farm ME targets independently, browse all farm items and main-ME net rates, and pin useful items with saved history and per-item colours. Large downward changes are treated as player withdrawals through an adjustable count/percentage filter. Rates are stock-based estimates; farm operating conditions remain external. Item buildup alarms work on either ME with saved OK popups, selectable IO output/dismiss input, Constant/Pattern signals and zero-duration indefinite operation.
 
@@ -211,7 +230,7 @@ reboot
 
 For touch input, use advanced monitors. All attached monitors become independent desktops, e.g. `monitor_13:top` and `monitor_13:left`. A replacement monitor on the same side keeps that desktop's identity. Adjust `textScale` in `configs_monitor.txt` if needed.
 
-The desktop initially has no user apps. `[+]` always offers **OS settings**, where Background, Window border and Taskbar colours can be selected and saved for all monitors. There is no branding text on the background. Graphical screensavers are a future extension; no unimplemented screensaver option is shown. Finish the console-based IO connection test before installing user-specific apps. Role installation never installs a switchboard or coffee timer; `inst app NAME` is an explicit opt-in. The OS loads a user app only when its name is explicitly set to `true` in `enabledApps` in `configs_os.txt`; an old auto-populated app registry does not enable it. The switchboard test fixture is `tests_fixtures_switchboard.lua` and is not installed.
+The desktop initially has no user apps. `[+]` always offers **OS settings**, where Background, Window border and Taskbar colours can be selected and saved for all monitors. There is no branding text on the background. The optional Screensaver app is explicitly opened from Start; it is separate from the static background preference. Finish the console-based IO connection test before installing user-specific apps. Role installation never installs a switchboard or coffee timer; `inst app NAME` is an explicit opt-in. The OS loads a user app only when its name is explicitly set to `true` in `enabledApps` in `configs_os.txt`; an old auto-populated app registry does not enable it. The switchboard test fixture is `tests_fixtures_switchboard.lua` and is not installed.
 
 The taskbar's clock reads Minecraft world time from the OS computer's built-in `os.time()`; no time sensor or extra computer is required. This is the in-game day/night clock, not real-world local time. If that API is unavailable, an online sensor's `gameTime` value remains a fallback. The original `?:??` appeared because the earlier OS waited exclusively for that unimplemented sensor source.
 

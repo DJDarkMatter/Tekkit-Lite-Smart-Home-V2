@@ -61,37 +61,8 @@ Live sensor readings remain runtime-only and must arrive again after an OS/senso
 
 `watchSensor(key, address, {profile="ae_storage"})` requests only native AE storage counters and identity/power fields. The sensor projects before cleaning/serializing, avoiding huge item tables. `ItemsOmitted=true` identifies these projected readings. A concurrent default/full subscriber upgrades the shared target to a full read; removing that subscriber returns to the summary profile. Each target is still polled once. A future stock-monitor app can therefore request the full item list without duplicating sensor computers or hard-wiring another app's configuration. Full item lists remain subject to the documented bounded reading size.
 
-## Other ME apps: item monitors and Solar farm overview
+## Other ME apps
 
-The independent [ME monitors app](documentation_me_monitor.md) is implemented. V29 adds a separate [Solar farm overview](documentation_solar_farm.md), replacing the planned combined SMF/HV dashboard. It selects main and farm ME networks independently and shares their `ae_items` feeds with the existing apps. SMF-specific production measurement is outside its scope.
+The independent [ME monitors](documentation_me_monitor.md) app provides item tiles and coloured lists. [Solar farm](documentation_solar_farm.md) combines farm-ME stock with farm net rates and a main-ME HV solar item, pinned/sticky by default with the same Stick/unpin controls as other pins. [Level emitter](documentation_level_emitter.md) selects any ME network/item for independent level alarms and saved popup/IO signals. All share selected `ae_items` sensor feeds while keeping separate configuration and app state.
 
-All farm items can be browsed, searched and sorted, and all main-ME items have stock-change speed estimates. Pin selected identities for saved history and responsive dashboard cards. Quantities are ordinary decimal numbers. Raw-name/damage bindings support arbitrary UU, solar tiers, minium or other items rather than a fixed product list; Manual item registers currently absent identities. Practical ComputerCraft memory/network/polling bounds still apply.
-
-Rates use signed observed main-ME stock changes. Large downward jumps are treated as player withdrawals through adjustable absolute/percentage rules, excluded from the rate, and followed by a new baseline. The default requires both 64 items and 5 percent; individual pins may override it. Other changes are net additions/consumption. Opposing flows, player deposits and production hidden by withdrawals can affect estimates, so the UI does not call them gross production or per-SMF counts.
-
-The all-item Main list uses a 30-second smoother. Pinned items retain bounded minute buckets and 5/15/60-minute observed-time averages, including accepted sampled duration and excluded-drop counts. Missing, incomplete or unpowered sources stay unknown; a missing item in a complete fresh catalog is zero. Repeated cache reads add no measured time, and boot/outage/sensor-session changes rebase without catching up through unobserved periods. Saved history is retained independently of live telemetry.
-
-Existing Solar farm, HV farm and Use minium switches, the main-ME UU reserve threshold, formatted 1k cell limits, transport bus modes and every other operating condition remain outside the app. It observes items moving or remaining stationary. Absence of flow, a zero ingredient count or an intentional full buffer is not itself an error.
-
-Buildup alarms are independently enabled per selected item and selected ME network, covering both main and farm. Item choice must support current items, previously learned identities and registering a sample/manual raw-name plus damage identity; an item need not currently be present. Persist identities/names without restoring historical quantities as live. A missing item in a valid complete live catalog means zero; unavailable/stale data stays unknown. Never-seen items require a supplied/learned identity rather than an invented full Minecraft item registry.
-
-Alarms use configurable high thresholds, hold intervals and reset/hysteresis thresholds. They reuse Clock-style Constant/Pattern outputs (zero Constant length or Pattern total waits for dismissal), selected IO outputs and fresh-press dismissal inputs, durable queued OK popups and save-before-sync behaviour. Acknowledging an above-threshold episode must not immediately retrigger until the reset condition rearms it. No recipe/switch/control configuration is required for item threshold alarms.
-
-The earlier SMF investigation is retained in the standalone sensor inspection command. Its basic IC2 energy/progress values and GUI/TAB nominal rates are not used by Solar farm. The current app writes only explicitly selected alarm outputs; it adds no SMF instrumentation or transfer-chest requirement.
-
-## Primary version sources
-
-- [OpenCCSensors 1.4.7 AE target discovery](https://github.com/Cloudhunter/OpenCCSensors/blob/96e89c135c846c406f6eea3f7006ac5b81dbcf68/src/openccsensors/common/sensors/AppliedEnergisticsSensor.java)
-- [Native AE access-point counters and item fields](https://github.com/Cloudhunter/OpenCCSensors/blob/96e89c135c846c406f6eea3f7006ac5b81dbcf68/src/openccsensors/common/sensors/targets/appliedenergistics/WirelessTarget.java)
-- [Native inventory slot fields; NBT disabled](https://github.com/Cloudhunter/OpenCCSensors/blob/96e89c135c846c406f6eea3f7006ac5b81dbcf68/src/openccsensors/common/helper/InventoryHelper.java)
-- [Native IC2 mass-fabricator fields](https://github.com/Cloudhunter/OpenCCSensors/blob/96e89c135c846c406f6eea3f7006ac5b81dbcf68/src/openccsensors/common/sensors/targets/industrialcraft/MassFabTarget.java)
-
-These are the pre-Minecraft-1.5 sources, not modern AE2 or CC:Tweaked APIs. Automated checks use simulated ComputerCraft Lua 5.1; live server sensor output, graphics and touch alignment still need in-game verification.
-
-## Responsive counters and totals (v24)
-
-Medium/compact windows show **Bytes used, Bytes free, Items stored, Item room, Item types, Free type slots**, with paging only if needed. This removes the old total card that pushed the final counter onto another page. A large window whose card capacity is at least nine adds **Total bytes**, **Total item storage*** and **Total types***. Very wide windows use three columns. The choice follows content width/height rather than physical monitor block count.
-
-Total bytes is UsedBytes + FreeBytes. Total item storage is UsedCount + FreeCount, meaning currently stored items plus the card's reported headroom. New item types consume metadata overhead, so this is not a guaranteed arbitrary-item capacity. Total types is UsedTypes + FreeTypes: **unique stored identities plus reported free per-cell type slots**. The native counters do not expose occupied per-cell slots across duplicated item types, so this combined indicator is not the actual sum of every cell's physical type capacity. The asterisks refer to this distinction; **Edit → Source / exact figures** explains it in the app. Missing or overflowing terms make the derived total unavailable instead of inventing a number. All values use plain decimal digits.
-
-Sensor and drive addresses are saved immediately when applied; app/window checkpoints retain them through restarts. Received counters and item catalogs are runtime observations and must be refreshed after boot.
+Detailed cell/drive capacity remains in this app. Solar farm adds no machinery conditions, transfer logic, SMF instrumentation or output counting. Zero movement, empty ingredients and intentional full buffers are normal. Its net stock changes do not claim gross crafting throughput; simultaneous production/consumption can cancel. Large withdrawals can be filtered as player actions.

@@ -86,6 +86,81 @@ function Gui.palette(width, height, current, title)
     ui.button(height, "Back", "cancel")
     return ui.lines, ui.hits
 end
+-- Common app forms keep drawing and hit regions together at 12x6 and above.
+function Gui.form(width,height,view,accent,background,panel)
+    local ui=Gui.content(width,height); view.pages=view.pages or {}
+    background,panel=background or 32768,panel or 128
+    ui.style(1,1,width,height,Gui.contrast(background),background)
+    function ui.put(x,y,value,span,center)
+        if y<1 or y>height or span<1 then return end
+        local text=tostring(value):gsub("[%c]"," "):sub(1,span)
+        if center then x=x+math.max(0,math.floor((span-#text)/2)) end
+        ui.lines[y]=ui.lines[y]:sub(1,x-1)..text..ui.lines[y]:sub(x+#text)
+    end
+    function ui.action(y,text,action,value,x1,x2,enabled,bg)
+        ui.button(y,text,action,x1,x2,enabled,bg or panel,nil,value)
+    end
+    function ui.footer(rows)
+        for i,row in ipairs(rows) do ui.action(height,row[1],row[2],row[3],1+math.floor((i-1)*width/#rows),math.floor(i*width/#rows),row[4],row[5]) end
+    end
+    function ui.page(key,count,slots,y,draw)
+        local pages=math.max(1,math.ceil(count/slots))
+        local current=math.max(1,math.min(view.pages[key] or 1,pages)); view.pages[key]=current
+        if pages>1 and draw~=false then
+            local wing=math.max(2,math.floor(width/4))
+            ui.action(y,"<","page",{key=key,page=current-1},1,wing,current>1)
+            ui.action(y,">","page",{key=key,page=current+1},width-wing+1,width,current<pages)
+            ui.put(wing+1,y,current.."/"..pages,width-2*wing,true)
+        end
+        return (current-1)*slots,current,pages
+    end
+    function ui.menu(title,rows,key,footer)
+        ui.heading(title,accent)
+        local slots=#rows<=height-2 and height-2 or height-3
+        local first=ui.page(key,#rows,slots,height-1)
+        for i=1,slots do local row=rows[first+i]; if row then ui.action(i+1,row[1],row[2],row[3],nil,nil,row[4],row[5]) end end
+        ui.footer(footer or {{"Back","home"}})
+    end
+    function ui.info(title,lines,key,back)
+        local wrapped={}
+        for _,line in ipairs(lines) do
+            line=tostring(line):gsub("[%c]"," ")
+            repeat
+                local cut=#line>width and line:sub(1,width):match("^.*()%s")
+                if cut and cut>1 then wrapped[#wrapped+1],line=line:sub(1,cut-1),line:sub(cut+1)
+                else wrapped[#wrapped+1],line=line:sub(1,width),line:sub(width+1) end
+            until line==""
+        end
+        ui.heading(title,accent)
+        local slots=#wrapped<=height-2 and height-2 or height-3
+        local first=ui.page(key,#wrapped,slots,height-1)
+        for i=1,slots do ui.put(1,i+1,wrapped[first+i] or "",width) end
+        ui.footer({{"Back",back}})
+    end
+    function ui.numberPad(title,draft,back)
+        ui.heading(title,accent); ui.put(1,2,draft=="" and "0" or draft,width,true)
+        for i,key in ipairs({"1","2","3","4","5","6","7","8","9","Clr","0","Del"}) do
+            local col,row=(i-1)%4,math.floor((i-1)/4)
+            ui.action(3+row,key,"digit",key,1+math.floor(col*width/4),math.floor((col+1)*width/4),true,accent)
+        end
+        ui.footer({{"Set","setNumber"},{"Back",back}})
+    end
+    function ui.keyboard(k)
+        local bank=k.bank==2 and "1234567890-_/.:" or k.bank==1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
+        ui.heading(k.draft=="" and "Type here" or k.draft:sub(-width),accent)
+        local cols,rows=math.max(4,math.min(10,math.floor(width/2))),math.max(1,math.min(3,height-4))
+        local slots=cols*rows; local pages=math.ceil(#bank/slots); k.page=math.max(1,math.min(k.page or 1,pages))
+        for i=1,slots do local ch=bank:sub((k.page-1)*slots+i,(k.page-1)*slots+i); if ch~="" then
+            local col,row=(i-1)%cols,math.floor((i-1)/cols)
+            ui.action(2+row,ch,"key",ch,1+math.floor(col*width/cols),math.floor((col+1)*width/cols),true,accent)
+        end end
+        for i,row in ipairs({{"ABC","bank"},{"Sp","space"},{"Del","backspace"},{k.page.."/"..pages,"keyPage"}}) do
+            ui.action(height-1,row[1],row[2],nil,1+math.floor((i-1)*width/4),math.floor(i*width/4))
+        end
+        ui.footer({{"Set","saveText"},{"Clr","clearText"},{"Back",k.back}})
+    end
+    return ui
+end
 function Gui.code(colour, fallback)
     for index = 0, 15 do if colour == 2 ^ index then return digits:sub(index + 1, index + 1) end end
     return fallback

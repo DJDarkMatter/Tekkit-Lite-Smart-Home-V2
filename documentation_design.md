@@ -106,7 +106,7 @@ Every monitor desktop has a taskbar:
 
 Apps are single files stored on the OS computer.
 
-The Start popup also offers built-in OS settings, independently of installed apps. It currently selects a static desktop colour without background branding; a graphical screensaver is a future option. Neutral window chrome separates app accents from the desktop. Each app's Settings must offer the reusable UI-colour picker, with its accent saved centrally and shared by all views.
+The Start popup also offers built-in OS settings, independently of installed apps. It currently selects a static desktop colour without background branding; the optional Screensaver app provides manual fullscreen patterns, rotating designs on each opening and never auto-restoring. Neutral window chrome separates app accents from the desktop. Each app's Settings must offer the reusable UI-colour picker, with its accent saved centrally and shared by all views.
 
 The OS installer includes no apps and enables none by default. Apps are user-specific, installed separately and explicitly enabled in `configs_os.txt`. The same installer downloads a requested app from the V2 GitHub repository with `inst app NAME`, so the installer is the only required Pastebin upload. An app file's presence or an older saved registry entry must not cause it to run automatically. Explicitly installed/enabled coffee runs at every OS boot without needing an open window.
 
@@ -165,38 +165,12 @@ This abstraction allows adding IO clients or moving cables without changing apps
 
 The optional [Switchboard](documentation_switchboard.md) starts with paged saved-view cards, Add view and bottom Settings. Adding a client/side creates all sixteen bundled switches, initially OFF, as one saved operation. Empty views offer independent 1–16 column/row selection and per-switch routing to client/side/colour. Preferred grids page at small monitor/window sizes, including 2×2 pages on a 13×7 content area. Names use a responsive touch keyboard. View settings offer rename, switch editing/routing, grid changes, order, All OFF and confirmed deletion. App settings cover UI/background/button-border/unwired colours, density and All OFF across this app only. Bundled tiles retain their wire colours. Shared configuration and output intent survive restarts and window closures; navigation/drafts stay per window. Duplicate routes share one physical state across views and monitors. Adding a copy adopts the current wire state; released wires clear only after their last reference is removed and saved. Bundled-v14 adds live draft previews for every Switchboard colour setting, active/inactive status colours, and stable acknowledgement through routine announcements. Calibration and window/taskbar geometry are unchanged.
 
-## 9. Solar farm overview (v29)
+## 9. Solar farm overview, Level emitter and Screensaver (v30)
 
-The standalone `solar_farm` app observes two independently selected AE1 networks: farm inventory and main-ME speed estimates. SMF-specific output measurement and per-machine attribution are outside its scope. All current items are browsable/searchable/sortable, and up to 64 selected items can be pinned to responsive dashboards with saved history. Sensor feeds are shared with other ME apps through the OS cache.
+The standalone `solar_farm` app selects farm and main AE1 sources independently. Its combined overview lists farm amounts and farm net stock-change rates, with only main-ME HV solar included from main. HV starts pinned with Stick enabled; any pin may toggle Stick or be unpinned. Sticky rows remain above scrolling items when the group fits, and overflow pages keep every item reachable. No other main item is shown. Narrow windows use two rows per item and paginated four-button footers; larger windows use aligned columns and Pin item/Menu when all rows fit. Main/farm sources are in Menu. Pins, item colours, source selections, average windows, withdrawal filters and bounded history persist. Current inventories and rate baselines remain runtime-only. See documentation_solar_farm.md.
 
-Main-ME rates are signed stock-change estimates. Large downward movements are treated as player withdrawals when they satisfy both configured count and percentage thresholds; their intervals are excluded and the next sample rebases to the new stock. Defaults are 64 items and 5 percent, adjustable globally or per pin. Small decreases remain consumption. Transfers/crafting may offset additions, and masked production cannot be recovered or attributed to individual machines. All-item lists use a 30-second smoother; pins save bounded minute buckets and 5/15/60-minute observed-time averages. Missing/stale periods stay unknown; boot/session/source changes rebase without catch-up spikes.
+Rates are net observations, not gross throughput or recipe-equivalent production. Simultaneous flow can cancel. Large downward movements satisfying count and percentage filters are treated as player withdrawals. Outages, source reboots and sampling gaps rebase without false stock differences. Farm machinery conditions, Solar farm/HV farm/Use minium switches, reserves and transfer logic remain external.
 
-Observe flow without implementing the installation's Solar farm, HV farm, Use minium switches, UU reserve rules, preformatted-cell buffer limits or other machinery-control conditions. Stack-mode bus/chest/bus connections are retained. No-flow, empty ingredients and intentional full buffers are normal.
+`level_emitter` owns all item alarms independently: arbitrary ME target and present/registered item, Under/Over/Exactly, threshold, hold and optional reset, named multiple rules, Constant/Pattern output and fresh-edge dismiss input. Persistent modal OK popups behave like Clock alarms. Zero duration continues until acknowledgement. Old Solar alarms migrate transactionally, preserving routes and pending episodes; main-only items belong here. Monitoring continues with windows closed. See documentation_level_emitter.md.
 
-Configurable buildup alarms work per item on either ME, including currently absent items registered by raw-name/damage identity. Selected IO output/dismiss input, Constant/Pattern signalling, zero-duration indefinite signalling and queued persistent OK popups follow Clock behaviour. Fresh uninterrupted high stock must satisfy a hold interval, and a lower reset threshold prevents immediate re-alerting after acknowledgement. Shared Solar farm alarm signals combine on a common wire. These are the app's only output writes.
-
-Tracking and alarms continue with windows closed. Configuration, selected identities, history and pending alert/signal state survive restarts; current inventories and rate baselines are runtime-only. Detailed behavior and setup are in documentation_solar_farm.md. The earlier read-only sensor diagnostic remains available independently.
-
-## 10. Persistence
-
-System handles crashes/restarts gracefully:
-- OS saves app state and window layouts to configs_os_state.txt at least every second while running; important actions and transitions save immediately
-- Saved: window layouts, app registry, production totals, switch states, coffee timers/counters
-- On restart, OS restores state and recalculates all outputs
-- All clients reconnect and re-announce themselves
-
-## 11. Future Expansion
-
-New subsystems (ME integration, new farms, etc.) added by:
-1. Adding new sensor client or IO client
-2. Creating a new app file that uses OS IO/state APIs
-3. Registering the app
-
-No core changes needed for new features.
-## Implementation Status
-
-This document is the target architecture, not a claim that every feature is implemented. The repaired runtime, installation steps, current limitations and remaining apps are described in [README.md](README.md). The original-code review and explicit design decisions are in [REVIEW.md](documentation_review.md); app hooks and wire messages are in [API.md](documentation_api.md).
-
-## Implemented desktop controls
-
-The [desktop guide](documentation_desktop.md) describes the coloured bottom taskbar, left title and top-right controls, two-step graphical grid/position selection through 3×3, two-corner custom sizing, coarse placement followed by one-cell move nudges, normalized saved layouts and adaptive app views. Resize, Move and Fullscreen stay on the layout menu's first level. Custom sizing taps/nudges/confirms each corner in turn; only the second confirmation changes the window. Boundary arrows disappear. Fullscreen is saved per window, uses every monitor cell and preserves the framed restore chain. The OS composes foreground/background colour surfaces per monitor; clients only paint and relay input. Ordered frames, buffered events and input revisions prevent stale screens/touches from reversing UI actions. Optional measured touch calibration stays on each monitor computer. Coffee is a declared background service; ordinary apps run only while at least one view exists.
+`screensaver` is an explicitly opened app, always fullscreen, with per-monitor pattern selection, invisible top-left cycle/top-right exit, next-design rotation and no cross-monitor taskbar presence. Its windows are transient and never restored automatically; underlying windows stay saved. Popups appear above animation. Eight cell-based repeating patterns adapt to monitor size and old modem packet limits. Existing textScale/calibration/taskbar geometry are unchanged. See documentation_screensaver.md. Start sorts displayed app names alphabetically, including OS settings.
