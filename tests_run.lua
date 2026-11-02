@@ -14,11 +14,12 @@ local function serialize(value, seen)
     if kind == "number" or kind == "boolean" or kind == "nil" then return tostring(value) end
     assert(kind == "table", "Cannot serialize " .. kind)
     seen = seen or {}
-    assert(not seen[value], "Cyclic table")
+    -- Legacy CraftOS keeps a single visited set for the whole serialization,
+    -- rejecting repeated references as well as actual ancestor cycles.
+    assert(not seen[value], "Cannot serialize table with recursive entries")
     seen[value] = true
     local parts = {}
     for key, item in pairs(value) do parts[#parts + 1] = "[" .. serialize(key, seen) .. "]=" .. serialize(item, seen) end
-    seen[value] = nil
     return "{" .. table.concat(parts, ",") .. "}"
 end
 local function unserialize(value)
@@ -936,7 +937,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v27", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v28", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()

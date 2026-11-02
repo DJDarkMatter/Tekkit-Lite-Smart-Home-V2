@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v27
+-- SmartHome OS installer: bundled-v28
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -3681,7 +3681,9 @@ function Sensor.inspect(selectedSide, selectedTarget)
     end
     for i=1,math.min(32,#selected) do
         local source=selected[i]
-        report.samples[i]={side=source.side,card=source.card,target=source.target,readings={}}
+        -- Old CraftOS rejects a table appearing twice, even without a cycle.
+        -- Catalog and sample metadata need independent copies, including Position.
+        report.samples[i]={side=source.side,card=source.card,target=assert(Data.clean(source.target)),readings={}}
     end
     -- Two dated samples expose changing counters without assuming any rate field
     -- means real production. The report never samples a GUI or the TAB screen.
@@ -4153,7 +4155,7 @@ end
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v27")
+print("SmartHome installer: bundled-v28")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")

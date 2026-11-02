@@ -73,7 +73,7 @@ Typed item snapshots allow up to 8,192 entries, 60,000 cleaned values and 64 twe
 
 ## Read-only local inspection (bundled-v26)
 
-For investigating custom machine interfaces, use the existing sensor client program's inspection mode. On a sensor computer with an IndustrialCraft card in range of the SMFs, stop its normal program with Ctrl+T, install the current sensor role using the fresh bundled-v26 installer, then run:
+For investigating custom machine interfaces, use the existing sensor client program's inspection mode. On a sensor computer with an IndustrialCraft card in range of the SMFs, stop its normal program with Ctrl+T, install the current sensor role using the fresh bundled-v28 installer, then run:
 
 ```text
 cd /
@@ -100,3 +100,9 @@ All selects all targets; a side selects that side; side plus exact target select
 Bounds are explicit: at most 32 sampled targets and 64 catalog summaries per report, 32 method names per side, normally 16 KiB per full detail reading and 128 KiB for the complete report. Excessive details use a marked scalar preview, prioritizing numeric/boolean fields; a full report can omit payloads with an explicit error. Omitted target counts are recorded, so a larger installation can inspect individual sides/targets separately. These diagnostic bounds are not a four-machine limit for the planned production UI. Failures are recorded as errors rather than fabricated zero counters.
 
 The report is incrementally checkpointed, so interrupted inspections can retain a partial report. If the first report cannot be written, the command fails before issuing sensor queries. It does not read the player's Minecraft GUI or TAB overlay: those can only be compared with data actually exposed by a peripheral/sensor/server integration.
+
+### Legacy report saving repair (bundled-v28)
+
+If v26/v27 stops after `Sample 1` with `textutils:148: Cannot serialize table with recursive entries`, update the sensor role from the v28 installer and rerun inspection. The report had reused one target metadata object in its discovery list and sample entry. Legacy CraftOS rejects that repeated reference even when there is no cycle. The sample now owns a separate complete copy, including nested position metadata. The selected card and detected machine can remain in place.
+
+Incoming native readings are copied independently for each timestamp. Repeated sub-tables are duplicated for serialization; a true cycle or other unsupported detail produces the existing explicit Partial scalar preview, preserving available numeric counters rather than crashing or inventing values. Report format, two-pass timing, read-only operation and size bounds remain the same. Update only the inspected sensor role, collect the completed report, then reboot.

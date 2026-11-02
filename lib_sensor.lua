@@ -350,7 +350,9 @@ function Sensor.inspect(selectedSide, selectedTarget)
     end
     for i=1,math.min(32,#selected) do
         local source=selected[i]
-        report.samples[i]={side=source.side,card=source.card,target=source.target,readings={}}
+        -- Old CraftOS rejects a table appearing twice, even without a cycle.
+        -- Catalog and sample metadata need independent copies, including Position.
+        report.samples[i]={side=source.side,card=source.card,target=assert(Data.clean(source.target)),readings={}}
     end
     -- Two dated samples expose changing counters without assuming any rate field
     -- means real production. The report never samples a GUI or the TAB screen.

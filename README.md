@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v27`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v28`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -67,6 +67,12 @@ The installer decodes the API's base64 content using Lua 5.1, checks the filenam
 These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
 
 Optional apps are [Coffee](documentation_coffee.md), [Switchboard](documentation_switchboard.md), and [Reactors](documentation_reactors.md). Use `inst app coffee`, `inst app switchboard` or `inst app reactors` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers IO, durations and colour settings. Switchboard offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and appearance settings. Reactors selects sensor targets and separate IO switches; see [sensor setup](documentation_sensors.md) and [the reactor guide](documentation_reactors.md), including card-dependent remaining-time data. All three app sources stay unchanged in bundled-v16. Update the OS and endpoint roles to use [wireless relays](documentation_relay.md); existing direct clients remain compatible. Apps, calibration and desktop geometry need no changes for relaying.
+
+### Version 28: sensor report saving on legacy CraftOS
+
+Fixes the inspection crash `textutils:148: Cannot serialize table with recursive entries` after the first Sample line. The report reused target metadata in both its catalog and samples, and older CraftOS rejects repeated table references. Each sample now gets an independent copy, including its position. Native readings with shared sub-tables remain fully copied; genuinely cyclic readings retain bounded scalar counters with an explicit Partial status.
+
+Replace/download the one bundled-v28 installer and run `inst sensor` on the sensor computer, then retry `clients_sensor_client.lua inspect`. After it reports Saved, run `pastebin put diagnostics_sensor.txt` and reboot to resume its normal service. Existing peripheral/card placement can stay as detected. Only this sensor role needs reinstalling for the repair. The full package includes all 63 files and retains v27 fullscreen/corner controls.
 
 ### Version 27: corner nudges and fullscreen
 

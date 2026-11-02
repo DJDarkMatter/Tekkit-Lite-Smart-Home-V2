@@ -626,7 +626,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             details={["1,0,0"]={Name="Mass Fabricator",RawName="tile.blockMachine.massFab",Energy=19333170,MaxEnergy=1100000,Progress=100,ProducedTotal=100},
                 ["2,0,0"]={Heat=42,MaxHeat=10000,Active=false,Output=0}},errors=options.errors,hang=options.hang}
         if options.configure then options.configure(card) end
-        local comp=bus.computer(14,"sensor",{sensors=options.noSensor and {} or {top=card}})
+        local comp=bus.computer(14,"sensor",{sensors=options.noSensor and {} or {[options.side or "top"]=card}})
         local sensorConfig=serialize({clientId="keep_sensor_id",bootCounter=52,custom="keep"})
         local networkConfig=serialize({networkId="keep_network",channel=45231,serverId=10})
         comp.disk.files["configs_sensor.txt"],comp.disk.files["configs_network.txt"]=sensorConfig,networkConfig
@@ -671,6 +671,43 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(first.data.ProducedTotal,100); equal(second.data.ProducedTotal,107)
         assert(second.receivedAt-first.receivedAt>=2)
         equal(first.productionRate,nil); equal(second.productionRate,nil)
+    end
+    function tests.sensor_inspection_saves_the_same_target_and_position_in_catalog_and_samples_under_legacy_serialization()
+        local t=inspectionFixture({side="right",configure=function(card)
+            local position={X=0,Y=-1,Z=-1}
+            card.targets={["0,-1,-1"]={Name="Mass Fabricator",RawName="tile.blockMachine.massFab",Position=position}}
+            card.details={["0,-1,-1"]={Name="Mass Fabricator",Position=position,ProducedTotal=345594}}
+        end})
+        assert(t.start()); local report=t.finish()
+        equal(report.ports[1].side,"right"); equal(#report.samples,1)
+        equal(report.ports[1].targets[1].key,"0,-1,-1"); equal(report.ports[1].targets[1].position.Y,-1)
+        local sample=report.samples[1]
+        equal(sample.side,"right"); equal(sample.target.key,"0,-1,-1"); equal(sample.target.position.Z,-1)
+        for _,reading in ipairs(sample.readings) do
+            equal(reading.status,"ok"); equal(reading.data.ProducedTotal,345594); equal(reading.data.Position.Y,-1)
+        end
+        assert(sample.readings[2].receivedAt-sample.readings[1].receivedAt>=2)
+    end
+    function tests.sensor_inspection_copies_shared_native_tables_and_keeps_scalars_if_details_contain_a_real_cycle()
+        for _,cyclic in ipairs({false,true}) do
+            local t=inspectionFixture({configure=function(card)
+                local shared={Energy=575260758}
+                local reading={ProducedTotal=123,Energy=19333170,First=shared,Second=shared}
+                if cyclic then shared.Parent=reading end
+                card.details["1,0,0"]=reading
+            end})
+            assert(t.start()); local report=t.finish()
+            for _,reading in ipairs(report.samples[1].readings) do
+                equal(reading.data.ProducedTotal,123); equal(reading.data.Energy,19333170)
+                if cyclic then
+                    equal(reading.status,"partial"); equal(reading.partial,true); assert(reading.error)
+                    equal(reading.data.First,nil); equal(reading.data.Second,nil)
+                else
+                    equal(reading.status,"ok"); equal(reading.data.First.Energy,575260758)
+                    equal(reading.data.Second.Energy,575260758)
+                end
+            end
+        end
     end
     function tests.sensor_inspection_reports_timeouts_missing_cards_and_no_sensors_without_hanging_or_returning_zero()
         for _,options in ipairs({{hang="getTargetDetails"},{errors={getTargetDetails="No access"}},{noSensor=true},{configure=function(card) card.card=nil end}}) do
