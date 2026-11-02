@@ -209,3 +209,13 @@ Changed files:
 - `documentation_file_map.md`
 
 Solar farm state is now schema 2. Level emitter owns `appStates.level_emitter`, including imported Solar alarms, exact ME/item/IO bindings and pending signals. It preserves legacy logical output names during the atomic migration. Solar farm keeps selected sources, farm pins, per-pin Stick preferences, HV pin/Stick preference, withdrawal settings and sparse history. Screensaver keeps only its next-design rotation in `appStates.screensaver`; its windows never restore automatically. Normal app windows and other app namespaces remain in the existing central checkpoint.
+
+## Solar farm legacy compatibility and dashboard (v31)
+
+The complete release has **75 unique root files**. The installer is **bundled-v31** with 21 core sources and no user apps. Update the central server role and `solar_farm`; existing clients and other apps need no reinstall from v30.
+
+New: `tests_me.lua`.
+
+Changed: `apps_solar_farm.lua`, `lib_me.lua`, `install.lua`, `tools_build_installer.py`, `tests_run.lua`, `tests_solar_farm.lua`, `README.md`, `documentation_api.md`, `documentation_design.md`, `documentation_solar_farm.md`, `documentation_review.md`, `documentation_file_map.md`.
+
+`lib_me.lua` removes the LuaJ frontier-pattern crash and contains reader/parser failures. Solar farm retains schema 2 with an optional auto/manual HV-selection flag, existing sources and pin/Stick state. The overview gains source-health indicators, adaptive stock/capacity/movement summaries, selected-window changes and a signed HV history plot. The full farm list is independent of picker searches; farm HV and main output retain separate origins. No IO/client protocol or hardware behavior changes.

@@ -53,7 +53,7 @@ local function catalog(reading)
     local data=reading.data or {}
     if reading.status~="ok" then return nil,reading.error or reading.status end
     if data.Powered==false then return nil,"ME unpowered" end
-    if data.ItemsOmitted or type(data.Items)~="table" then return nil,"Waiting for complete item list" end
+    if data.ItemsOmitted or data.ItemsComplete==false or type(data.Items)~="table" then return nil,"Waiting for complete item list" end
     if data.ItemsFormat and data.ItemsFormat~="ae_compact_v1" then return nil,"Unknown item format" end
     local compact=data.ItemsFormat=="ae_compact_v1"
     local result,seen,total={},0,0
@@ -76,7 +76,7 @@ local function catalog(reading)
     return result,nil,total
 end
 
-local Me={MAX=MAX,copy=copy,restore=restore,number=number,integer=integer,digits=digits,amount=amount,rateText=rateText,
+local Me={safePatterns=true,MAX=MAX,copy=copy,restore=restore,number=number,integer=integer,digits=digits,amount=amount,rateText=rateText,
     colour=colour,textValue=textValue,label=label,address=address,route=route,sourceKey=sourceKey,itemKey=itemKey,
     itemValid=itemValid,identity=identity,find=find,catalog=catalog}
 function Me.boots(api)
@@ -93,16 +93,21 @@ function Me.snapshot(cache,api,binding,boots)
     local saved=cache[key] or {key=key,items={}}
     saved.address=sourceKey(binding)
     cache[key]=saved
-    local reading=api.getSensorReading(binding)
+    local ok,reading=pcall(api.getSensorReading,binding,{profile="ae_items"})
+    if not ok or type(reading)~="table" then
+        saved.status,saved.error,saved.sequence,saved.time="error","Cannot read ME: "..tostring(reading),nil,nil
+        return saved
+    end
     local oldStatus=saved.status
     saved.status,saved.error,saved.age=reading.status,reading.error,reading.age
     saved.sequence,saved.time=reading.sequence,reading.time
     if reading.status~="ok" then return saved end
     if reading.data and reading.data.Powered==false then saved.status,saved.error="unpowered","ME unpowered"; return saved end
     if oldStatus~="ok" or saved.dataSequence~=reading.dataSequence then
-        local items,err,total=catalog(reading)
-        if not items then saved.status,saved.error="unsupported",err; return saved end
+        local parsed,items,err,total=pcall(catalog,reading)
+        if not parsed or not items then saved.status,saved.error="unsupported",tostring(parsed and err or items); return saved end
         saved.items,saved.total,saved.dataSequence=items,total,reading.dataSequence
+        saved.types=0; for _ in pairs(items) do saved.types=saved.types+1 end
     end
     saved.data=reading.data
     return saved
@@ -112,11 +117,18 @@ function Me.count(snapshot,key)
     return snapshot.items[key] and snapshot.items[key].count or 0
 end
 function Me.isHVSolar(item)
-    local raw=(item.raw or ""):gsub("(%l)(%u)","%1 %2")
-    local name=(raw.." "..(item.name or "")):lower()
+    if type(item)~="table" then return false end
+    local function words(value)
+        if type(value)~="string" then return "" end
+        return value:gsub("(%u)(%u%l)","%1 %2"):gsub("(%l)(%u)","%1 %2"):lower()
+    end
+    local name=words(item.raw).." "..words(item.name)
     if not name:find("solar",1,true) then return false end
     local flat=name:gsub("[^%w]","")
-    return name:match("%f[%a]hv%f[%A]")~=nil or flat:find("highvoltage",1,true)~=nil or flat:find("hochspannung",1,true)~=nil
+    -- LuaJ 2.0.3's frontier matcher indexes -1 at the start of a string. Use
+    -- padded words and plain finds, including for raw names such as HVSolarArray.
+    local padded=" "..name:gsub("[^a-z0-9]"," "):gsub(" +"," ").." "
+    return padded:find(" hv ",1,true)~=nil or flat:find("highvoltage",1,true)~=nil or flat:find("hochspannung",1,true)~=nil
 end
 -- Sparse minute buckets share valid coverage for every item in a complete ME
 -- snapshot. Only nonzero deltas and per-item excluded intervals need records.

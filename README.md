@@ -12,7 +12,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty-one runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v30`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty-one runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v31`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -68,7 +68,24 @@ These commands install your chosen file as `apps_APP_NAME.lua` and enable only t
 
 Optional apps are [Coffee](documentation_coffee.md), [Switchboard](documentation_switchboard.md), and [Reactors](documentation_reactors.md). Use `inst app coffee`, `inst app switchboard` or `inst app reactors` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers IO, durations and colour settings. Switchboard offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and appearance settings. Reactors selects sensor targets and separate IO switches; see [sensor setup](documentation_sensors.md) and [the reactor guide](documentation_reactors.md), including card-dependent remaining-time data. All three app sources stay unchanged in bundled-v16. Update the OS and endpoint roles to use [wireless relays](documentation_relay.md); existing direct clients remain compatible. Apps, calibration and desktop geometry need no changes for relaying.
 
-### Version 30: combined Solar overview, Level emitter and Screensaver
+### Version 31: Solar farm repair for legacy LuaJ and a live dashboard
+
+Fixes the HV detector crash in LuaJ 2.0.3 that stopped processing the farm ME and also broke the HV item picker. The detector now uses safe plain word matching. One bad source no longer blocks the other source, and picker searches no longer filter the overview accidentally.
+
+The overview includes source-health indicators and clearer unknown/empty states. Medium windows add HV output and farm stock/type/byte summaries. Larger windows add farm movement counts, selected-window item changes and a signed HV trend chart. Every farm item remains eligible for the list; if HV panels exist in the farm too, that farm stock/rate is separate from the main-ME output row. Pin/Stick controls and existing source selections are preserved. HV panel type / detection explains the main-ME binding and offers Auto.
+
+Upload the full v31 ZIP contents to GitHub and replace/download the one installer paste with this release's **bundled-v31** `install.lua`. On the central OS, stop with Ctrl+T and run:
+
+```text
+cd /
+inst server
+inst app solar_farm
+reboot
+```
+
+The central core update is required because the faulty matcher was in `lib_me.lua`. Existing clients, Level emitter and Screensaver need no reinstall when upgrading from v30. The complete release has **75 flat root files**, 21 bundled core sources and no bundled apps. Validation includes native Lua 5.1 and focused LuaJ 2.0.3 checks; see documentation_review.md.
+
+### Version 30: combined Solar overview, Level emitter and Screensaver (superseded by v31)
 
 [Solar farm](documentation_solar_farm.md) now shows farm amounts and farm net rates together in one paginated list. Only HV solar uses the main ME. It starts pinned with Stick enabled; every pin can toggle Stick or be unpinned. Pin item and Menu share the footer with page arrows when needed. The menu contains the ME sources and rate/display settings.
 

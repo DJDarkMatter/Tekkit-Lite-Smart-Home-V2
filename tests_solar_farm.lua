@@ -70,7 +70,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         t.click("pinColour"); t.click("colour",32); equal(m.colour,32)
         t.click("field","dropCount"); t.view().number.draft="1"; t.click("setNumber"); equal(m.dropCount,1)
         t.click("field","dropPercent"); t.view().number.draft="0"; t.click("setNumber"); equal(m.dropPercent,0)
-        t.view().screen="home"; equal(t.content()[4]:find("Panels",1,true)~=nil,true)
+        t.view().screen="home"; assert(t.text():find("Panels",1,true))
         t.farm[2].Size=63; t.advance(2); local _,_,drops=farm(t,"solar.lv"); equal(drops,1)
         t.view().screen="editPin"; t.click("unpin"); equal(#t.state.metrics,0)
     end
@@ -82,7 +82,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         t.view().screen="home"; assert(t.text():find("Future Solar",1,true))
         t.click("pin"); t.click("filters"); t.click("newManual")
         t.view().manual={raw="solar.hv",damage=0,name="HV Solar"}; t.click("saveManual")
-        equal(#t.state.metrics,1,"Registering the selected HV identity must not create a hidden duplicate farm pin")
+        equal(#t.state.metrics,2,"A registered farm HV item is separate from the main-ME output pin")
         t.click("menu"); t.click("chooseHV")
         for _,hit in ipairs(t.content().hits) do if hit.action=="selectItem" then equal(hit.value.raw,"solar.hv") end end
     end
@@ -116,13 +116,13 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         local t=setup("solar_farm",true,{state=Me.copy(old)}); equal(t.state.version,2); equal(t.state.hv.item.raw,"solar.hv"); equal(#t.state.metrics,0)
         old.alarms={{id=1}}; local ok,err=pcall(setup,"solar_farm",true,{state=old}); equal(ok,false); assert(tostring(err):find("level_emitter",1,true)); equal(old.version,1); equal(#old.alarms,1)
     end
-    function tests.solar_overview_adds_new_farm_items_and_keeps_hv_out_of_farm_duplicates()
+    function tests.solar_overview_adds_new_farm_items_and_keeps_hv_sources_separate()
         local t=setup("solar_farm",true); t.configure(); t.content()
         t.farm[#t.farm+1]={Name="New gear",RawName="gear.new",DamageValue=0,Size=7}; t.advance(2)
         assert(t.text():find("New gear",1,true))
         t.farm[#t.farm+1]={Name="HV Solar",RawName="solar.hv",DamageValue=0,Size=12}; t.advance(2)
-        local count=0; for _,hit in ipairs(t.content().hits) do if hit.action=="item" and hit.value.item and hit.value.item.raw=="solar.hv" then count=count+1 end end
-        equal(count,1)
+        local found={}; for _,hit in ipairs(t.content().hits) do if hit.action=="item" and hit.value.item and hit.value.item.raw=="solar.hv" then found[hit.value.key]=true end end
+        assert(found.hv and found[Me.itemKey("solar.hv",0,"HV Solar")])
     end
     function tests.v30_installer_fetches_three_real_apps_via_github_api_without_bundling_or_autostarting_screensaver()
         local bus=newBus(); local central=bus.computer(10,"server")
@@ -174,5 +174,65 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         equal(t.state.metrics[1].stick,true); equal(t.state.hv.pinned,false); equal(t.state.hv.stick,false)
         t.view().key,t.view().screen=t.state.metrics[1].item.key,"editPin"; t.central.disk.failWrite=true; t.click("stick")
         equal(t.state.metrics[1].stick,true); t.central.disk.failWrite=false
+    end
+    function tests.solar_hv_picker_and_automatic_detection_work_in_legacy_luaj_without_blocking_farm_items()
+        local t=setup("solar_farm"); t.configure()
+        equal(t.state.hv.item.raw,"solar.hv")
+        local text=t.text(); assert(text:find("Minium Shard",1,true) and text:find("UU Matter",1,true) and text:find("LV Solar",1,true))
+        t.click("menu"); t.click("chooseHV"); assert(t.text():find("HV Solar",1,true)); assert(t.text():find("main ME",1,true))
+        t.click("autoHV"); t.advance(1); equal(t.state.hv.selection,"auto"); equal(t.state.hv.item.raw,"solar.hv")
+        assert(t.text():find("Minium Shard",1,true)); t.view().screen="menu"; t.click("chooseHV")
+        t.click("selectItem",function(v) return v.raw=="solar.hv" end); equal(t.state.hv.selection,"manual")
+        t.paint(); assert(not table.concat(t.top.lines,"\n"):find("App render failed",1,true))
+        assert(not table.concat(t.central.log,"\n"):find("solar_farm.background failed",1,true))
+        t.click("menu"); t.click("chooseHV"); t.click("autoHV"); t.advance(3)
+        local key=t.state.hv.item.key
+        t.main[2]={Name="Other HV Solar",RawName="solar.other",DamageValue=0,Size=12}; t.advance(5)
+        equal(t.state.hv.item.key,key,"A temporary absence must not silently change the measured output identity")
+        t.view().screen="menu"; t.click("chooseHV"); t.click("autoHV"); t.advance(3); equal(t.state.hv.item.raw,"solar.other")
+    end
+    function tests.solar_picker_search_never_filters_the_all_farm_overview()
+        local t=setup("solar_farm",true); t.configure(); t.click("menu"); t.click("chooseHV"); t.click("filters"); t.click("search")
+        t.view().keyboard.draft="HV"; t.click("saveText"); t.click("selectItem",function(v) return v.raw=="solar.hv" end)
+        local text=t.text(); assert(text:find("UU Matter",1,true) and text:find("LV Solar",1,true) and text:find("Minium Shard",1,true))
+    end
+    function tests.solar_bad_main_feed_is_reported_while_farm_inventory_and_rates_continue_and_recovery_rebases()
+        local t=setup("solar_farm",true); t.configure()
+        local read=t.api.getSensorReading; local broken=true
+        t.api.getSensorReading=function(a,options) if broken and a.target=="main" then error("ME reader disconnected") end; return read(a,options) end
+        t.farm[2].Size=70; t.advance(2); equal(farm(t,"solar.lv"),6)
+        local text=t.text(); assert(text:find("Main: Error",1,true)); assert(text:find("UU Matter",1,true)); assert(text:find("Minium Shard",1,true))
+        t.view().screen="sourceInfo"; local details=t.text():gsub("%s+"," "); assert(details:find("ME reader disconnected",1,true)); equal(t.state.sources.main.target,"main")
+        t.main[2].Size=500000; broken=false; t.advance(2); equal(hv(t),0)
+        t.main[2].Size=500002; t.advance(2); equal(hv(t),2)
+    end
+    function tests.solar_unconfigured_empty_partial_and_unpowered_feeds_explain_their_status_and_picker_never_crashes()
+        local t=setup("solar_farm",true,{width=13,height=7}); assert(t.text():find("Farm: Not set",1,true))
+        t.click("menu"); t.click("chooseHV"); assert(t.text():find("ME source",1,true) or t.text():find("unconfigured",1,true))
+        t.view().screen="home"; t.configure(); t.data.farm.ItemsComplete=false; t.advance(2)
+        assert(t.text():find("Farm: Incompl",1,true))
+        t.data.farm.ItemsComplete=true; t.data.farm.Items={}; t.advance(2); assert(t.text():find("Farm ME is em",1,true))
+        t.data.main.Powered=false; t.advance(2); assert(t.text():find("Main: Unpower",1,true))
+        t.view().screen="menu"; t.click("chooseHV"); assert(not t.text():find("App render failed",1,true))
+    end
+    function tests.solar_large_dashboard_shows_farm_totals_direction_changes_bytes_and_hv_history()
+        local t=setup("solar_farm",true,{width=80,height=30}); t.data.farm.UsedBytes=256; t.data.farm.FreeBytes=768; t.configure()
+        for _=1,12 do t.main[2].Size=t.main[2].Size+8; t.farm[1].Size=t.farm[1].Size-10; t.farm[2].Size=t.farm[2].Size+2; t.advance(2) end
+        local text=t.text(); assert(text:find("HV OUTPUT",1,true)); assert(text:find("FARM STOCK",1,true)); assert(text:find("FARM MOVEMENT",1,true))
+        assert(text:find("1 rising / 1 falling",1,true)); assert(text:find("Bytes 25%",1,true)); assert(text:find("Change 15m",1,true)); assert(text:find("HV net trend",1,true))
+        local lime=false; for _,style in ipairs(t.content().styles) do if style.y>=10 and style.y<=12 and style.bg==32 then lime=true end end; assert(lime)
+        assert(not text:find("Iron Ingot",1,true)); assert(not text:find("[Ee][+-]%d"))
+        t.view().screen="menu"; t.click("period"); t.view().screen="home"; assert(t.text():find("/m",1,true))
+    end
+    function tests.solar_dashboard_and_hv_picker_fit_all_supported_small_and_large_content_sizes()
+        local t=setup("solar_farm",true); t.configure()
+        for _,size in ipairs({{12,6},{13,7},{24,10},{36,6},{42,14},{56,24},{80,30},{128,64}}) do
+            for _,screen in ipairs({"home","items","sourceInfo"}) do
+                t.view().screen,t.view().purpose,t.view().pages=screen,"hv",{}
+                local lines=t.content(nil,size[1],size[2]); equal(#lines,size[2])
+                for y=1,size[2] do equal(#lines[y],size[1],screen.." row width") end
+                for _,hit in ipairs(lines.hits) do assert(hit.x1>=1 and hit.x2<=size[1] and (hit.y1 or hit.y)>=1 and (hit.y2 or hit.y)<=size[2],screen) end
+            end
+        end
     end
 end

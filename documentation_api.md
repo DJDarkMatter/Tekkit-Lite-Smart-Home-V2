@@ -266,3 +266,12 @@ Optional app-definition booleans `fullscreenOnly`, `transientWindow` and `hideTa
 `lib_me.lua` shares legacy AE item normalization, RawName/damage identity, plain number formatting, powered/complete snapshot checks, boot-aware cache keys and sparse bounded minute history. `Me.snapshot(cache,api,address,boots?)` returns a mutable runtime snapshot; apps store separate previous time/sequence/items records rather than assuming that snapshot is immutable. Fresh heartbeats count zero changes; duplicate sequence/time reads do not. `Me.Rates.record/sum/valid` use shared observed-time coverage plus sparse per-item deltas/excluded withdrawals. These helpers are installed on the central OS and apps remain one-file downloads.
 
 `api.ui.form(...)` adds common menus, wrapped details, paginated rows, number pad and touch keyboard to existing Gui surfaces. Drawing and hit regions use the same geometry. Existing app APIs, monitor text scale and hardware IO cooldown remain unchanged.
+
+
+## v31 legacy ME compatibility
+
+`Me.safePatterns == true` identifies the helper with a LuaJ-safe HV classifier. The old frontier matcher could raise a Java array-bound error at the start of a string in LuaJ 2.0.3; native Lua 5.1 allowed it. The replacement normalises camel-case/acronym boundaries and uses padded words/plain finds. Solar farm checks this capability before touching saved state, so an app-only update with an old helper requests the central core update explicitly.
+
+`Me.snapshot` explicitly requests the item profile, contains reader/parser exceptions as an unknown/error snapshot, rejects `ItemsComplete == false`, and exposes distinct `types` alongside total count. Its inventories remain runtime-only. Solar farm isolates per-source work so HV detection/Main errors cannot prevent Farm sampling, and picker queries never filter the overview. Its optional saved `hv.selection` is `auto` or `manual`; existing selected identities migrate conservatively to manual. No app-state schema reset is needed.
+
+The host test runner accepts a substring filter using the global `SMART_HOME_TEST_FILTER` or a host environment variable. For LuaJ 2.0.3, set the Lua global because its old `os.getenv` does not reliably expose host environment values. Normal `lua5.1 tests_run.lua` still runs the complete suite.
