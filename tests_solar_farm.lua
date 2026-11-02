@@ -90,7 +90,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         local t=setup("solar_farm",true); t.configure()
         for _=1,1900 do t.main[2].Size=t.main[2].Size+1; t.advance(2) end
         equal(#t.state.history.main.buckets,60); assert(Me.Rates.valid(t.state.history.main))
-        assert(#serialize(t.state)<24000); assert(not serialize(t.state):find('"Powered"',1,true))
+        assert(#serialize(t.state)<120000); assert(#t.state.hvTrace.points<=1024); assert(not serialize(t.state):find('"Powered"',1,true))
         t.view().screen="menu"; t.click("period"); equal(t.state.settings.period,60)
         t.click("period"); equal(t.state.settings.period,1)
         t.view().screen="home"; assert(t.text():find("/s",1,true)); assert(not t.text():find("[Ee][+-]%d"))
@@ -207,20 +207,20 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         t.main[2].Size=500002; t.advance(2); equal(hv(t),2)
     end
     function tests.solar_unconfigured_empty_partial_and_unpowered_feeds_explain_their_status_and_picker_never_crashes()
-        local t=setup("solar_farm",true,{width=13,height=7}); assert(t.text():find("Farm: Not set",1,true))
+        local t=setup("solar_farm",true,{width=13,height=7}); assert(t.text():find("F:SET",1,true))
         t.click("menu"); t.click("chooseHV"); assert(t.text():find("ME source",1,true) or t.text():find("unconfigured",1,true))
         t.view().screen="home"; t.configure(); t.data.farm.ItemsComplete=false; t.advance(2)
-        assert(t.text():find("Farm: Incompl",1,true))
+        assert(t.text():find("F:DATA",1,true))
         t.data.farm.ItemsComplete=true; t.data.farm.Items={}; t.advance(2); assert(t.text():find("Farm ME is em",1,true))
-        t.data.main.Powered=false; t.advance(2); assert(t.text():find("Main: Unpower",1,true))
+        t.data.main.Powered=false; t.advance(2); assert(t.text():find("M:PWR",1,true))
         t.view().screen="menu"; t.click("chooseHV"); assert(not t.text():find("App render failed",1,true))
     end
     function tests.solar_large_dashboard_shows_farm_totals_direction_changes_bytes_and_hv_history()
         local t=setup("solar_farm",true,{width=80,height=30}); t.data.farm.UsedBytes=256; t.data.farm.FreeBytes=768; t.configure()
         for _=1,12 do t.main[2].Size=t.main[2].Size+8; t.farm[1].Size=t.farm[1].Size-10; t.farm[2].Size=t.farm[2].Size+2; t.advance(2) end
         local text=t.text(); assert(text:find("HV OUTPUT",1,true)); assert(text:find("FARM STOCK",1,true)); assert(text:find("FARM MOVEMENT",1,true))
-        assert(text:find("1 rising / 1 falling",1,true)); assert(text:find("Bytes 25%",1,true)); assert(text:find("Change 15m",1,true)); assert(text:find("HV net trend",1,true))
-        local lime=false; for _,style in ipairs(t.content().styles) do if style.y>=10 and style.y<=12 and style.bg==32 then lime=true end end; assert(lime)
+        assert(text:find("1 rising / 1 falling",1,true)); assert(text:find("Bytes 25%",1,true)); assert(text:find("Change 15m",1,true)); assert(text:find("HV average",1,true))
+        local lime=false; for _,style in ipairs(t.content().styles) do if style.y>=9 and style.y<=11 and style.fg==32 then lime=true end end; assert(lime)
         assert(not text:find("Iron Ingot",1,true)); assert(not text:find("[Ee][+-]%d"))
         t.view().screen="menu"; t.click("period"); t.view().screen="home"; assert(t.text():find("/m",1,true))
     end
@@ -234,5 +234,118 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
                 for _,hit in ipairs(lines.hits) do assert(hit.x1>=1 and hit.x2<=size[1] and (hit.y1 or hit.y)>=1 and (hit.y2 or hit.y)<=size[2],screen) end
             end
         end
+    end
+    local function learning(t)
+        local a=t.state.averages.main; local row=a.values[t.state.hv.item.key]
+        local delta=row and tonumber(row[1]) or 0
+        local seconds=a.seconds+a.fraction-(row and row[2]+row[5] or 0)
+        return delta,seconds,seconds>0 and delta/seconds*3600 or nil
+    end
+    local function restartLearning(t)
+        t.view().screen="menu"; t.click("resetRates"); t.click("requestReset","main"); t.click("confirmRateReset"); t.advance(2)
+    end
+    local function tableRows(t)
+        local lines=t.content(); local header
+        for _,hit in ipairs(lines.hits) do if hit.action=="sortColumn" then header=hit.y; break end end
+        local rows={}
+        for _,hit in ipairs(lines.hits) do if hit.action=="item" and hit.y1 and hit.y1>header then rows[#rows+1]=hit.value.key end end
+        return rows
+    end
+    function tests.solar_overview_starts_with_readonly_live_indicators_without_a_blue_navigation_line()
+        local t=setup("solar_farm",true); t.configure(); local lines=t.content()
+        assert(lines[1]:find("Farm: Live",1,true) and lines[1]:find("Main: Live",1,true))
+        assert(not t.text():find("Farm stock / net rate",1,true))
+        for _,hit in ipairs(lines.hits) do assert((hit.y or hit.y1)~=1,"Live indicator must not be a navigation button") end
+        t.height,t.width=6,12; lines=t.content(); assert(lines[1]:find("F:OK",1,true) and lines[1]:find("M:OK",1,true))
+    end
+    function tests.solar_learning_converges_under_batched_constant_production_instead_of_resetting_a_rolling_average()
+        local t=setup("solar_farm",true); t.configure(); restartLearning(t)
+        local base=t.main[2].Size; local early
+        for i=1,401 do
+            t.main[2].Size=base+math.floor(i/4)*8; t.advance(2)
+            if i==5 then local _,_,rate=learning(t); early=math.abs(rate-3600) end
+        end
+        local delta,seconds,rate=learning(t); equal(delta,800); equal(seconds,802)
+        assert(math.abs(rate-3600)<early/50,"Batch error should shrink as observation time grows")
+        t.view().screen="menu"; local before=rate; t.click("window"); local _,_,after=learning(t); equal(after,before)
+    end
+    function tests.solar_learning_keeps_observations_beyond_an_hour_and_seeds_existing_v31_history()
+        local t=setup("solar_farm",true); t.configure(); restartLearning(t)
+        for _=1,1900 do t.main[2].Size=t.main[2].Size+1; t.advance(2) end
+        local delta,seconds,rate=learning(t); equal(delta,1900); equal(seconds,3800); equal(rate,1800)
+        local recent=hv(t); assert(recent<delta,"Recent history must not determine the learned rate")
+        local old=Me.copy(t.state); old.averages,old.hvTrace=nil,nil
+        local migrated=setup("solar_farm",true,{state=old}); local d,s=learning(migrated)
+        equal(d,Me.Rates.sum(old.history.main,old.hv.item.key,old.elapsed,3600)); assert(s>0 and s<=3600)
+    end
+    function tests.solar_learning_excludes_player_drops_and_missing_time_without_replaying_recovery_jumps()
+        local t=setup("solar_farm",true); t.configure(); restartLearning(t)
+        t.main[2].Size=t.main[2].Size+10; t.advance(2)
+        t.main[2].Size=t.main[2].Size-100; t.advance(2)
+        local delta,seconds=learning(t); equal(delta,10); equal(seconds,2)
+        t.offline=true; t.advance(20); t.main[2].Size=50000; t.offline=false; t.advance(2)
+        delta,seconds=learning(t); equal(delta,10); equal(seconds,2)
+        t.main[2].Size=50004; t.advance(2); delta,seconds=learning(t); equal(delta,14); equal(seconds,4)
+        local gap=false; for _,point in ipairs(t.state.hvTrace.points) do if point[2]==false then gap=true end end; assert(gap)
+    end
+    function tests.solar_learning_survives_reboot_and_explicit_reset_preserves_sources_pins_and_recent_changes()
+        local t=setup("solar_farm"); t.configure(); t.pin("solar.lv"); t.main[2].Size=1009; t.advance(3)
+        local before=learning(t); assert(t.api.save()); t.main[2].Size=50000; t.reboot(); equal(learning(t),before)
+        local recent=hv(t); t.view().screen="menu"; t.click("resetRates"); t.click("requestReset","main"); t.click("confirmRateReset")
+        equal(learning(t),0); equal(hv(t),recent); equal(t.state.sources.main.target,"main"); equal(#t.state.metrics,1)
+    end
+    function tests.solar_table_headers_toggle_name_and_amount_order_and_sticky_items_keep_their_place()
+        local t=setup("solar_farm",true); t.configure()
+        local uu=Me.itemKey("ic2.matter",0,"UU Matter"); local lv=Me.itemKey("solar.lv",0,"LV Solar"); local m=Me.itemKey("item.minium",0,"Minium Shard")
+        t.click("sortColumn","name"); equal(table.concat(tableRows(t),","),table.concat({"hv",lv,m,uu},","))
+        t.click("sortColumn","name"); equal(table.concat(tableRows(t),","),table.concat({"hv",uu,m,lv},","))
+        t.click("sortColumn","amount"); equal(table.concat(tableRows(t),","),table.concat({"hv",uu,lv,m},","))
+        t.click("sortColumn","amount"); equal(table.concat(tableRows(t),","),table.concat({"hv",m,lv,uu},","))
+        t.click("sortColumn","amount"); tableRows(t); local invalidated=t.invalidated
+        t.farm[3].Size=20000; t.advance(2); equal(table.concat(tableRows(t),","),table.concat({"hv",m,uu,lv},",")); assert(t.invalidated>invalidated)
+    end
+    function tests.solar_sorting_persists_per_window_and_small_screens_have_the_same_choices_in_menu()
+        local t=setup("solar_farm"); t.configure(); t.click("sortColumn","amount"); t.click("sortColumn","amount"); assert(t.api.save()); t.reboot()
+        equal(t.view().overviewSort.field,"amount"); equal(t.view().overviewSort.descending,false)
+        local small=t.open("left"); t.view(small).screen="menu"; t.click("listSort",nil,small); t.click("setOrder","nameDown",small)
+        equal(t.view(small).overviewSort.field,"name"); equal(t.view(small).overviewSort.descending,true); equal(t.view().overviewSort.field,"amount")
+    end
+    function tests.solar_curve_uses_six_height_steps_and_one_character_columns_with_real_sample_gaps()
+        local t=setup("solar_farm",true,{width=80,height=30}); t.configure(); t.state.elapsed=60; t.state.settings.window=300
+        t.state.hvTrace={gap=false,points={{10,0},{20,1},{30,2},{40,3},{50,4},{60,5}}}
+        local lines=t.content(); local heights={}
+        for x=1,80 do local height=0
+            for y=9,11 do local ch=lines[y]:sub(x,x); if ch=="|" then height=height+2 elseif ch=="." then height=height+1 end end
+            if height>0 then heights[height]=true end
+        end
+        for level=1,6 do assert(heights[level],"Missing virtual height "..level) end
+        restartLearning(t); t.state.settings.window=300
+        for i=1,50 do t.main[2].Size=t.main[2].Size+1; t.advance(2) end
+        equal(#t.state.hvTrace.points,50); local previous=t.state.hvTrace.points[49]; local latest=t.state.hvTrace.points[50]; equal(latest[1]-previous[1],2)
+        lines=t.content(); local columns=0
+        for x=1,80 do for y=9,11 do if lines[y]:sub(x,x)=="|" or lines[y]:sub(x,x)=="." then columns=columns+1; break end end end
+        assert(columns>20,"Graph must be finer than minute-wide buckets")
+    end
+    function tests.solar_large_learning_counts_and_fractional_time_remain_precise_across_legacy_checkpoints()
+        local t=setup("solar_farm",true); t.configure(); restartLearning(t)
+        t.main[2].Size=t.main[2].Size+2147483600; t.advance(2)
+        local a=t.state.averages.main; a.seconds,a.fraction=10000000,.1234567
+        t.main[2].Size=t.main[2].Size+100; t.advance(.05)
+        for i=1,100 do t.main[2].Size=t.main[2].Size+1; t.advance(.05); t.state=unserialize(serialize(t.state)) end
+        local row=t.state.averages.main.values[t.state.hv.item.key]
+        equal(type(row[1]),"string"); equal(row[1],"2147483800")
+        equal(t.state.averages.main.seconds,10000005); assert(math.abs(t.state.averages.main.fraction-.1734567)<.0000001)
+        t.app.init(t.state,t.api,{appName="solar_farm"}); equal(t.state.averages.main.values[t.state.hv.item.key][1],"2147483800")
+    end
+    function tests.solar_learning_budget_does_not_invent_zero_rates_for_untracked_item_changes()
+        local t=setup("solar_farm",true); t.configure()
+        for i=1,600 do t.farm[#t.farm+1]={Name="Part "..i,RawName="item.test.part"..i,DamageValue=0,Size=1} end
+        t.advance(2); assert(t.state.averages.farm.full); assert(t.state.averages.farm.cost<=98304)
+        local item
+        for _,entry in ipairs(t.farm) do local key=Me.itemKey(entry.RawName,0,entry.Name)
+            if not t.state.averages.farm.values[key] and entry.RawName:find("item.test.part",1,true) then item={raw=entry.RawName,name=entry.Name,damage=0,key=key}; break end
+        end
+        assert(item); t.view().screen,t.view().selected,t.view().key="item",item,item.key
+        assert(t.text():find("Learned average: --/h",1,true))
     end
 end

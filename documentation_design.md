@@ -179,3 +179,8 @@ Rates are net observations, not gross throughput or recipe-equivalent production
 ### v31 Solar farm implementation
 
 Use a LuaJ-safe HV classifier and independent per-source observation. A Main/HV failure must not suppress Farm inventory/rates. The overview always includes the farm list regardless of previous picker queries, plus only the configured main HV output item. Farm HV stock remains a separate farm-origin row. Compact screens keep list priority and visible source errors. Medium screens add source health, HV output and farm stock/byte summaries; larger screens add window deltas, direction counts and a signed HV trend plot. Auto/manual panel identity selection is explained in its picker, and saved ME/pin/Stick/history state survives the repair. See documentation_solar_farm.md.
+
+
+### v32 Solar farm precision and interaction
+
+The overview begins with read-only Live indicators. Item/Amount headings toggle sorting directions; Sticky rows retain their group above sorted scrolling rows, and small windows use Menu → List sorting. Sorting is per-view and input revisions change when live amount ordering changes. Learned rates accumulate accepted changes/observed time across checkpoints, seeded from available old history, independently of the recent graph/change period. Unknown intervals and configured large drops are excluded; explicit learning reset starts a new baseline. Three physical graph rows provide six glyph-height steps with native sample points and one time bin per character column. This is app-only on the v31 core.

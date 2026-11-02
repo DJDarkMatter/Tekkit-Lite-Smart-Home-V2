@@ -39,6 +39,109 @@ local function migrate(state)
     state.settings.period=3600
     state.alarms,state.nextAlertId,state.alarmsMovedTo=nil,nil,nil
 end
+-- Lifetime estimates use all accepted deltas/observed time, independent of the
+-- rolling display window. Split time and large integer strings survive LuaJ's
+-- low-precision tostring without rounding a growing total at every checkpoint.
+local function stored(n) return n>=-2147483648 and n<=2147483647 and n or (n<0 and "-" or "")..Me.digits(n) end
+local function addTime(whole,fraction,dt)
+    local value=fraction+dt; local n=math.floor(value+0.000000001)
+    return whole+n,math.max(0,value-n)
+end
+local Long={}
+function Long.new() return {seconds=0,fraction=0,values={},cost=0,full=false,invalid=false} end
+function Long.record(total,dt,changes)
+    total.seconds,total.fraction=addTime(total.seconds,total.fraction,dt)
+    for key,change in pairs(changes) do
+        local row=total.values[key]
+        if not row then
+            local cost=2*#key+180
+            if total.cost+cost<=98304 then row={0,0,0,0,0}; total.values[key]=row; total.cost=total.cost+cost else total.full=true end
+        end
+        if row then
+            if change.skip then
+                row[2],row[5]=addTime(row[2],row[5],dt); row[3]=row[3]+1
+                local removed=tonumber(row[4])+math.abs(change.delta)
+                if removed>Me.MAX then total.invalid=true else row[4]=stored(removed) end
+            else
+                local delta=tonumber(row[1])+change.delta
+                if not Me.number(delta,-Me.MAX,Me.MAX) then total.invalid=true else row[1]=stored(delta) end
+            end
+        end
+    end
+    if total.seconds>Me.MAX then total.invalid=true end
+end
+function Long.value(total,key)
+    local row=key and total.values[key]
+    local seconds=math.max(0,total.seconds+total.fraction-(row and row[2]+row[5] or 0))
+    if not key or total.invalid or total.full and not row then return nil,seconds,0,0 end
+    return row and tonumber(row[1]) or 0,seconds,row and row[3] or 0,row and tonumber(row[4]) or 0
+end
+function Long.import(history)
+    local total=Long.new(); local names={}
+    for key,id in pairs(history.keys) do names[id]=key end
+    for _,bucket in ipairs(history.buckets) do
+        total.seconds,total.fraction=addTime(total.seconds,total.fraction,bucket.seconds)
+        for id,value in pairs(bucket.values) do
+            local key=names[id]; local row=total.values[key]
+            if not row then
+                local cost=2*#key+180
+                if total.cost+cost<=98304 then row={0,0,0,0,0}; total.values[key]=row; total.cost=total.cost+cost else total.full=true end
+            end
+            if row then
+                local delta,removed=tonumber(row[1])+value[1],tonumber(row[4])+value[4]
+                if not Me.number(delta,-Me.MAX,Me.MAX) or not Me.number(removed,0,Me.MAX) then total.invalid=true
+                else row[1],row[4]=stored(delta),stored(removed) end
+                row[2],row[5]=addTime(row[2],row[5],value[2]); row[3]=row[3]+value[3]
+            end
+        end
+    end
+    return total
+end
+function Long.valid(total)
+    if type(total)~="table" or not integer(total.seconds,0,Me.MAX) or not Me.number(total.fraction,0,.9999999999)
+        or type(total.values)~="table" or type(total.full)~="boolean" or type(total.invalid)~="boolean"
+        or total.itemKey~=nil and not Me.textValue(total.itemKey,600) then return false end
+    local cost=0
+    local function count(n) return (type(n)=="number" or type(n)=="string" and n:match("^-?%d+$")) and integer(tonumber(n),-Me.MAX,Me.MAX) end
+    for key,row in pairs(total.values) do
+        if not Me.textValue(key,600) or type(row)~="table" or not count(row[1]) or not integer(row[2],0,total.seconds+1)
+            or not integer(row[3],0,Me.MAX) or not count(row[4]) or tonumber(row[4])<0 or not Me.number(row[5],0,.9999999999)
+            or row[2]+row[5]>total.seconds+total.fraction+.000001 then return false end
+        cost=cost+2*#key+180
+    end
+    if cost>98304 then return false end
+    total.cost=cost; return true
+end
+local function newTrace() return {points={},gap=true} end
+local function tracePoint(state,rate)
+    local trace=state.hvTrace; local points=trace.points; local last=points[#points]
+    if rate==nil and trace.gap then return end
+    if last and last[1]==state.elapsed then last[2]=rate or false
+    else points[#points+1]={state.elapsed,rate or false} end
+    trace.gap=rate==nil
+    -- Native samples for the latest 15 minutes; older points are thinned to
+    -- ten-second steps. No interpolation is recorded as a real observation.
+    if #points>1024 or points[1] and points[1][1]<state.elapsed-3600 or #points%32==0 then
+        local kept,lastSlot={},nil
+        for _,point in ipairs(points) do if point[1]>=state.elapsed-3600 then
+            local slot=math.floor(point[1]/10)
+            if point[1]>=state.elapsed-900 or point[2]==false or kept[#kept] and kept[#kept][2]==false or slot~=lastSlot then kept[#kept+1]=point
+            else kept[#kept]=point end
+            lastSlot=slot
+        end end
+        while #kept>1024 do table.remove(kept,1) end
+        trace.points=kept
+    end
+end
+local function resetMain(state,key)
+    state.history.main=Me.Rates.new(); state.averages.main=Long.new(); state.averages.main.itemKey=key; state.hvTrace=newTrace()
+end
+local function elapsedText(seconds)
+    seconds=math.floor(seconds)
+    if seconds<60 then return seconds.."s" end
+    if seconds<3600 then return math.floor(seconds/60).."m "..seconds%60 .."s" end
+    return math.floor(seconds/3600).."h "..math.floor(seconds%3600/60).."m"
+end
 function app.init(state,api,context)
     ready=false; cache,snapshots,previous,measured,frozen,structures={},{},{},{},{},{}
     assert(api.ui.form and api.migrateAppState and Me.safePatterns,"Solar farm needs bundled-v31 core: update installer, then run inst server")
@@ -76,11 +179,27 @@ function app.init(state,api,context)
     assert(integer(state.nextId,maxId+1,2147483001),"Invalid pin IDs")
     local count=0; for key,item in pairs(state.catalog) do assert(Me.itemValid(item) and item.key==key,"Invalid item catalog"); count=count+1 end
     assert(count<=1024,"Item catalog too large")
+    if state.averages==nil then
+        state.averages={farm=Long.import(state.history.farm),main=Long.import(state.history.main)}
+        state.averages.main.itemKey=state.hv.item and state.hv.item.key
+    end
+    assert(type(state.averages)=="table" and Long.valid(state.averages.main) and Long.valid(state.averages.farm),"Invalid saved long-term rates")
+    if state.hvTrace==nil then state.hvTrace=newTrace() end
+    assert(type(state.hvTrace)=="table" and type(state.hvTrace.points)=="table" and #state.hvTrace.points<=1024
+        and type(state.hvTrace.gap)=="boolean","Invalid saved HV trend")
+    local last=-1
+    for _,point in ipairs(state.hvTrace.points) do
+        assert(type(point)=="table" and Me.number(point[1],0,state.elapsed) and point[1]>last
+            and (point[2]==false or Me.number(point[2],-1e100,1e100)),"Invalid saved trend sample")
+        last=point[1]
+    end
     ready=true
 end
 local function sample(role,state,s)
     local old=previous[role]
-    if s.status~="ok" or not Me.number(s.time,0,Me.MAX) or not integer(s.sequence,0,Me.MAX) then previous[role],measured[role]=nil,false; return end
+    if s.status~="ok" or not Me.number(s.time,0,Me.MAX) or not integer(s.sequence,0,Me.MAX) or role=="main" and not state.hv.item then
+        previous[role],measured[role]=nil,false; if role=="main" then tracePoint(state,nil) end; return
+    end
     if old and old.key==s.key and old.sequence==s.sequence and old.time==s.time then return end
     measured[role]=false
     if old and old.key==s.key then
@@ -100,8 +219,13 @@ local function sample(role,state,s)
                     changes[key]={delta=delta,skip=delta<0 and -delta>=minimum and -delta>=before*percent/100}
                 end
             end
-            measured[role]=Me.Rates.record(state.history[role],state.elapsed,dt,changes)
+            Me.Rates.record(state.history[role],state.elapsed,dt,changes)
+            Long.record(state.averages[role],dt,changes); measured[role]=true
         end
+    end
+    if role=="main" then
+        local delta,seconds=Long.value(state.averages.main,state.hv.item.key)
+        tracePoint(state,measured.main and delta and seconds>0 and delta/seconds or nil)
     end
     previous[role]={key=s.key,sequence=s.sequence,time=s.time,items=s.items}
 end
@@ -123,7 +247,11 @@ local function observe(role,state,api,boots)
             s.hvCandidates=#candidates
             if #candidates==1 and (not state.hv.item or state.hv.item.key~=candidates[1].key)
                 and (not state.hv.item or not s.items[state.hv.item.key]) then
-                if commit(state,api,nil,function() state.hv.item=Me.identity(candidates[1]); state.history.main=Me.Rates.new() end) then previous.main,measured.main=nil,false end
+                local changed=state.averages.main.itemKey~=candidates[1].key
+                if commit(state,api,nil,function()
+                    state.hv.item=Me.identity(candidates[1])
+                    if changed then resetMain(state,candidates[1].key) end
+                end) and changed then previous.main,measured.main=nil,false end
             end
         end
         if role=="farm" and s.status=="ok" then
@@ -140,26 +268,34 @@ function app.background(dt,state,api)
         if not success then
             snapshots[role]={status="error",error=tostring(err),items={}}
             previous[role],measured[role]=nil,false
+            if role=="main" then tracePoint(state,nil) end
         end
     end
 end
 local function reading(state,key)
     local item=binding(state,key); local role=key=="hv" and "main" or "farm"; local s=snapshots[role]
-    local count=Me.count(s,item and item.key); local rate,seconds,drops,removed,delta
+    local count=Me.count(s,item and item.key); local rate,seconds,drops,removed,delta,windowRate,windowSeconds
     if item then
-        delta,seconds,drops,removed=Me.Rates.sum(state.history[role],item.key,state.elapsed,state.settings.window)
-        if count~=nil and measured[role] and seconds>0 then rate=delta/seconds*state.settings.period end
+        local total; total,seconds,drops,removed=Long.value(state.averages[role],item.key)
+        delta,windowSeconds=Me.Rates.sum(state.history[role],item.key,state.elapsed,state.settings.window)
+        if count~=nil and measured[role] then
+            if total and seconds>0 then rate=total/seconds*state.settings.period end
+            if windowSeconds>0 then windowRate=delta/windowSeconds*state.settings.period else delta=nil end
+        else delta=nil end
     end
-    return count,rate,seconds or 0,drops or 0,removed or 0,rate~=nil and delta or nil
+    return count,rate,seconds or 0,drops or 0,removed or 0,delta,windowRate,windowSeconds or 0
 end
 local function rateText(state,rate,width)
     local text=Me.rateText(rate,width):gsub("/h$",periods[state.settings.period]); return text
 end
-local function rowsFor(state,view,windowId,purpose)
+local function rowsFor(state,view,windowId,purpose,api)
     local role=purpose=="hv" and "main" or "farm"
     local s=snapshots[role] or {status="unconfigured",items={}}
     local query=purpose=="overview" and "" or view.query or ""
-    local signature=purpose..":"..(s.key or "")..":"..query..":"..(view.sort or "name")..":"..tostring(view.descending)
+    local order=purpose=="overview" and view.overviewSort
+    if type(order)~="table" or (order.field~="name" and order.field~="amount") then order=nil end
+    local signature=purpose..":"..(s.key or "")..":"..query..":"..(order and order.field or view.sort or "name")..":"..tostring(order and order.descending==true or not order and view.descending==true)
+    if order and order.field=="amount" then signature=signature..":"..tostring(s.sequence)..":"..tostring(snapshots.main and snapshots.main.sequence)..":"..tostring(s.status)..":"..tostring(snapshots.main and snapshots.main.status) end
     local saved=frozen[windowId]
     if saved and saved.signature==signature then return saved.rows,s end
     local all={}
@@ -177,22 +313,46 @@ local function rowsFor(state,view,windowId,purpose)
     for _,item in pairs(all) do
         if query=="" or item.name:lower():find(query,1,true) or item.raw:lower():find(query,1,true) then rows[#rows+1]=item end
     end
+    local function label(item)
+        if purpose~="overview" then return item.name:lower() end
+        local m=pinFor(state,item)
+        return (m and m.name or item.hv and state.hv.name or item.name):lower()
+    end
+    local function quantity(item)
+        if item.hv and not state.hv.item then return nil end
+        return Me.count(item.hv and snapshots.main or s,item.key)
+    end
     table.sort(rows,function(a,b)
         if purpose=="overview" then
             local am,bm=pinFor(state,a),pinFor(state,b)
-            if (am~=nil)~=(bm~=nil) then return am~=nil end
-            if am and bm then return (a.hv and am.order or am.id)<(b.hv and bm.order or bm.id) end
+            local astick,bstick=am and am.stick or false,bm and bm.stick or false
+            if astick~=bstick then return astick end
+            if astick and bstick then
+                local ai,bi=a.hv and am.order or am.id,b.hv and bm.order or bm.id
+                if ai~=bi then return ai<bi end
+            elseif not order then
+                if (am~=nil)~=(bm~=nil) then return am~=nil end
+                if am and bm then return (a.hv and am.order or am.id)<(b.hv and bm.order or bm.id) end
+            end
         end
-        if view.sort=="amount" and purpose~="overview" then
-            local aq,bq=Me.count(a.hv and snapshots.main or s,a.key) or -1,Me.count(b.hv and snapshots.main or s,b.key) or -1
-            if aq~=bq then return view.descending and aq>bq or not view.descending and aq<bq end
+        local field=order and order.field or purpose~="overview" and view.sort
+        local descending=order and order.descending==true or not order and purpose~="overview" and view.descending==true
+        if field=="amount" then
+            local aq,bq=quantity(a),quantity(b)
+            if (aq==nil)~=(bq==nil) then return aq~=nil end
+            if aq and bq and aq~=bq then return descending and aq>bq or not descending and aq<bq end
         end
-        local an,bn=a.name:lower(),b.name:lower()
-        if an~=bn then return purpose~="overview" and view.descending and an>bn or (purpose=="overview" or not view.descending) and an<bn end
+        local an,bn=label(a),label(b)
+        if an~=bn then return field~="amount" and descending and an>bn or (field=="amount" or not descending) and an<bn end
         if a.key==b.key then return a.hv==true and b.hv~=true end
         return a.key<b.key
     end)
-    if s.status=="ok" then frozen[windowId]={signature=signature,rows=rows} end
+    local identities={}; for _,item in ipairs(rows) do identities[#identities+1]=(item.hv and "main:" or "farm:")..item.key end
+    local identity=table.concat(identities,"\n")
+    if s.status=="ok" or purpose=="overview" then
+        frozen[windowId]={signature=signature,rows=rows,identity=identity,purpose=purpose}
+        if api and purpose=="overview" and saved and saved.purpose=="overview" and saved.identity~=identity then api.invalidateAppViews(name) end
+    end
     return rows,s
 end
 function app.handleSensorSelection(role,selected,state,api,context)
@@ -201,7 +361,8 @@ function app.handleSensorSelection(role,selected,state,api,context)
     if old and Me.sourceKey(old)==Me.sourceKey(selected) and old.card==selected.card and old.targetType==selected.targetType then context.view.screen="sources"; return true end
     local ok,err=commit(state,api,context.view,function()
         state.sources[role]=copy(selected); state.history[role]=Me.Rates.new()
-        if role=="main" then state.hv.item=nil else state.catalog={}; for _,m in ipairs(state.metrics) do m.legacy=true end end
+        if role=="main" then state.hv.item=nil; resetMain(state,nil)
+        else state.averages.farm=Long.new(); state.catalog={}; for _,m in ipairs(state.metrics) do m.legacy=true end end
     end)
     if ok then snapshots[role],previous[role],measured[role]=nil,nil,false; context.view.screen="sources" end
     return ok,err
@@ -230,88 +391,92 @@ local function flow(state)
 end
 local function chart(ui,x,y,w,h,state)
     ui.style(x,y,w,h,1,32768)
-    local item=state.hv.item; local history=state.history.main
-    if not item or #history.buckets==0 then ui.put(x,y+math.floor(h/2),"Waiting for HV samples",w,true); return end
-    local count=math.min(w,state.settings.window/60)
-    local bins={}; local last=math.floor(state.elapsed/60); local first=last-state.settings.window/60+1
-    local id=history.keys[item.key]; local maximum=0; local negative=false
-    for _,bucket in ipairs(history.buckets) do if bucket.minute>=first and bucket.minute<=last then
-        local index=1+math.min(count-1,math.floor((bucket.minute-first)*count/(last-first+1)))
-        local b=bins[index] or {delta=0,seconds=0}; bins[index]=b
-        local row=id and bucket.values[id]
-        b.delta,b.seconds=b.delta+(row and row[1] or 0),b.seconds+bucket.seconds-(row and row[2] or 0)
+    local bins={}; local first=state.elapsed-state.settings.window
+    local low,high,interval=nil,nil,nil; local previousPoint
+    for _,point in ipairs(state.hvTrace.points) do
+        if previousPoint and point[2]~=false and previousPoint[2]~=false and point[1]-previousPoint[1]<=10 then interval=point[1]-previousPoint[1] end
+        if point[1]>=first and point[1]<=state.elapsed then
+            local index=1+math.min(w-1,math.floor((point[1]-first)*w/state.settings.window))
+            bins[index]=point[2]
+        end
+        previousPoint=point
+    end
+    for _,value in pairs(bins) do if value~=false then low=low and math.min(low,value) or value; high=high and math.max(high,value) or value end end
+    if not low then ui.put(x,y+math.floor(h/2),"Waiting for HV samples",w,true); return end
+    local span=high-low
+    local minimum=math.max(math.abs(low),math.abs(high),.000001)*.002
+    if span<minimum then local middle=(high+low)/2; low,high=middle-minimum/2,middle+minimum/2 else low,high=low-span*.05,high+span*.05 end
+    local levels=h*2
+    for column,value in pairs(bins) do if value~=false then
+        local level=math.max(1,math.min(levels,math.floor((value-low)/(high-low)*(levels-1)+1.5)))
+        local fg=value>0 and 32 or value<0 and 2 or 256
+        for row=1,h do
+            local fill=level-(h-row)*2
+            if fill>0 then ui.put(x+column-1,y+row-1,fill>=2 and "|" or ".",1); ui.style(x+column-1,y+row-1,1,1,fg,32768) end
+        end
     end end
-    for _,b in pairs(bins) do if b.seconds>0 then b.rate=b.delta/b.seconds; maximum=math.max(maximum,math.abs(b.rate)); negative=negative or b.rate<0 end end
-    local baseline=negative and math.floor((h-1)/2) or h-1
-    ui.style(x,y+baseline,w,1,nil,128)
-    for i=1,count do local b=bins[i]; if b and b.rate then
-        local left=x+math.floor((i-1)*w/count); local width=math.max(1,math.floor(i*w/count)-math.floor((i-1)*w/count)-1)
-        if b.rate>0 then
-            local height=math.max(1,math.floor((baseline+1)*b.rate/math.max(maximum,0.000001)+.5))
-            ui.style(left,y+baseline-height+1,width,height,nil,32)
-        elseif b.rate<0 then
-            local height=math.max(1,math.floor((h-baseline)*-b.rate/math.max(maximum,0.000001)+.5))
-            ui.style(left,y+baseline,width,height,nil,2)
-        else ui.style(left,y+baseline,width,1,nil,256) end
-    end end
+    return low*state.settings.period,high*state.settings.period,interval
 end
 local function dashboard(ui,w,h,state,api)
     local cards=w>=42 and h>=14
-    local health=cards or w>=24 and h>=10
     local plot=cards and w>=56 and h>=24
-    if health then
-        local half=math.floor(w/2)
-        for i,role in ipairs({"farm","main"}) do
-            local left=i==1 and 1 or half+1; local width=i==1 and half or w-half
-            local bg=source(role).status=="ok" and 8192 or 2
-            ui.style(left,2,width,1,api.ui.contrast(bg),bg)
-            ui.put(left,2,(role=="farm" and "Farm: " or "Main: ")..status(role),width,true)
-        end
-        ui.hits[#ui.hits+1]={x1=1,x2=w,y=2,action="sourceInfo"}
+    local half=math.floor(w/2)
+    local short={ok="OK",unconfigured="SET",waiting="WAIT",offline="OFF",unpowered="PWR",unsupported="DATA",stale="OLD",error="ERR"}
+    for i,role in ipairs({"farm","main"}) do
+        local left=i==1 and 1 or half+1; local width=i==1 and half or w-half
+        local bg=source(role).status=="ok" and 8192 or 2
+        ui.style(left,1,width,1,api.ui.contrast(bg),bg)
+        local label=w>=24 and (role=="farm" and "Farm: " or "Main: ")..status(role)
+            or (role=="farm" and "F:" or "M:")..(short[source(role).status] or "ERR")
+        ui.put(left,1,label,width,true)
     end
-    if not cards then return health and (w>=36 and 4 or 3) or (w>=36 and 3 or 2) end
+    if not cards then return w>=36 and 3 or 2 end
     local count=w>=72 and 3 or 2
     local hvAmount,hvRate,seconds,_,_,delta=reading(state,"hv")
     local farm=source("farm"); local farmLive=farm.status=="ok"
     for i=1,count do
         local left=1+math.floor((i-1)*w/count); local right=math.floor(i*w/count)-1; local width=right-left+1
-        ui.style(left,4,width,4,api.ui.contrast(state.settings.panel),state.settings.panel)
+        ui.style(left,3,width,4,api.ui.contrast(state.settings.panel),state.settings.panel)
         local accent=api.getAppColour(name)
-        ui.style(left,4,width,1,api.ui.contrast(accent),accent)
-        ui.put(left+1,4,({"HV OUTPUT","FARM STOCK","FARM MOVEMENT"})[i],width-2)
+        ui.style(left,3,width,1,api.ui.contrast(accent),accent)
+        ui.put(left+1,3,({"HV OUTPUT","FARM STOCK","FARM MOVEMENT"})[i],width-2)
         if i==1 then
-            ui.put(left+1,5,state.hv.item and Me.amount(hvAmount).." panels" or "Select HV panel type",width-2)
-            ui.put(left+1,6,rateText(state,hvRate).." net",width-2)
-            ui.put(left+1,7,seconds>0 and ("Change "..Me.amount(delta)) or "Awaiting fresh samples",width-2)
-            ui.hits[#ui.hits+1]={x1=left,x2=right,y1=4,y2=7,action=state.hv.item and "item" or "chooseHV",value={key="hv",item=state.hv.item and Me.identity(state.hv.item)}}
+            ui.put(left+1,4,state.hv.item and Me.amount(hvAmount).." panels" or "Select HV panel type",width-2)
+            ui.put(left+1,5,rateText(state,hvRate).." avg",width-2)
+            ui.put(left+1,6,seconds>0 and ("Learned "..elapsedText(seconds)) or "Awaiting fresh samples",width-2)
+            ui.hits[#ui.hits+1]={x1=left,x2=right,y1=3,y2=6,action=state.hv.item and "item" or "chooseHV",value={key="hv",item=state.hv.item and Me.identity(state.hv.item)}}
         elseif i==2 then
-            ui.put(left+1,5,Me.amount(farmLive and farm.total or nil).." items",width-2)
-            ui.put(left+1,6,Me.amount(farmLive and farm.types or nil).." item types",width-2)
+            ui.put(left+1,4,Me.amount(farmLive and farm.total or nil).." items",width-2)
+            ui.put(left+1,5,Me.amount(farmLive and farm.types or nil).." item types",width-2)
             local data=farmLive and farm.data or {}; local used,free=data.UsedBytes,data.FreeBytes
             if Me.number(used,0,Me.MAX) and Me.number(free,0,Me.MAX) and used+free>0 then
                 local ratio=used/(used+free); local colour=ratio>=.95 and 16384 or ratio>=.8 and 2 or 8192
-                ui.style(left,7,math.max(1,math.floor(width*ratio)),1,1,colour)
-                ui.put(left+1,7,"Bytes "..math.floor(ratio*1000+.5)/10 .."%",width-2)
-            else ui.put(left+1,7,farmLive and "Complete inventory" or status("farm"),width-2) end
+                ui.style(left,6,math.max(1,math.floor(width*ratio)),1,1,colour)
+                ui.put(left+1,6,"Bytes "..math.floor(ratio*1000+.5)/10 .."%",width-2)
+            else ui.put(left+1,6,farmLive and "Complete inventory" or status("farm"),width-2) end
         else
             local rising,falling=flow(state)
-            ui.put(left+1,5,Me.amount(rising).." rising / "..Me.amount(falling).." falling",width-2)
-            ui.put(left+1,6,"Over "..math.floor(state.settings.window/60).." minutes",width-2)
-            ui.put(left+1,7,"Observed "..math.floor(coverage(state,"farm")).."s",width-2)
+            ui.put(left+1,4,Me.amount(rising).." rising / "..Me.amount(falling).." falling",width-2)
+            ui.put(left+1,5,"Over "..math.floor(state.settings.window/60).." minutes",width-2)
+            ui.put(left+1,6,"Observed "..math.floor(coverage(state,"farm")).."s",width-2)
         end
     end
     if plot then
-        ui.put(1,9,"HV net trend  "..math.floor(state.settings.window/60).."m  (lime + / orange -)",w)
-        chart(ui,1,10,w,3,state)
+        local low,high,interval=chart(ui,1,9,w,3,state)
+        ui.put(1,8,"HV average  "..math.floor(state.settings.window/60).."m | "..math.floor(state.settings.window/w*10+.5)/10 .."s/column",w)
+        if low then
+            local text=rateText(state,low).." .. "..rateText(state,high).." | "..(interval and math.floor(interval*10+.5)/10 .."s samples" or "sampling")
+            if #text<w-32 then ui.put(w-#text+1,8,text,#text) end
+        end
     end
-    return plot and 15 or 10
+    return plot and 14 or 9
 end
 local function form(w,h,state,api,context)
     local view=context.view; view.pages=view.pages or {}; local screen=view.screen or "home"
     local ui=api.ui.form(w,h,view,api.getAppColour(name),state.settings.background,state.settings.panel)
     local accent=api.getAppColour(name)
     if screen=="home" then
-        local rows,s=rowsFor(state,view,context.windowId,"overview")
+        local rows,s=rowsFor(state,view,context.windowId,"overview",api)
         local wide=w>=36; local rowH=wide and 1 or 2; local top=dashboard(ui,w,h,state,api)
         local capacity=math.max(1,math.floor((h-top)/rowH))
         local sticky,scroll={},{}
@@ -326,12 +491,6 @@ local function form(w,h,state,api,context)
         end
         local slots=math.max(1,capacity-#sticky)
         local first,page,pages=ui.page("overview",#scroll,slots,h,false)
-        ui.heading((wide and "Farm stock / net rate  " or "")..math.floor(state.settings.window/60).."m "..periods[state.settings.period]..(pages>1 and " "..page.."/"..pages or ""),accent)
-        if top==(wide and 3 or 2) and (source("farm").status~="ok" or source("main").status~="ok") then
-            local role=source("farm").status~="ok" and "farm" or "main"
-            ui.heading((role=="farm" and "Farm: " or "Main: ")..status(role),2)
-        end
-        ui.hits[#ui.hits+1]={x1=1,x2=w,y=1,action="sourceInfo"}
         local function row(y,item,key,hv,index)
             local m=pinFor(state,item)
             local count,rate,_,_,_,delta=reading(state,key)
@@ -352,9 +511,9 @@ local function form(w,h,state,api,context)
                 -- The unit is already in the header. Drop grouping/decimals
                 -- before clipping either value on a one-block monitor.
                 local q=Me.amount(count,0)
-                local r=rateText(state,rate):gsub("/[smh]$",""):gsub(" ","")
-                if #q+#r+2>w then r=Me.rateText(rate,0):gsub("/h$","") end
-                if #q+#r+2<=w then ui.put(1,y,label,w,true); ui.put(1,y+1,q.."  "..r,w,true)
+                local r=rateText(state,rate):gsub(" ","")
+                if #q+#r+1>w then r=Me.rateText(rate,0):gsub("/h$",periods[state.settings.period]) end
+                if #q+#r+1<=w then ui.put(1,y,label,w,true); ui.put(1,y+1,q.." "..r,w,true)
                 else
                     local span=math.min(#r,math.max(3,w-4))
                     ui.put(1,y,hv and "HV" or label,w-span-1); ui.put(w-span+1,y,r,span)
@@ -366,9 +525,13 @@ local function form(w,h,state,api,context)
         if wide then
             local fields=w>=58 and 3 or 2; local col=math.max(9,math.floor(w/(fields+1))); local start=w-fields*col+1
             ui.style(1,top-1,w,1,1,128)
-            ui.put(2,top-1,"Item",start-3); ui.put(start,top-1,"Amount",col,true)
+            local order=view.overviewSort
+            local function indicator(field) return order and order.field==field and (order.descending and " v" or " ^") or "" end
+            ui.put(2,top-1,"Item"..indicator("name"),start-3); ui.put(start,top-1,"Amount"..indicator("amount"),col,true)
+            ui.hits[#ui.hits+1]={x1=1,x2=start-1,y=top-1,action="sortColumn",value="name"}
+            ui.hits[#ui.hits+1]={x1=start,x2=start+col-1,y=top-1,action="sortColumn",value="amount"}
             if fields==3 then ui.put(start+col,top-1,"Change "..math.floor(state.settings.window/60).."m",col,true) end
-            ui.put(w-col+1,top-1,"Net rate",col,true)
+            ui.put(w-col+1,top-1,"Avg "..periods[state.settings.period],col,true)
         end
         for i,item in ipairs(sticky) do row(top+(i-1)*rowH,item,item.hv and "hv" or item.key,item.hv,i) end
         for i=1,slots do local item=scroll[first+i]; if item then row(top+(#sticky+i-1)*rowH,item,item.hv and "hv" or item.key,item.hv,first+i+#sticky) end end
@@ -387,13 +550,24 @@ local function form(w,h,state,api,context)
             ui.action(h,"Pin item","pin",nil,2*wing+1,mid); ui.action(h,"Menu","menu",nil,mid+1,w)
         else ui.footer({{"Pin item","pin"},{"Menu","menu"}}) end
     elseif screen=="menu" then
-        ui.menu("Solar farm menu",{{"ME sources","sources"},{"HV panel type / detection","chooseHV"},{"Average: "..state.settings.window/60 .." minutes","window"},
-            {"Rate unit: "..periods[state.settings.period],"period"},{"Withdrawal filter","dropSettings"},{"UI colour","accent"},{"Source status","sourceInfo"},{"About net rates","about"}},"menu")
+        ui.menu("Solar farm menu",{{"ME sources","sources"},{"HV panel type / detection","chooseHV"},{"Graph/change: "..state.settings.window/60 .." minutes","window"},
+            {"Rate unit: "..periods[state.settings.period],"period"},{"List sorting","listSort"},{"Reset rate learning","resetRates"},{"Withdrawal filter","dropSettings"},
+            {"UI colour","accent"},{"Source status","sourceInfo"},{"About net rates","about"}},"menu")
+    elseif screen=="listSort" then
+        ui.menu("Overview order",{{"Pinned first (default)","setOrder","pins"},{"Item A-Z","setOrder","nameUp"},{"Item Z-A","setOrder","nameDown"},
+            {"Amount high-low","setOrder","amountDown"},{"Amount low-high","setOrder","amountUp"}},"listSort",{{"Back","menu"}})
+    elseif screen=="resetRates" then
+        ui.menu("Restart learned rates",{{"Main / HV only","requestReset","main"},{"Farm only","requestReset","farm"},{"Both ME sources","requestReset","both"}},"reset",{{"Cancel","menu"}})
+    elseif screen=="confirmReset" then
+        ui.heading("Reset rate learning?",accent)
+        ui.put(1,2,view.resetRole=="both" and "Both sources" or view.resetRole=="main" and "Main / HV" or "Farm",w,true)
+        ui.put(1,3,"Keep sources and pins",w,true)
+        ui.footer({{"Reset","confirmRateReset"},{"Cancel","menu"}})
     elseif screen=="sources" then
         ui.menu("ME sources",{{state.sources.farm and "Farm: "..state.sources.farm.clientId or "Select farm ME","source","farm"},
             {state.sources.main and "Main: "..state.sources.main.clientId or "Select main ME (HV)","source","main"}},"sources",{{"Back","menu"}})
     elseif screen=="items" then
-        local rows,s=rowsFor(state,view,context.windowId,view.purpose or "pin")
+        local rows,s=rowsFor(state,view,context.windowId,view.purpose or "pin",api)
         local hv=view.purpose=="hv"; local start=2
         ui.heading(hv and "HV output: main ME" or "Pin overview item",accent)
         if hv and w>=28 and h>=10 then ui.put(1,2,"Choose HV output type; Auto is usually enough.",w); start=3 end
@@ -421,10 +595,10 @@ local function form(w,h,state,api,context)
             {"Use item","saveManual",nil,Me.textValue(m.raw,256) and Me.textValue(m.name,256)}},"manual",{{"Back","items"}})
     elseif screen=="item" then
         local item=view.selected; local key=view.key; local m=pinFor(state,{hv=key=="hv",key=key})
-        local count,rate,seconds,drops,removed,delta=reading(state,key)
-        local lines={key=="hv" and "HV solar / main ME" or (m and m.name or item and item.name or "Item"),"Amount: "..Me.amount(count),"Net rate: "..rateText(state,rate),
-            "Valid samples: "..math.floor(seconds).."s", "Average window: "..state.settings.window/60 .." minutes","Large withdrawals ignored: "..drops,"Ignored items: "..Me.amount(removed)}
-        table.insert(lines,4,"Net change in window: "..(delta and delta>0 and "+" or "")..Me.amount(delta))
+        local count,rate,seconds,drops,removed,delta,recent,recentSeconds=reading(state,key)
+        local lines={key=="hv" and "HV solar / main ME" or (m and m.name or item and item.name or "Item"),"Amount: "..Me.amount(count),"Learned average: "..rateText(state,rate),
+            "Valid observed time: "..elapsedText(seconds),"Recent "..state.settings.window/60 .."m change: "..(delta and delta>0 and "+" or "")..Me.amount(delta),
+            "Recent window rate: "..rateText(state,recent),"Recent observed time: "..elapsedText(recentSeconds),"Large withdrawals ignored: "..drops,"Ignored items: "..Me.amount(removed)}
         lines[#lines+1]="Source: "..(key=="hv" and "Main ME" or "Farm ME").." / "..status(key=="hv" and "main" or "farm")
         if item then lines[#lines+1]=item.raw.." / "..item.damage end
         ui.info("Item overview",lines,"item", "home")
@@ -461,12 +635,15 @@ local function form(w,h,state,api,context)
                 lines[#lines+1]="Reading age: "..math.floor(s.age or 0).."s"
             end
             if state.history[role].limited then lines[#lines+1]="Rate history shortened to fit memory" end
+            local learning=state.averages[role]
+            lines[#lines+1]="Learned time: "..elapsedText(learning.seconds+learning.fraction)
+            if learning.full or learning.invalid then lines[#lines+1]="Learning limit: untracked rates are unknown; reset learning to restart" end
         end
         lines[#lines+1]="HV selection: "..state.hv.selection
         lines[#lines+1]=state.hv.item and "HV item: "..state.hv.item.name.." / "..state.hv.item.raw.." / "..state.hv.item.damage or "HV not identified; use Auto or select an exact panel type"
         ui.info("ME source status",lines,"info","menu")
     elseif screen=="about" or screen=="message" then
-        ui.info("Solar farm",{screen=="message" and view.message or "One list combines farm inventory amounts with farm net stock-change rates. Only HV solar uses the main ME. It starts pinned with Stick enabled. Every pinned item can toggle Stick or be unpinned. Sticky items stay above scrolling rows when the group fits; smaller windows page the group first. Other main-ME items are excluded. Rates are observed net changes, not total crafting throughput: simultaneous imports and consumption can cancel out. A large withdrawal is ignored when it meets both the minimum and percentage filters. Offline, unpowered and incomplete inventories are unknown. Rates rebase after outages, restarts or sample gaps over 10 seconds. Pin items to keep them ahead of other farm items and give them a name, colour or custom withdrawal filter. Legacy main-only pins remain hidden until seen in the farm. Level emitter is the separate item alarm app."},"info",screen=="message" and view.back or "menu")
+        ui.info("Solar farm",{screen=="message" and view.message or "Average rates use all accepted changes divided by all valid observed time. Samples keep contributing across restarts, so steady production measured in batches settles with longer observation. Graph/change selects the recent display period, not the lifetime learning duration. Reset rate learning after a deliberate production change if you want a new baseline. Missing data and large withdrawals contribute neither change nor time for that item. Recent details remain available separately. The three-row curve has six height levels using . and |, with one time column per character and fresh sensor samples. It cannot measure faster than the sensor. Click Item or Amount to sort, click again to reverse; Stick items stay above the scrolling order. Menu offers the same sorting on small screens. Only HV output comes from Main; every farm item uses Farm. Level emitter owns item alarms. These are net stock changes: transfers, consumption and deposits can affect them, and no gross crafting or SMF throughput is inferred."},"info",screen=="message" and view.back or "menu")
     else view.screen="home"; return form(w,h,state,api,context) end
     return ui.lines,ui.hits
 end
@@ -483,6 +660,14 @@ local function pin(state,api,view,item)
         state.metrics[#state.metrics+1]={id=state.nextId,name=item.name:sub(1,24),item=Me.identity(item)}; state.nextId=state.nextId+1; remember(state,item)
     end)
 end
+local function setOrder(view,order,api,windowId)
+    local old,page=copy(view.overviewSort),view.pages.overview
+    view.overviewSort,view.pages.overview=order,1; frozen[windowId]=nil
+    local ok,err=api.save()
+    if ok then api.invalidateAppViews(name)
+    else view.overviewSort,view.pages.overview=old,page; view.message,view.back,view.screen="Save failed: "..tostring(err),"home","message" end
+    return ok
+end
 function app.handleTouch(x,y,w,h,state,api,context)
     if not ready then return false end
     local _,hits=form(w,h,state,api,context); local action,value
@@ -490,17 +675,39 @@ function app.handleTouch(x,y,w,h,state,api,context)
     if not action then return false end
     local view=context.view; local m=view.key=="hv" and state.hv or metric(state,view.key)
     if action=="page" then view.pages[value.key]=math.max(1,value.page)
-    elseif ({home=true,menu=true,sources=true,items=true,filters=true,manual=true,dropSettings=true,sourceInfo=true,about=true,keyboard=true,number=true})[action] then view.screen=action
+    elseif ({home=true,menu=true,sources=true,items=true,filters=true,manual=true,dropSettings=true,sourceInfo=true,about=true,keyboard=true,number=true,listSort=true,resetRates=true})[action] then view.screen=action
+    elseif action=="sortColumn" then
+        local current=view.overviewSort
+        local descending=current and current.field==value and not current.descending or not (current and current.field==value) and value=="amount"
+        setOrder(view,{field=value,descending=descending==true},api,context.windowId)
+    elseif action=="setOrder" then
+        local order=value~="pins" and {field=value:find("amount",1,true) and "amount" or "name",descending=value:find("Down",1,true)~=nil} or nil
+        if setOrder(view,order,api,context.windowId) then view.screen="home" end
+    elseif action=="requestReset" then view.resetRole,view.screen=value,"confirmReset"
+    elseif action=="confirmRateReset" then
+        local role=view.resetRole
+        if ({main=true,farm=true,both=true})[role] and commit(state,api,view,function()
+            for _,r in ipairs({"main","farm"}) do if role=="both" or role==r then
+                state.averages[r]=Long.new()
+                if r=="main" then state.averages.main.itemKey=state.hv.item and state.hv.item.key; state.hvTrace=newTrace() end
+            end end
+        end) then
+            for _,r in ipairs({"main","farm"}) do if role=="both" or role==r then previous[r],measured[r]=nil,false end end
+            view.screen="home"
+        end
     elseif action=="source" then local ok,err=api.pickSensor(context.windowId,value,state.sources[value],"ae"); if not ok then view.message,view.back,view.screen=err,"sources","message" end
     elseif action=="pin" or action=="chooseHV" then view.purpose,view.screen,view.query,view.pages=action=="chooseHV" and "hv" or "pin","items","",{}; frozen[context.windowId]=nil
     elseif action=="selectItem" then
         local ok
-        if view.purpose=="hv" then ok=commit(state,api,view,function() state.hv.item=Me.identity(value); state.hv.selection="manual"; state.history.main=Me.Rates.new() end); previous.main,measured.main=nil,false
+        if view.purpose=="hv" then
+            local changed=state.averages.main.itemKey~=value.key
+            ok=commit(state,api,view,function() state.hv.item=Me.identity(value); state.hv.selection="manual"; if changed then resetMain(state,value.key) end end)
+            if ok and changed then previous.main,measured.main=nil,false end
         else ok=pin(state,api,view,value) end
         if ok then view.key,view.selected,view.screen=(view.purpose=="hv" or value.hv) and "hv" or value.key,Me.identity(value),"home" end
     elseif action=="autoHV" then
-        if commit(state,api,view,function() state.hv.selection,state.hv.item="auto",nil; state.history.main=Me.Rates.new() end) then
-            previous.main,measured.main=nil,false; if snapshots.main then snapshots.main.hvChecked=nil end; view.screen="home"
+        if commit(state,api,view,function() state.hv.selection,state.hv.item="auto",nil end) then
+            if snapshots.main then snapshots.main.hvChecked=nil end; view.screen="home"
         end
     elseif action=="item" then view.key,view.selected,view.screen,view.pages=value.key,copy(value.item),"item",{}
     elseif action=="editPin" then
@@ -539,7 +746,10 @@ function app.handleTouch(x,y,w,h,state,api,context)
         local v=view.manual; local item={raw=v.raw,name=v.name,damage=v.damage,key=Me.itemKey(v.raw,v.damage,v.name)}
         if Me.itemValid(item) then
             local ok
-            if view.purpose=="hv" then ok=commit(state,api,view,function() state.hv.item=item; state.hv.selection="manual"; state.history.main=Me.Rates.new() end); previous.main,measured.main=nil,false
+            if view.purpose=="hv" then
+                local changed=state.averages.main.itemKey~=item.key
+                ok=commit(state,api,view,function() state.hv.item=item; state.hv.selection="manual"; if changed then resetMain(state,item.key) end end)
+                if ok and changed then previous.main,measured.main=nil,false end
             else ok=pin(state,api,view,item) end
             if ok then view.screen="home" end
         end

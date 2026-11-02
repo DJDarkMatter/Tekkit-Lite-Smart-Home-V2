@@ -219,3 +219,11 @@ New: `tests_me.lua`.
 Changed: `apps_solar_farm.lua`, `lib_me.lua`, `install.lua`, `tools_build_installer.py`, `tests_run.lua`, `tests_solar_farm.lua`, `README.md`, `documentation_api.md`, `documentation_design.md`, `documentation_solar_farm.md`, `documentation_review.md`, `documentation_file_map.md`.
 
 `lib_me.lua` removes the LuaJ frontier-pattern crash and contains reader/parser failures. Solar farm retains schema 2 with an optional auto/manual HV-selection flag, existing sources and pin/Stick state. The overview gains source-health indicators, adaptive stock/capacity/movement summaries, selected-window changes and a signed HV history plot. The full farm list is independent of picker searches; farm HV and main output retain separate origins. No IO/client protocol or hardware behavior changes.
+
+## Solar farm learned rates, sorting and curve (v32 app-only release)
+
+The full archive retains **75 unique root files**. `install.lua` and all 21 embedded core sources are unchanged at **bundled-v31**. Upload the full release and run `inst app solar_farm` on an existing v31 central OS, then reboot; no new installer paste or role/client reinstall is needed.
+
+Changed files: `apps_solar_farm.lua`, `tests_solar_farm.lua`, `README.md`, `documentation_solar_farm.md`, `documentation_design.md`, `documentation_api.md`, `documentation_review.md`, `documentation_file_map.md`.
+
+Solar's saved schema-2 namespace gains bounded cumulative ledgers and a fine HV curve, while each window saves its sorting preference. Source bindings, HV identity, pins, Stick flags, colours and compatible recent history remain intact. The overview starts with Live indicators, headers sort/reverse, and the three-row graph uses six glyph-height steps. No new files or other app/core changes are introduced.

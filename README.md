@@ -68,6 +68,22 @@ These commands install your chosen file as `apps_APP_NAME.lua` and enable only t
 
 Optional apps are [Coffee](documentation_coffee.md), [Switchboard](documentation_switchboard.md), and [Reactors](documentation_reactors.md). Use `inst app coffee`, `inst app switchboard` or `inst app reactors` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers IO, durations and colour settings. Switchboard offers saved views, sixteen-colour side presets, custom grids/routing, touch naming and appearance settings. Reactors selects sensor targets and separate IO switches; see [sensor setup](documentation_sensors.md) and [the reactor guide](documentation_reactors.md), including card-dependent remaining-time data. All three app sources stay unchanged in bundled-v16. Update the OS and endpoint roles to use [wireless relays](documentation_relay.md); existing direct clients remain compatible. Apps, calibration and desktop geometry need no changes for relaying.
 
+### Version 32: learned rates, sortable tables and a finer curve
+
+Solar farm starts directly with the Live indicators; the blue overview/navigation header is removed. Average rates now use all accepted net changes and valid observed time, saved across restarts. Retained v31 history seeds the initial estimate. Production measured in batches settles as observation grows rather than repeatedly losing old data at a rolling-window boundary. The recent graph/change period remains independent, and Menu can explicitly restart learning after a production change.
+
+Click **Item** or **Amount** in the table header to sort; click again to reverse. Sticky items stay above the sorted rows. Small screens offer the same choices under Menu → List sorting. The three-row HV curve uses `.` and `|` for six height levels and one time column per character, with native sensor samples retained at finer intervals. Split time counters and decimal strings for large totals avoid legacy checkpoint rounding.
+
+Upload the full v32 contents to GitHub. From v31, use the existing bundled-v31 installer on the central computer:
+
+```text
+cd /
+inst app solar_farm
+reboot
+```
+
+No new installer paste or core/client reinstall is needed from v31. The full release retains all **75 flat root files**; the installer remains bundled-v31 with 21 core sources and no apps. Older installations must first follow the v31 core update below.
+
 ### Version 31: Solar farm repair for legacy LuaJ and a live dashboard
 
 Fixes the HV detector crash in LuaJ 2.0.3 that stopped processing the farm ME and also broke the HV item picker. The detector now uses safe plain word matching. One bad source no longer blocks the other source, and picker searches no longer filter the overview accidentally.
