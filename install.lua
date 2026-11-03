@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v31
+-- SmartHome OS installer: bundled-v34
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -410,6 +410,29 @@ local Gui = {}
 local digits = "0123456789abcdef"
 local names = {"White", "Orange", "Magenta", "Light blue", "Yellow", "Lime", "Pink", "Gray",
     "Light gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
+-- Shift applies to one accepted letter, consistently across all app keyboards.
+function Gui.typeKey(keyboard, key, limit)
+    if type(key) ~= "string" or #keyboard.draft >= limit then return false end
+    keyboard.draft = keyboard.draft .. key
+    if key:match("^[A-Z]$") then
+        if keyboard.bank == 1 then keyboard.bank = 0
+        elseif keyboard.bank == "ABC" then keyboard.bank = "abc" end
+    end
+    return true
+end
+-- Keep every completed choice visible; shorten long IDs rather than losing
+-- the final side/target. Small windows keep their existing usable row count.
+function Gui.breadcrumb(parts,width,height)
+    if width<24 or height<8 then return nil end
+    local values={}
+    for _,value in ipairs(parts) do if value and value~="" then values[#values+1]=tostring(value):gsub("[%c]"," ") end end
+    if #values==0 then return nil end
+    if #table.concat(values," / ")>width then
+        local budget=math.max(1,math.floor((width-3*(#values-1))/#values))
+        for i,value in ipairs(values) do if #value>budget then values[i]=value:sub(1,math.max(0,budget-2))..".." end end
+    end
+    return table.concat(values," / "):sub(1,width)
+end
 function Gui.colourName(colour)
     for index = 0, 15 do if colour == 2 ^ index then return names[index + 1] end end
     return "Unknown"
@@ -475,7 +498,7 @@ function Gui.menu(width, height, title, items, page, back, accent)
 end
 function Gui.palette(width, height, current, title)
     local ui = Gui.content(width, height)
-    ui.heading(title or "UI colour", 128)
+    ui.heading(title or "UI color", 128)
     local cellWidth, cellHeight = math.floor((width - 3) / 4), math.min(2, math.floor((height - 2) / 4))
     local short = {"White", "Orange", "Mag.", "Sky", "Yellow", "Lime", "Pink", "Gray", "L.gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
     for index = 0, 15 do
@@ -889,6 +912,7 @@ return Settings
 ]=],
     ["lib_io_picker.lua"] = [=[-- Reusable, server-rendered IO selector. No peripheral or network calls here.
 local Picker = {}
+local Gui = dofile("lib_gui.lua")
 local sideNames = {"top", "bottom", "left", "right", "front", "back"}
 local colorNames = {"white", "orange", "magenta", "lightBlue", "yellow", "lime", "pink", "gray",
     "lightGray", "cyan", "purple", "blue", "brown", "green", "red", "black"}
@@ -957,18 +981,21 @@ function Picker.render(dialog, width, height, clients)
     else
         local titles = {"Select IO", "Select side", "Select wire"}
         local list = choices(dialog, clients)
-        local slots = #list <= height - 2 and height - 2 or math.max(1, height - 3)
+        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {dialog.chosen.clientId,dialog.chosen.side} or {dialog.chosen.clientId},width,height)
+        local header = path and 2 or 1
+        local slots = #list <= height-header-1 and height-header-1 or math.max(1,height-header-2)
         local pages = math.max(1, math.ceil(#list / slots))
         dialog.page = math.max(1, math.min(dialog.page, pages))
         text(1, titles[dialog.stage] .. (pages > 1 and (" " .. dialog.page .. "/" .. pages) or ""))
+        if path then text(2,path); lines.styles[#lines.styles+1]={x=1,y=2,width=width,height=1,fg=256,bg=32768} end
         for row = 1, slots do
             local item = list[(dialog.page - 1) * slots + row]
             if item then
-                button(row + 1, 1, width, (item.colour and "  " or "") .. item.label, "select", item.value)
-                if item.colour then lines.styles[#lines.styles + 1] = {x = 1, y = row + 1, width = 2, height = 1, bg = item.colour} end
+                button(row + header, 1, width, (item.colour and "  " or "") .. item.label, "select", item.value)
+                if item.colour then lines.styles[#lines.styles + 1] = {x = 1, y = row + header, width = 2, height = 1, bg = item.colour} end
             end
         end
-        if #list == 0 then text(2, "No IO clients") end
+        if #list == 0 then text(header+1, "No IO clients") end
         if pages > 1 then
             button(height - 1, 1, half, "< Prev", "prev", nil, dialog.page > 1)
             button(height - 1, half + 1, width, "Next >", "next", pages, dialog.page < pages)
@@ -1124,7 +1151,8 @@ function Desktop.layoutOptions(win, app, monitor, selectedGrid)
                 enabled = enabled or Desktop.fits(Desktop.zone(Desktop.gridMode(grid[1], grid[2], column, row), monitor), app, monitor)
             end end
             local name = grid[1] .. "x" .. grid[2]
-            options[#options + 1] = {label = name, value = "choose_" .. name, enabled = enabled}
+            options[#options + 1] = {label = name,
+                value = name == "1x1" and Desktop.gridMode(1, 1, 1, 1) or "choose_" .. name, enabled = enabled}
         end
         options[#options + 1] = {label = "Restore", value = "restore", enabled = win.layout ~= nil and win.layout ~= "normal"}
         options[#options + 1] = {label = "Fullscreen", value = "fullscreen", enabled = Desktop.fullscreen(app, monitor) ~= nil}
@@ -1216,7 +1244,7 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
             if grid then
                 local x, y = 2 + (slot - 1) % columns * (cardWidth + 1), 2 + math.floor((slot - 1) / columns) * 6
                 local name = grid[1] .. "x" .. grid[2]
-                local item = byMode["choose_" .. name]
+                local item = byMode[name == "1x1" and Desktop.gridMode(1, 1, 1, 1) or "choose_" .. name]
                 local labelX = x + math.floor((cardWidth - #name) / 2)
                 local line = ui.lines[y]
                 ui.lines[y] = line:sub(1, labelX - 1) .. name .. line:sub(labelX + #name)
@@ -1453,7 +1481,7 @@ local function validApp(app)
     for _, key in ipairs({"minWidth", "maxWidth", "minHeight", "maxHeight", "preferredWidth", "preferredHeight"}) do
         if app[key] ~= nil and not integer(app[key], 1, 512) then return false end
     end
-    for _,key in ipairs({"backgroundService","fullscreenOnly","transientWindow","hideTaskbar"}) do
+    for _,key in ipairs({"backgroundService","fullscreenOnly","transientWindow","hideTaskbar","handlesFullscreenCorner"}) do
         if app[key]~=nil and type(app[key])~="boolean" then return false end
     end
     if app.animationInterval~=nil and (type(app.animationInterval)~="number" or app.animationInterval~=app.animationInterval
@@ -1541,6 +1569,7 @@ function Server.new(net, storage, config, logger)
     end
     api.save = server.save
     api.fullscreenApps = true
+    api.fullscreenCornerNavigation = true
     -- App-owned, synchronous upgrade transaction. The transform edits detached
     -- copies; both app namespaces checkpoint together without touching IO maps.
     function api.migrateAppState(from,to,transform)
@@ -1587,21 +1616,21 @@ function Server.new(net, storage, config, logger)
         return ok, err
     end
     function api.setBackgroundColour(value)
-        if not colour(value) then return false, "Choose a CC colour" end
+        if not colour(value) then return false, "Choose a CC color" end
         return saveAppearance(function(appearance) appearance.backgroundColour = value end)
     end
     function api.setWindowBorderColour(value)
-        if not colour(value) then return false, "Choose a CC colour" end
+        if not colour(value) then return false, "Choose a CC color" end
         return saveAppearance(function(appearance) appearance.windowBorderColour = value end)
     end
     function api.setTaskbarColour(value)
-        if not colour(value) then return false, "Choose a CC colour" end
+        if not colour(value) then return false, "Choose a CC color" end
         return saveAppearance(function(appearance) appearance.taskbarColour = value end)
     end
     local systemColourSetters = {background = api.setBackgroundColour,
         windowBorder = api.setWindowBorderColour, taskbar = api.setTaskbarColour}
     function api.setAppColour(name, value)
-        if not definition(name) or not colour(value) then return false, "Invalid app colour" end
+        if not definition(name) or not colour(value) then return false, "Invalid app color" end
         return saveAppearance(function(appearance) appearance.appColours[name] = value end)
     end
 
@@ -1691,13 +1720,30 @@ function Server.new(net, storage, config, logger)
         if not client then return end
         if changed then client.revision = client.revision + 1 end
         if not client.online then return end
-        local snapshot = outputSnapshot(clientId)
-        for side in pairs(snapshot) do
+        local snapshot = {}
+        for side, values in pairs(outputSnapshot(clientId)) do
             if not client.capabilities[side] then
                 log("IO " .. clientId .. ": mapped side " .. side .. " is unavailable")
-                snapshot[side] = nil
+            else snapshot[side] = values end
+        end
+        -- A snapshot ACK covers a whole revision, but unrelated wires retain
+        -- their earlier confirmation. Requiring the latest client revision for
+        -- every output made an entire board flash pending after one toggle.
+        client.wireRevisions = client.wireRevisions or {}
+        for side, wanted in pairs(snapshot) do
+            local previous = client.outputSnapshot and client.outputSnapshot[side]
+            local required = client.wireRevisions[side] or {}
+            client.wireRevisions[side] = required
+            if not previous or previous.digital ~= wanted.digital or required.digital == nil then
+                required.digital = client.revision
+            end
+            for bit = 0, 15 do
+                local color = 2 ^ bit
+                if not previous or math.floor(previous.bundled / color) % 2 ~= math.floor(wanted.bundled / color) % 2
+                    or required[color] == nil then required[color] = client.revision end
             end
         end
+        client.outputSnapshot = copy(snapshot)
         net.toClient(client, {type = "ioCommand", command = "syncOutputs", clientId = clientId,
             serverSession = server.session, revision = client.revision, outputs = snapshot})
         client.lastSent = os.clock()
@@ -1812,8 +1858,10 @@ function Server.new(net, storage, config, logger)
             local item = copy(state.outputMap[name])
             local client = server.ioClients[item.clientId]
             item.name, item.value, item.online = name, api.getOutput(name), client and client.online or false
+            local required = client and client.wireRevisions and client.wireRevisions[item.side]
+            required = required and required[item.color or "digital"]
             item.confirmed = item.online and client.capabilities[item.side]
-                and client.ackedRevision == client.revision or false
+                and required ~= nil and client.ackedRevision >= required or false
             result[#result + 1] = item
         end
         return result
@@ -1856,10 +1904,10 @@ function Server.new(net, storage, config, logger)
         local win = state.windows[windowId]
         target = target or "app"
         local option = systemColours[target]
-        if not win or (target ~= "app" and not option) then return false, "Invalid colour selector" end
-        if option and win.appName ~= "@settings" then return false, "Open OS settings for system colours" end
+        if not win or (target ~= "app" and not option) then return false, "Invalid color selector" end
+        if option and win.appName ~= "@settings" then return false, "Open OS settings for system colors" end
         local content = Desktop.contentRect(win)
-        if content.width < 12 or content.height < 6 then return false, "Colour settings need a 12x6 content area" end
+        if content.width < 12 or content.height < 6 then return false, "Color settings need a 12x6 content area" end
         server.dialogs[windowId] = {kind = "colour", target = target,
             current = option and state.appearance[option.field] or api.getAppColour(win.appName)}
         invalidateInput(win.monitorId)
@@ -2226,7 +2274,7 @@ function Server.new(net, storage, config, logger)
                         local option = systemColours[dialog.target]
                         dialog.current = option and state.appearance[option.field] or api.getAppColour(win.appName)
                         content, dialog.hits = Gui.palette(body.width, body.height, dialog.current,
-                            dialog.error or (option and option.title or "UI colour"))
+                            dialog.error or (option and option.title or "UI color"))
                     elseif dialog.kind == "sensor" then content = SensorPicker.render(dialog, body.width, body.height, api.getSensorClients())
                     else content = Picker.render(dialog, body.width, body.height, api.getIOClients()) end
                 else
@@ -2351,20 +2399,20 @@ function Server.new(net, storage, config, logger)
         if notification then
             local popup = monitor.notification
             local x,y,w,h = popup.x,popup.y,popup.width,popup.height
-            surface.fill(x,y,w,h,32768,1)
+            surface.fill(x,y,w,h,1,16384)
             if h>=3 then
-                surface.fill(x,y,w,1,Gui.contrast(borderColour),borderColour)
+                surface.fill(x,y,w,1,1,16384)
                 surface.write(x+(w>=3 and 1 or 0),y,notification.title,nil,nil,math.max(1,w-2))
                 local span=math.max(1,w-2)
                 for row=1,math.max(0,h-4) do
                     local text=popup.lines[row] or ""
-                    surface.write(x+1+math.max(0,math.floor((span-#text)/2)),y+row,text,32768,1,span)
+                    surface.write(x+1+math.max(0,math.floor((span-#text)/2)),y+row,text,1,16384,span)
                 end
-                if monitor.notificationError and h>=5 then surface.write(x+1,y+h-3,w>=22 and "Save failed; retry OK" or "Save failed",16384,1,math.max(1,w-2)) end
+                if monitor.notificationError and h>=5 then surface.write(x+1,y+h-3,w>=22 and "Save failed; retry OK" or "Save failed",16,16384,math.max(1,w-2)) end
             end
             local hit=popup.ok
-            surface.fill(hit.x1,hit.y,hit.x2-hit.x1+1,1,1,8192)
-            surface.write(hit.x1+math.max(0,math.floor((hit.x2-hit.x1-1)/2)),hit.y,"OK",1,8192,hit.x2-hit.x1+1)
+            surface.fill(hit.x1,hit.y,hit.x2-hit.x1+1,1,16384,1)
+            surface.write(hit.x1+math.max(0,math.floor((hit.x2-hit.x1-1)/2)),hit.y,"OK",16384,1,hit.x2-hit.x1+1)
         end
         return surface.frame()
     end
@@ -2402,7 +2450,7 @@ function Server.new(net, storage, config, logger)
             return -- Modal: no click-through into apps, taskbar or placement.
         end
         local fullscreen = fullscreenWindow(id)
-        if fullscreen and x == monitor.width and y == 1 then
+        if fullscreen and x == monitor.width and y == 1 and not definition(fullscreen.appName).handlesFullscreenCorner then
             if definition(fullscreen.appName).fullscreenOnly then api.closeWindow(fullscreen.id)
             else api.layoutWindow(fullscreen.id, "restore") end
             return -- The invisible exit cell never reaches the app underneath.
@@ -2628,7 +2676,7 @@ function Server.new(net, storage, config, logger)
                         if previousCapabilities[side] ~= client.capabilities[side] then ioChanged = true end
                     end
                 end
-                ioChanged = ioChanged or ioReset and not reconnect
+                ioChanged = ioChanged or ioReset
                 ioReset = ioReset or ioChanged
                 client.announceNonce = message.nonce
             end
@@ -2638,7 +2686,9 @@ function Server.new(net, storage, config, logger)
             if message.clientType == "io" then
                 -- Routine announcements resend the same snapshot as a health
                 -- check. They do not revoke an acknowledgement already earned.
-                if ioReset then client.ackedRevision = -1 end
+                if ioReset then
+                    client.ackedRevision, client.outputSnapshot, client.wireRevisions = -1, nil, {}
+                end
                 server.syncIO(id, ioChanged)
             end
             server.refreshMonitors(false)
@@ -4345,13 +4395,16 @@ function Picker.render(dialog, width, height, clients)
         ui.button(height, "Use", "use", 1, math.floor(width / 2), true, 32)
         ui.button(height, "Cancel", "cancel", math.floor(width / 2) + 1, width)
     else
-        local slots = #list <= height - 2 and height - 2 or height - 3
+        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {chosen.clientId,chosen.side} or {chosen.clientId},width,height)
+        local header = path and 2 or 1
+        local slots = #list<=height-header-1 and height-header-1 or height-header-2
         local pages = math.max(1, math.ceil(#list / slots))
         dialog.page = math.max(1, math.min(dialog.page, pages))
         ui.heading(({"Sensor client", "Sensor side", "Select target"})[dialog.stage], 2048)
+        if path then ui.text(2,path); ui.style(1,2,width,1,256,32768) end
         for row = 1, slots do
             local item = list[(dialog.page - 1) * slots + row]
-            if item then ui.button(row + 1, item.label, "select", nil, nil, item.enabled ~= false, nil, nil, item) end
+            if item then ui.button(row + header, item.label, "select", nil, nil, item.enabled ~= false, nil, nil, item) end
         end
         if #list == 0 then
             local message = "No sensor clients yet"
@@ -4359,12 +4412,12 @@ function Picker.render(dialog, width, height, clients)
                 message = selectedClient and selectedClient.online and "Waiting for catalog" or "Sensor client offline"
                 if selectedClient and selectedClient.catalogError then
                     message = "Catalog rejected"
-                    ui.text(3, selectedClient.catalogError)
+                    ui.text(header+2, selectedClient.catalogError)
                 end
             elseif dialog.stage == 3 then
                 message = selectedPort and #selectedPort.targets > 0 and "No matching targets" or "No targets yet"
             end
-            ui.text(2, message)
+            ui.text(header+1, message)
         end
         if pages > 1 then
             ui.button(height - 1, "< Prev", "prev", 1, math.floor(width / 2), dialog.page > 1)
@@ -4505,7 +4558,7 @@ end
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v31")
+print("SmartHome installer: bundled-v34")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")

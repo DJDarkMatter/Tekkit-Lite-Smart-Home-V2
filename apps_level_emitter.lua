@@ -89,6 +89,7 @@ local function migrate(state,api)
     end))
 end
 function app.init(state,api,context)
+    assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"level_emitter requires bundled-v33 OS; run inst server")
     ready=false; caches,values,holds,frozen,lastError={},{},{},{},nil
     assert(api.migrateAppState and api.getAppData and api.ui.form,"Level emitter requires bundled-v30 OS")
     name=context and context.appName or "level_emitter"
@@ -266,19 +267,23 @@ local function form(w,h,state,api,context)
     elseif screen=="items" then
         local rows,s=itemsFor(view,state,api,context.windowId)
         ui.heading("Select item",s.status=="ok" and accent or 2)
-        local rowH=w>=32 and 1 or 2; local slots=math.max(1,math.floor((h-2)/rowH))
-        if #rows>slots then slots=math.max(1,math.floor((h-3)/rowH)) end
+        local sensor=view.draft.sensor or {}
+        local path=api.ui.breadcrumb({sensor.clientId,sensor.side,sensor.target},w,h)
+        local start=path and 3 or 2
+        if path then ui.put(1,2,path,w); ui.style(1,2,w,1,256,32768) end
+        local rowH=w>=32 and 1 or 2; local slots=math.max(1,math.floor((h-start)/rowH))
+        if #rows>slots then slots=math.max(1,math.floor((h-start-1)/rowH)) end
         local first=ui.page("items",#rows,slots,h-1)
         local same={}; for _,item in ipairs(rows) do same[item.name]=(same[item.name] or 0)+1 end
         for i=1,slots do local item=rows[first+i]; if item then
-            local y=2+(i-1)*rowH; local text=Me.amount(Me.count(s,item.key)); local label=item.name..(same[item.name]>1 and " ["..item.damage.."]" or "")
+            local y=start+(i-1)*rowH; local text=Me.amount(Me.count(s,item.key)); local label=item.name..(same[item.name]>1 and " ["..item.damage.."]" or "")
             local bg=i%2==0 and state.settings.panel or state.settings.background
             ui.style(1,y,w,rowH,api.ui.contrast(bg),bg)
             if rowH==1 then local span=math.min(#text,math.floor(w/2)); ui.put(1,y,label,w-span-1); ui.put(w-span+1,y,text,span)
             else ui.put(1,y,label,w); ui.put(1,y+1,text,w,true) end
             ui.hits[#ui.hits+1]={x1=1,x2=w,y1=y,y2=y+rowH-1,action="selectItem",value=Me.identity(item)}
         end end
-        if #rows==0 then ui.put(1,2,s.status=="ok" and "No items" or s.error or s.status,w,true) end
+        if #rows==0 then ui.put(1,start,s.status=="ok" and "No items" or s.error or s.status,w,true) end
         ui.footer({{"Back","edit"},{"Find","filters"}})
     elseif screen=="filters" then
         ui.menu("Item list",{{"Search: "..(view.query or ""),"search"},{"Sort: "..(view.sort or "name"),"sort"},
@@ -298,7 +303,7 @@ local function form(w,h,state,api,context)
         ui.heading("Delete level rule?",accent); ui.put(1,2,r.name,w,true)
         ui.action(h-1,"Delete","confirmDelete",nil,nil,nil,true,16384); ui.footer({{"Cancel","rule"}})
     elseif screen=="settings" then
-        ui.menu("Level emitter menu",{{"UI colour","accent"},{"About / alarm behavior","about"},
+        ui.menu("Level emitter menu",{{"UI color","accent"},{"About / alarm behavior","about"},
             {"Imported Solar rules: "..(state.imported or 0),"noop",nil,false}},"settings")
     elseif screen=="number" then ui.numberPad(view.number.key,view.number.draft,view.number.back)
     elseif screen=="keyboard" then ui.keyboard(view.keyboard)
@@ -404,7 +409,7 @@ function app.handleTouch(x,y,w,h,state,api,context)
             if n.key=="threshold" then d.reset=d.operator=="at_least" and math.max(0,v-1) or v end
             view.screen="edit"
         end
-    elseif action=="key" or action=="space" then local k=view.keyboard; if #k.draft<k.limit then k.draft=k.draft..(action=="space" and " " or value) end
+    elseif action=="key" or action=="space" then api.ui.typeKey(view.keyboard,action=="space" and " " or value,view.keyboard.limit)
     elseif action=="backspace" then view.keyboard.draft=view.keyboard.draft:sub(1,-2)
     elseif action=="clearText" then view.keyboard.draft=""
     elseif action=="bank" then view.keyboard.bank,view.keyboard.page=(view.keyboard.bank+1)%3,1

@@ -63,6 +63,6 @@ Live sensor readings remain runtime-only and must arrive again after an OS/senso
 
 ## Other ME apps
 
-The independent [ME monitors](documentation_me_monitor.md) app provides item tiles and coloured lists. [Solar farm](documentation_solar_farm.md) combines farm-ME stock with farm net rates and a main-ME HV solar item, pinned/sticky by default with the same Stick/unpin controls as other pins. [Level emitter](documentation_level_emitter.md) selects any ME network/item for independent level alarms and saved popup/IO signals. All share selected `ae_items` sensor feeds while keeping separate configuration and app state.
+The independent [ME monitors](documentation_me_monitor.md) app provides item tiles and colored lists. [Solar farm](documentation_solar_farm.md) combines farm-ME stock with farm net rates and a main-ME HV solar item, pinned/sticky by default with the same Stick/unpin controls as other pins. [Level emitter](documentation_level_emitter.md) selects any ME network/item for independent level alarms and saved popup/IO signals. All share selected `ae_items` sensor feeds while keeping separate configuration and app state.
 
 Detailed cell/drive capacity remains in this app. Solar farm adds no machinery conditions, transfer logic, SMF instrumentation or output counting. Zero movement, empty ingredients and intentional full buffers are normal. Its net stock changes do not claim gross crafting throughput; simultaneous production/consumption can cancel. Large withdrawals can be filtered as player actions.

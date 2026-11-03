@@ -123,8 +123,82 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         error("Missing visible switch tile " .. buttonId)
     end
     local function editColour(t, id, board, index)
+        t.view(id).screen = "home"
         t.click(id, "open", board.id); t.click(id, "edit"); t.click(id, "switches")
         t.click(id, "editSwitch", board.buttons[index or 1].id); t.click(id, "switchColour")
+    end
+
+    local function setStateColor(t,board,scope,field,color,id)
+        id=id or t.id; local view=t.view(id)
+        view.boardId,view.buttonId=board.id,board.buttons[1].id
+        if scope=="app" then view.screen="settings"; t.click(id,"palette",field)
+        else
+            view.screen=scope=="button" and "buttonColors" or "viewColors"
+            t.click(id,"statePalette",function(v) return v.scope==scope and v.field==field end)
+        end
+        if color then t.click(id,"colour",color) else t.click(id,"autoColour") end
+        t.click(id,"applyColour")
+    end
+    function tests.switchboard_state_colors_resolve_button_then_view_then_app_and_inherit_without_touching_io()
+        local t=setup(); local board=t.preset(t.id); local switch=board.buttons[1]
+        editColour(t,t.id,board); t.click(t.id,"stateFill"); t.click(t.id,"applyColour")
+        equal(switch.fillMode,"state"); equal(switch.displayColour,nil)
+        local before,revision,writes=serialize(mappings(t)),t.central.server.ioClients.io_11.revision,#t.io.redstoneWrites
+        local oldGet=t.api.getOutputs
+        for i,field in ipairs({"active","inactive","pending"}) do
+            setStateColor(t,board,"app",field,({4,512,16})[i])
+            t.api.getOutputs=function()
+                local all=oldGet()
+                for _,wire in ipairs(all) do if wire.name==logical(switch) then wire.online=true; wire.confirmed=field~="pending"; wire.value=field=="active" end end
+                return all
+            end
+            t.view(t.id).screen="board"; equal(tileColour(t,t.id,switch.id),({4,512,16})[i])
+            setStateColor(t,board,"board",field,({8,64,8192})[i])
+            t.view(t.id).screen="board"; equal(tileColour(t,t.id,switch.id),({8,64,8192})[i])
+            setStateColor(t,board,"button",field,({16384,1024,2})[i])
+            t.view(t.id).screen="board"; equal(tileColour(t,t.id,switch.id),({16384,1024,2})[i])
+            if field=="inactive" then
+                setStateColor(t,board,"button",field,nil)
+                t.view(t.id).screen="board"; equal(tileColour(t,t.id,switch.id),64)
+                setStateColor(t,board,"board",field,nil)
+                t.view(t.id).screen="board"; equal(tileColour(t,t.id,switch.id),512)
+            end
+        end
+        t.api.getOutputs=oldGet
+        equal(serialize(mappings(t)),before); equal(t.central.server.ioClients.io_11.revision,revision)
+        equal(#t.io.redstoneWrites,writes); equal(t.api.getOutput(logical(switch)),false)
+        t.reboot(); board=t.state.boards[1]; switch=board.buttons[1]
+        equal(switch.fillMode,"state"); equal(switch.stateColors.active,16384); equal(switch.stateColors.pending,2)
+        equal(switch.stateColors.inactive,nil); equal(board.stateColors.active,8); equal(board.stateColors.inactive,nil)
+        equal(t.state.settings.pending,16); equal(t.state.settings.inactive,512)
+        t.view(t.id).screen="board"; equal(tileColour(t,t.id,switch.id),512)
+        editColour(t,t.id,board); t.click(t.id,"autoColour"); t.click(t.id,"applyColour")
+        t.view(t.id).screen="board"; equal(tileColour(t,t.id,switch.id),1,"IO default retains the real wire color")
+    end
+    function tests.switchboard_state_color_edits_reject_stale_values_and_rollback_failed_saves_at_each_scope()
+        local t=setup(15,10); local board=t.preset(t.id); local other=t.open("left")
+        for _,scope in ipairs({"button","board"}) do
+            t.view(t.id).boardId,t.view(t.id).buttonId=board.id,board.buttons[1].id
+            t.view(t.id).screen=scope=="button" and "buttonColors" or "viewColors"
+            t.click(t.id,"statePalette",function(v) return v.scope==scope and v.field=="active" end)
+            t.click(t.id,"colour",4); t.central.disk.failWrite=true; t.click(t.id,"applyColour")
+            local target=scope=="button" and board.buttons[1] or board
+            equal(target.stateColors,nil); equal(t.view(t.id).screen,"message")
+            t.central.disk.failWrite=false; t.click(t.id,"messageBack"); t.click(t.id,"applyColour")
+            equal(target.stateColors.active,4)
+            t.view(t.id).screen=scope=="button" and "buttonColors" or "viewColors"
+            t.click(t.id,"statePalette",function(v) return v.scope==scope and v.field=="active" end); t.click(t.id,"colour",16)
+            setStateColor(t,board,scope,"active",32,other)
+            t.click(t.id,"applyColour"); equal(t.view(t.id).screen,"message"); equal(target.stateColors.active,32)
+        end
+        equal(t.api.getOutput(logical(board.buttons[1])),false); equal(t.io.bundled.left,0)
+    end
+    function tests.switchboard_pending_color_migrates_without_resetting_legacy_routes_or_fixed_fills()
+        local t=setup(); local board=t.preset(t.id)
+        board.buttons[1].displayColour=4; t.state.settings.pending=nil
+        assert(t.api.save()); t.reboot(); equal(t.state.settings.pending,2)
+        board=t.state.boards[1]; equal(board.buttons[1].displayColour,4); equal(board.buttons[1].route.color,1)
+        t.click(t.id,"open",board.id); equal(tileColour(t,t.id,board.buttons[1].id),4)
     end
 
     function tests.switchboard_button_colour_is_cosmetic_persistent_and_independent_of_shared_routes()
@@ -455,7 +529,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             t.click(t.id, "open", board.id); t.click(t.id, "edit"); t.click(t.id, "renameView")
             local original = board.name
             for _ = 1, #original do t.click(t.id, "backspace") end
-            t.click(t.id, "bank"); t.click(t.id, "key", "P"); t.click(t.id, "bank"); t.click(t.id, "key", "1")
+            t.click(t.id, "bank"); t.click(t.id, "key", "P"); equal(t.view(t.id).keyboard.bank,"abc"); t.click(t.id, "bank"); t.click(t.id, "bank"); t.click(t.id, "key", "1")
             t.click(t.id, "saveName"); equal(board.name, "P1")
             t.click(t.id, "renameView"); t.click(t.id, "space"); t.click(t.id, "key", "q"); t.click(t.id, "cancelName")
             equal(board.name, "P1")
@@ -669,9 +743,81 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(t.id, "toggle", board.buttons[1].id); t.bus.advance(1)
         equal(t.io.bundled.left, 1)
         assert(unconfirmed > 0, "An actual unacknowledged change must still show pending")
-        for _, wire in ipairs(original()) do equal(wire.confirmed, false) end
+        for _, wire in ipairs(original()) do
+            equal(wire.confirmed, wire.name ~= logical(board.buttons[1]), "Only the changed wire loses confirmation")
+        end
         t.bus.drop = nil; t.bus.advance(2)
         for _, wire in ipairs(original()) do equal(wire.confirmed, true) end
+    end
+
+    function tests.switchboard_one_toggle_marks_only_its_wire_and_aliases_pending_across_all_ports_and_colors()
+        local t = setup(); local board = t.preset(t.id)
+        for _, button in ipairs(board.buttons) do button.fillMode = "state" end
+        assert(t.api.mapOutput("alias", "io_11", "left", 1, false))
+        assert(t.api.mapOutput("digital", "io_11", "left", nil, false))
+        assert(t.api.mapOutput("other_side", "io_11", "back", 1, false))
+        t.click(t.id, "open", board.id); t.bus.advance(1)
+        local writes = #t.io.redstoneWrites
+        local original, seenPending = t.api.getOutputs, false
+        t.api.getOutputs = function()
+            local all = original()
+            for _, wire in ipairs(all) do
+                if wire.clientId == "io_11" and not wire.confirmed then
+                    assert(wire.side == "left" and wire.color == 1, "Unchanged wire flashed pending: " .. wire.name)
+                    seenPending = true
+                end
+            end
+            return all
+        end
+        t.bus.drop = function(packet) return packet.sender == t.io and packet.message.type == "ioAck" end
+        t.click(t.id, "toggle", board.buttons[1].id); t.bus.advance(1)
+        assert(seenPending); equal(t.io.bundled.left, 1)
+        equal(#t.io.redstoneWrites, writes + 1, "One toggle writes only the changed bundled mask")
+        for _, button in ipairs(board.buttons) do
+            equal(tileColour(t, t.id, button.id), button.id == board.buttons[1].id and 2 or 128,
+                "Unchanged button fill must not turn orange")
+        end
+        local pending = {}
+        for _, wire in ipairs(original()) do if not wire.confirmed then pending[wire.name] = true end end
+        equal(pending.alias, true); equal(pending[logical(board.buttons[1])], true)
+        local count = 0; for _ in pairs(pending) do count = count + 1 end; equal(count, 2)
+        t.api.getOutputs = original; t.bus.drop = nil; t.bus.advance(2)
+        for _, wire in ipairs(original()) do equal(wire.confirmed, true) end
+    end
+
+    function tests.switchboard_rapid_changes_and_return_to_old_value_stay_pending_without_disturbing_other_wires()
+        local t = setup(); local board = t.preset(t.id)
+        t.click(t.id, "open", board.id); t.bus.advance(1)
+        t.bus.drop = function(packet) return packet.sender == t.io and packet.message.type == "ioAck" end
+        t.click(t.id, "toggle", board.buttons[1].id)
+        local firstRevision = t.central.server.ioClients.io_11.revision
+        t.bus.advance(.7) -- The ON may reach hardware before its queued OFF.
+        t.click(t.id, "toggle", board.buttons[1].id)
+        t.click(t.id, "toggle", board.buttons[2].id)
+        t.central.server.handle({type="ioAck",clientId="io_11",sender=11,
+            serverSession=t.central.server.session,revision=firstRevision}, t.central.server.ioClients.io_11.channel, t.bus.now)
+        for _, wire in ipairs(t.api.getOutputs()) do
+            equal(wire.confirmed, wire.color ~= 1 and wire.color ~= 2)
+        end
+        equal(t.api.getOutput(logical(board.buttons[1])), false)
+        t.bus.advance(1); equal(t.io.bundled.left, 2)
+        t.bus.drop = nil; t.central.server.syncIO("io_11", false); t.bus.pump()
+        for _, wire in ipairs(t.api.getOutputs()) do equal(wire.confirmed, true) end
+    end
+
+    function tests.switchboard_digital_changes_and_failed_saves_preserve_other_wire_confirmations()
+        local t = setup(); local board = t.preset(t.id)
+        assert(t.api.mapOutput("digital", "io_11", "left", nil, false)); t.bus.advance(1)
+        local client = t.central.server.ioClients.io_11
+        local revision, versions = client.revision, serialize(client.wireRevisions)
+        t.central.disk.failWrite = true; equal(t.api.setOutput("digital", true), false)
+        equal(client.revision, revision); equal(serialize(client.wireRevisions), versions)
+        for _, wire in ipairs(t.api.getOutputs()) do equal(wire.confirmed, true) end
+        t.central.disk.failWrite = false
+        t.bus.drop = function(packet) return packet.sender == t.io and packet.message.type == "ioAck" end
+        assert(t.api.setOutput("digital", true)); t.bus.pump(); t.bus.advance(1)
+        equal(t.io.digital.left, true); equal(t.io.bundled.left, 0)
+        for _, wire in ipairs(t.api.getOutputs()) do equal(wire.confirmed, wire.name ~= "digital") end
     end
 
     function tests.switchboard_actual_io_restart_invalidates_confirmation_until_restore_is_acknowledged()
@@ -679,10 +825,13 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local board = t.preset(t.id)
         t.click(t.id, "open", board.id); t.click(t.id, "toggle", board.buttons[1].id); t.bus.advance(1)
         local revision = t.central.server.ioClients.io_11.revision
+        local oldAck = {type="ioAck",clientId="io_11",sender=11,
+            serverSession=t.central.server.session,revision=revision}
         local restarted = t.bus.computer(11, "io", {disk = t.io.disk, modemSide = "right"})
         t.bus.drop = function(packet) return packet.sender == restarted and packet.message.type == "ioAck" end
         restarted:start(); t.bus.advance(3)
         assert(t.central.server.ioClients.io_11.revision > revision)
+        t.central.server.handle(oldAck,t.central.server.ioClients.io_11.channel,t.bus.now)
         for _, wire in ipairs(t.api.getOutputs()) do equal(wire.confirmed, false) end
         equal(restarted.bundled.left, 1)
         t.bus.drop = nil; t.bus.advance(2)

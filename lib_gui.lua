@@ -3,6 +3,29 @@ local Gui = {}
 local digits = "0123456789abcdef"
 local names = {"White", "Orange", "Magenta", "Light blue", "Yellow", "Lime", "Pink", "Gray",
     "Light gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
+-- Shift applies to one accepted letter, consistently across all app keyboards.
+function Gui.typeKey(keyboard, key, limit)
+    if type(key) ~= "string" or #keyboard.draft >= limit then return false end
+    keyboard.draft = keyboard.draft .. key
+    if key:match("^[A-Z]$") then
+        if keyboard.bank == 1 then keyboard.bank = 0
+        elseif keyboard.bank == "ABC" then keyboard.bank = "abc" end
+    end
+    return true
+end
+-- Keep every completed choice visible; shorten long IDs rather than losing
+-- the final side/target. Small windows keep their existing usable row count.
+function Gui.breadcrumb(parts,width,height)
+    if width<24 or height<8 then return nil end
+    local values={}
+    for _,value in ipairs(parts) do if value and value~="" then values[#values+1]=tostring(value):gsub("[%c]"," ") end end
+    if #values==0 then return nil end
+    if #table.concat(values," / ")>width then
+        local budget=math.max(1,math.floor((width-3*(#values-1))/#values))
+        for i,value in ipairs(values) do if #value>budget then values[i]=value:sub(1,math.max(0,budget-2))..".." end end
+    end
+    return table.concat(values," / "):sub(1,width)
+end
 function Gui.colourName(colour)
     for index = 0, 15 do if colour == 2 ^ index then return names[index + 1] end end
     return "Unknown"
@@ -68,7 +91,7 @@ function Gui.menu(width, height, title, items, page, back, accent)
 end
 function Gui.palette(width, height, current, title)
     local ui = Gui.content(width, height)
-    ui.heading(title or "UI colour", 128)
+    ui.heading(title or "UI color", 128)
     local cellWidth, cellHeight = math.floor((width - 3) / 4), math.min(2, math.floor((height - 2) / 4))
     local short = {"White", "Orange", "Mag.", "Sky", "Yellow", "Lime", "Pink", "Gray", "L.gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
     for index = 0, 15 do

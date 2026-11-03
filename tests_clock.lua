@@ -170,6 +170,43 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         t.click(other,"stopwatchToggle"); t.bus.advance(1); assert(math.abs(t.state.stopwatch.elapsed-72)<0.01)
         t.click(other,"lap"); equal(t.state.stopwatch.laps[1].number,1)
     end
+    function tests.clock_real_stopwatch_records_between_ticks_without_quantizing_start_laps_or_stop()
+        local t=setup(); t.click(t.id,"stopwatch")
+        t.bus.advance(.13); t.click(t.id,"stopwatchToggle")
+        t.bus.advance(.23); t.click(t.id,"lap")
+        assert(math.abs(t.state.stopwatch.laps[1].elapsed-.23)<.00001)
+        t.bus.advance(.31); t.click(t.id,"stopwatchToggle")
+        assert(math.abs(t.state.stopwatch.elapsed-.54)<.00001)
+        t.bus.advance(3); assert(math.abs(t.state.stopwatch.elapsed-.54)<.00001)
+        t.click(t.id,"stopwatchToggle"); t.bus.advance(.17); t.click(t.id,"stopwatchToggle")
+        assert(math.abs(t.state.stopwatch.elapsed-.71)<.00001)
+        assert(t.api.save()); t.startCentral(t.central.disk)
+        assert(math.abs(t.state.stopwatch.elapsed-.71)<.00001)
+    end
+    function tests.clock_real_stopwatch_uses_elapsed_clock_even_if_background_delivery_or_another_signal_save_fails()
+        local t=setup({rate=0,manualAlerts=true})
+        t.new(t.id,"timer",{duration=1,signal={kind="constant",on=1,off=1,total=1}})
+        t.view(t.id).screen="stopwatch"; t.click(t.id,"stopwatchToggle")
+        local start=t.bus.now
+        t.central.disk.failWrite=true; t.bus.advance(2.37); t.content(t.id)
+        assert(math.abs(t.state.stopwatch.elapsed-(t.bus.now-start))<.00001)
+        t.central.disk.failWrite=false; t.bus.advance(.44)
+        t.content(t.id); assert(math.abs(t.state.stopwatch.elapsed-(t.bus.now-start))<.00001)
+        -- One late callback must not use a guessed nominal callback interval.
+        t.bus.now=t.bus.now+7.25; t.app.background(.5,t.state,t.api)
+        assert(math.abs(t.state.stopwatch.elapsed-(t.bus.now-start))<.00001)
+    end
+    function tests.clock_game_stopwatch_and_laps_show_days_without_subseconds_on_small_or_large_windows()
+        local t=setup(); local sw=t.state.stopwatch
+        sw.mode,sw.elapsed,sw.lapCounter="game",90061.9,1
+        sw.laps={{number=1,elapsed=90061.9,split=90061.9}}; t.view(t.id).screen="stopwatch"
+        for _,size in ipairs({{12,6},{44,18}}) do
+            local lines=t.app.render(size[1],size[2],t.state,t.api,t.context(t.id))
+            assert(lines[2]:find("1d 01:01:01",1,true))
+            local text=table.concat(lines,"\n"); assert(not text:find("01:01:01.",1,true)); assert(text:find("1d",1,true))
+        end
+    end
+
     function tests.clock_timer_history_is_bounded_without_dropping_active_timers_or_leaving_output_routes()
         local t=setup({rate=0})
         local active=t.new(t.id,"timer",{duration=10000})

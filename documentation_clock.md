@@ -1,10 +1,10 @@
-# Clock: alarms, timers and stopwatch (v25)
+# Clock: alarms, timers and stopwatch (v33)
 
 `apps_clock.lua` runs on the central OS. It is an optional background service: after explicit installation it starts at every OS boot, even without a window. Closing its windows leaves clocks and output signals running.
 
 ## Install or update
 
-Upload the complete v25 package's root files to the V2 GitHub repository. Replace the single installer paste with the supplied `install.lua` (banner `bundled-v25`), download a fresh `inst` on the central computer, quit the OS and run:
+Upload the complete v33 package's root files to the V2 GitHub repository. Replace the single installer paste with the supplied `install.lua` (banner `bundled-v33`), download a fresh `inst` on the central computer, quit the OS and run:
 
 ```text
 cd /
@@ -17,7 +17,7 @@ Keep the existing startup script. Use `inst server --startup` if configuring sta
 
 ## Alarms
 
-Open **Clock → Alarms → + Add alarm**. Name it with the touch keyboard, set its world time as four HHMM digits (for example 0715), choose Daily or Once, enable it, and select an output. Output selection uses the normal **IO client → side → bundled colour / Digital → Use** picker. Save applies everything together. Selecting a route in the picker edits the draft; Cancel discards it.
+Open **Clock → Alarms → + Add alarm**. Name it with the touch keyboard, set its world time as four HHMM digits (for example 0715), choose Daily or Once, enable it, and select an output. Output selection uses the normal **IO client → side → bundled color / Digital → Use** picker. Save applies everything together. Selecting a route in the picker edits the draft; Cancel discards it.
 
 Each saved alarm remains in the list. Touch it to enable/disable it, inspect routing and signal details, edit or delete it. Once disables after its first trigger; Daily can trigger once per world day. Changing the scheduled time explicitly starts a new schedule. Output-free entries still show the popup, without actuating a wire. Disable prevents future triggers; **Dismiss / OK** ends an already running signal.
 
@@ -46,17 +46,20 @@ An offline IO client receives only current desired state on reconnect. Expired f
 
 ## Popup and redstone dismissal
 
-Every alarm/timer trigger creates a small modal window showing its type/name and one **OK** button on **every connected monitor**, even when Clock has no open windows and no output is selected. OK on any monitor acknowledges that occurrence, stops its signal and closes its popup everywhere. Finite signals stop at their configured length/total, but their popup remains until acknowledged. Constant length **0** and Pattern total **0** continue until acknowledged.
+Every alarm/timer trigger creates a **red panel with white text and a white OK strip**, independent of desktop/window/app colors. It creates a small modal window showing its type/name and one **OK** button on **every connected monitor**, even when Clock has no open windows and no output is selected. OK on any monitor acknowledges that occurrence, stops its signal and closes its popup everywhere. Finite signals stop at their configured length/total, but their popup remains until acknowledged. Constant length **0** and Pattern total **0** continue until acknowledged.
 
 If several entries trigger, popups queue in trigger order. Acknowledging one does not dismiss another or interrupt another active Clock signal on a shared wire. There is at most one outstanding popup per alarm/timer; an already pending daily alarm is not restarted by its next scheduled occurrence. Pending popups appear again after OS/monitor restart and reach monitors connected later. They overlay the desktop without creating, moving or replacing saved app windows. Clicks do not pass through a popup to the desktop underneath, and queued stale OK taps cannot dismiss the following entry.
 
-Each alarm/timer editor offers **Select dismiss input** (or **Dismiss: client**) using **IO client → side → Digital/bundled colour → Use**. Apply it with Save, just like the output. **Clear dismiss input** removes it. A fresh LOW→HIGH press after the trigger has the same effect as OK, closing the popup everywhere. A line already HIGH when the alarm starts must go LOW before another HIGH acknowledges it. After an OS restart or the input going offline, a fresh observed LOW is required again; reconnecting HIGH cannot silently acknowledge an alarm. Multiple entries may share an input, in which case that press acknowledges all pending entries configured for it.
+Each alarm/timer editor offers **Select dismiss input** (or **Dismiss: client**) using **IO client → side → Digital/bundled color → Use**. Apply it with Save, just like the output. **Clear dismiss input** removes it. A fresh LOW→HIGH press after the trigger has the same effect as OK, closing the popup everywhere. A line already HIGH when the alarm starts must go LOW before another HIGH acknowledges it. After an OS restart or the input going offline, a fresh observed LOW is required again; reconnecting HIGH cannot silently acknowledge an alarm. Multiple entries may share an input, in which case that press acknowledges all pending entries configured for it.
 
 Acknowledgement and desired output changes checkpoint together before sync; if saving fails, the popup and output intent remain and can be retried. Redstone acknowledgement retries while the pressed input remains HIGH. Existing IO cooldown and confirmation behaviour still apply to physical writes.
 
 The former **Pulse** name is now **Constant**. Saved v24 Pulse configurations automatically migrate to Constant with the same duration, routes, progress and IDs. Only a still-active old signal receives a restored popup; already finished v24 timer history does not generate old notifications. Per-entry dismiss inputs and pending occurrences are part of saved Clock state, without extra runtime files.
 
 ## Stopwatch
+
+Real timing now uses a runtime start anchor plus saved elapsed time rather than summing background ticks. The display and Start/Stop/Lap sample `os.clock()` directly, including fractions between callbacks. Delayed callbacks and unrelated alarm-save retries do not silently discard that time. Stop/resume/reboot establish new anchors; offline time remains excluded. Game mode shows **days HH:MM:SS**, without subsecond digits, in the main readout and laps. Real mode retains tenths. Legacy ComputerCraft exposes computer uptime, not an independent real-world wall clock: server lag can still slow that clock, which this change cannot infer or correct.
+
 
 Choose Real or Game while reset/stopped. **Start/Stop**, **Lap** and **Reset** operate on one stopwatch shared by its windows. Reset also stops it. Up to 50 recent laps are saved; compact screens show lap duration, and wide screens also show cumulative elapsed time. Lap pages and the selected Clock page are independent per window.
 

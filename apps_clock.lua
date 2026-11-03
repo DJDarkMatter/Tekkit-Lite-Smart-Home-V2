@@ -4,6 +4,7 @@ local app={title="Clock",backgroundService=true,minWidth=12,minHeight=6,preferre
 local appName,ready,clockStatus,lastError="clock",false,"Waiting for world time",nil
 local MAX_DURATION=31536000
 local retryElapsed=0
+local stopwatchAnchor
 local function copy(value)
     if type(value)~="table" then return value end
     local result={}; for key,item in pairs(value) do result[key]=copy(item) end; return result
@@ -25,6 +26,20 @@ local function duration(value,tenths)
     value=math.max(0,value or 0)
     local text=two(math.floor(value/3600))..":"..two(math.floor(value/60)%60)..":"..two(math.floor(value)%60)
     return tenths and text.."."..digits(math.floor(value*10+0.00001)%10) or text
+end
+local function stopwatchTime(value,clockMode,tenths)
+    if clockMode=="game" then return digits(math.floor(value/86400)).."d "..duration(value%86400,false) end
+    return duration(value,tenths)
+end
+local function rebaseStopwatch(state)
+    stopwatchAnchor={at=os.clock(),elapsed=state.stopwatch.elapsed}
+end
+local function syncStopwatch(state)
+    local sw=state.stopwatch
+    if sw.mode=="real" and sw.running then
+        if not stopwatchAnchor then rebaseStopwatch(state) end
+        sw.elapsed=stopwatchAnchor.elapsed+math.max(0,os.clock()-stopwatchAnchor.at)
+    end
 end
 local function alarmTime(minute) return two(math.floor(minute/60))..":"..two(minute%60) end
 local function colour(value) for i=0,15 do if value==2^i then return true end end; return false end
@@ -129,6 +144,7 @@ local function offChanges(state,item,kind)
     return {{name=outputName(item,kind),value=on}}
 end
 function app.init(state,api,context)
+    assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"clock requires bundled-v33 OS; run inst server")
     ready=false; lastError,retryElapsed=nil,0
     assert(api.updateOutputs and api.setNotifications,"Clock requires bundled-v25 OS")
     appName=context and context.appName or "clock"
@@ -172,6 +188,7 @@ function app.init(state,api,context)
     assert(type(sw)=="table" and mode(sw.mode) and number(sw.elapsed,0,9007199254740991) and type(sw.running)=="boolean"
         and type(sw.laps)=="table" and #sw.laps<=50 and integer(sw.lapCounter,0,2147483000),"Invalid saved stopwatch")
     for _,lap in ipairs(sw.laps) do assert(type(lap)=="table" and integer(lap.number,1,2147483000) and number(lap.elapsed,0,sw.elapsed) and number(lap.split,0,sw.elapsed),"Invalid saved lap") end
+    rebaseStopwatch(state)
     if state.cursor then
         assert(type(state.cursor)=="table" and number(state.cursor.seconds,0,86400) and integer(state.cursor.civilDay,0,2147483648),"Invalid saved world cursor")
     end
@@ -233,7 +250,9 @@ function app.background(dt,state,api)
         end
     end
     local sw=state.stopwatch
-    if sw.running then sw.elapsed=sw.elapsed+(sw.mode=="game" and gameDt or dt) end
+    if sw.running then
+        if sw.mode=="game" then sw.elapsed=sw.elapsed+gameDt else syncStopwatch(state) end
+    end
     each(state,function(item)
         if item.alert and item.dismissInput then
             local input=api.readInput(item.dismissInput)
@@ -437,7 +456,7 @@ local function build(width,height,state,api,context)
     elseif screen=="stopwatch" then
         local sw=state.stopwatch
         ui.heading("Stopwatch / "..(sw.mode=="real" and "Real" or "Game"),accent)
-        local label=duration(sw.elapsed,width>=12)
+        local label=stopwatchTime(sw.elapsed,sw.mode,width>=12)
         ui.text(2,label,true); ui.style(1,2,width,1,api.ui.contrast(accent),accent)
         if height>=8 then ui.text(3,sw.running and (sw.mode=="game" and clockStatus~="World clock ready" and "Waiting for world clock" or "Running") or "Stopped",true) end
         local start=height>=8 and 4 or 3
@@ -447,7 +466,7 @@ local function build(width,height,state,api,context)
         for i=1,slots do
             local lap=sw.laps[#sw.laps-first-i+1]
             if lap then
-                ui.text(start+i-1,"#"..lap.number.." "..duration(lap.split,width>=18)..(width>=36 and " / "..duration(lap.elapsed,true) or ""))
+                ui.text(start+i-1,"#"..lap.number.." "..stopwatchTime(lap.split,sw.mode,width>=18)..(width>=36 and " / "..stopwatchTime(lap.elapsed,sw.mode,true) or ""))
             end
         end
         local controls={{sw.running and "Stop" or "Start","stopwatchToggle"},{"Lap","lap"},{"Reset","resetStopwatch"}}
@@ -457,7 +476,7 @@ local function build(width,height,state,api,context)
         ui.heading("Delete "..kind.."?",accent); ui.text(2,item.name,true)
         button(height-1,"Delete","confirmDelete",nil,nil,nil,true,16384); footer({{"Cancel","detail"}})
     elseif screen=="settings" then
-        menu("Clock settings",{{"UI colour","accent"},{"Timer history: "..state.settings.history,"history"},{"Clock status","status"},{"About / restart rules","about"}},"settings",height-1)
+        menu("Clock settings",{{"UI color","accent"},{"Timer history: "..state.settings.history,"history"},{"Clock status","status"},{"About / restart rules","about"}},"settings",height-1)
     elseif screen=="status" then
         info("Clock status",{clockStatus,lastError or "No pending errors","World: "..api.getSystem().gameTime,
             "Background service: active even with no windows. Outputs use the shared IO cooldown. Offline signals are not replayed after their time has expired."},"status","home")
@@ -469,6 +488,7 @@ local function build(width,height,state,api,context)
 end
 function app.render(w,h,state,api,context)
     if not ready then return {"Clock unavailable","Check OS console"} end
+    syncStopwatch(state)
     return (build(w,h,state,api,context))
 end
 local function saveDraft(state,api,view)
@@ -512,6 +532,7 @@ function app.handleNotification(key,state,api)
 end
 function app.handleTouch(x,y,w,h,state,api,context)
     if not ready then return false end
+    syncStopwatch(state)
     local _,hits=build(w,h,state,api,context)
     local action,value
     for _,hit in ipairs(hits) do if hit.enabled~=false and api.ui.hit(hit,x,y) then action,value=hit.action,hit.value; break end end
@@ -549,7 +570,7 @@ function app.handleTouch(x,y,w,h,state,api,context)
         if not valid then notice(view,field.key=="minute" and "Use HHMM, 0000-2359" or (allowZero and "Use whole seconds; 0 = until OK" or "Use whole seconds, at least 1"),"number")
         else if field.key=="on" or field.key=="off" or field.key=="total" then view.draft.signal[field.key]=val else view.draft[field.key]=val end; view.screen="edit" end
     elseif action=="name" then view.keyboard={draft=view.draft.name,bank=0,page=1}; view.screen="keyboard"
-    elseif action=="key" or action=="space" then if #view.keyboard.draft<24 then view.keyboard.draft=view.keyboard.draft..(action=="space" and " " or value) end
+    elseif action=="key" or action=="space" then api.ui.typeKey(view.keyboard,action=="space" and " " or value,24)
     elseif action=="backspace" then view.keyboard.draft=view.keyboard.draft:sub(1,-2)
     elseif action=="clearName" then view.keyboard.draft=""
     elseif action=="bank" then view.keyboard.bank,view.keyboard.page=(view.keyboard.bank+1)%3,1
@@ -588,7 +609,8 @@ function app.handleTouch(x,y,w,h,state,api,context)
             changes[#changes+1]={name=outputName(item,kind),remove=true}
         end
         if commit(state,api,function() table.remove(list,index) end,changes,view) then view.screen=kind=="alarm" and "alarms" or "timers" end
-    elseif action=="stopwatchToggle" then commit(state,api,function() state.stopwatch.running=not state.stopwatch.running end,{},view)
+    elseif action=="stopwatchToggle" then
+        if commit(state,api,function() state.stopwatch.running=not state.stopwatch.running end,{},view) then rebaseStopwatch(state) end
     elseif action=="lap" then
         commit(state,api,function()
             local sw=state.stopwatch; local previous=sw.laps[#sw.laps]
@@ -596,10 +618,11 @@ function app.handleTouch(x,y,w,h,state,api,context)
             sw.laps[#sw.laps+1]={number=sw.lapCounter,elapsed=sw.elapsed,split=sw.elapsed-(previous and previous.elapsed or 0)}
             if #sw.laps>50 then table.remove(sw.laps,1) end
         end,{},view)
-    elseif action=="resetStopwatch" then commit(state,api,function()
+    elseif action=="resetStopwatch" then if commit(state,api,function()
         local sw=state.stopwatch; sw.elapsed,sw.running,sw.laps,sw.lapCounter=0,false,{},0
-    end,{},view); view.pages.laps=1
-    elseif action=="stopwatchMode" then commit(state,api,function() state.stopwatch.mode=state.stopwatch.mode=="real" and "game" or "real" end,{},view)
+    end,{},view) then rebaseStopwatch(state) end; view.pages.laps=1
+    elseif action=="stopwatchMode" then
+        if commit(state,api,function() state.stopwatch.mode=state.stopwatch.mode=="real" and "game" or "real" end,{},view) then rebaseStopwatch(state) end
     elseif action=="history" then
         local changes={}; local retained={}
         local old=copy(state)

@@ -73,6 +73,24 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         return test
     end
 
+    function tests.desktop_1x1_layout_applies_directly_on_graphical_and_small_menus()
+        for _,size in ipairs({{64,26},{15,10}}) do
+            local t=setup(size[1],size[2]); local id=t.open()
+            t.layout(id,"maximize")
+            equal(t.model().layoutMenu,nil); equal(t.window(id).layout,"maximize")
+            equal(t.window(id).x,1); equal(t.window(id).y,1)
+            equal(t.window(id).width,size[1]); equal(t.window(id).height,size[2]-1)
+        end
+    end
+    function tests.desktop_notification_uses_red_panel_independent_of_window_theme()
+        local t=setup(40,18); t.open()
+        assert(t.api.setWindowBorderColour(8192)); assert(t.api.setNotifications("pane",{{key="alarm",title="Alarm",message="Wake up"}}))
+        t.paint(); local p=assert(t.model().notification)
+        equal(t.top.bg[p.y][p.x],16384); equal(t.top.fg[p.y][p.x],1)
+        equal(t.top.bg[p.y+1][p.x+1],16384); equal(t.top.bg[p.ok.y][p.ok.x1],1)
+        equal(t.top.fg[p.ok.y][p.ok.x1],16384)
+    end
+
     function tests.desktop_taskbar_is_bottom_with_title_left_and_controls_top_right()
         local t = setup()
         local id = t.open()
@@ -212,7 +230,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.layout(id, "custom")
         t.touch("top", 10, 4); t.touch("top", 2, t.top.height); t.touch("top", 39, 15)
         equal(t.model().placement.preview.width, 30)
-        equal(t.top.bg[5][10], 32, "Valid resize previews have a coloured outline")
+        equal(t.top.bg[5][10], 32, "Valid resize previews have a colored outline")
         equal(win.width, 22, "Preview must not move the live window")
         t.touch("top", 6, t.top.height)
         equal(t.model().placement, nil); equal(win.width, 22)
@@ -480,7 +498,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.central.server.refreshMonitors(false); t.bus.pump()
         equal(t.left.lines[p.y + 1], oldText)
         equal(t.left.bg[p.y + 1][p.x + 1], 16384)
-        assert(t.left.writes > oldWrites, "A colour-only change must repaint")
+        assert(t.left.writes > oldWrites, "A color-only change must repaint")
         t.top.colour = false
         t.display.client.scan(); t.paint()
         equal(t.top.bg[win.y][win.x], 32768, "Standard monitors get a readable monochrome fallback")
@@ -558,7 +576,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local id = t.open()
         assert(t.api.layoutWindow(id, "maximize")); t.paint()
         equal(t.top.bg[127][1], 128)
-        equal(t.top.bg[128][1], 128, "The closed launcher uses the selected taskbar colour")
+        equal(t.top.bg[128][1], 128, "The closed launcher uses the selected taskbar color")
         for _, packet in ipairs(t.bus.wire) do assert(#packet.raw <= 65536) end
     end
 

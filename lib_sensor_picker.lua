@@ -50,13 +50,16 @@ function Picker.render(dialog, width, height, clients)
         ui.button(height, "Use", "use", 1, math.floor(width / 2), true, 32)
         ui.button(height, "Cancel", "cancel", math.floor(width / 2) + 1, width)
     else
-        local slots = #list <= height - 2 and height - 2 or height - 3
+        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {chosen.clientId,chosen.side} or {chosen.clientId},width,height)
+        local header = path and 2 or 1
+        local slots = #list<=height-header-1 and height-header-1 or height-header-2
         local pages = math.max(1, math.ceil(#list / slots))
         dialog.page = math.max(1, math.min(dialog.page, pages))
         ui.heading(({"Sensor client", "Sensor side", "Select target"})[dialog.stage], 2048)
+        if path then ui.text(2,path); ui.style(1,2,width,1,256,32768) end
         for row = 1, slots do
             local item = list[(dialog.page - 1) * slots + row]
-            if item then ui.button(row + 1, item.label, "select", nil, nil, item.enabled ~= false, nil, nil, item) end
+            if item then ui.button(row + header, item.label, "select", nil, nil, item.enabled ~= false, nil, nil, item) end
         end
         if #list == 0 then
             local message = "No sensor clients yet"
@@ -64,12 +67,12 @@ function Picker.render(dialog, width, height, clients)
                 message = selectedClient and selectedClient.online and "Waiting for catalog" or "Sensor client offline"
                 if selectedClient and selectedClient.catalogError then
                     message = "Catalog rejected"
-                    ui.text(3, selectedClient.catalogError)
+                    ui.text(header+2, selectedClient.catalogError)
                 end
             elseif dialog.stage == 3 then
                 message = selectedPort and #selectedPort.targets > 0 and "No matching targets" or "No targets yet"
             end
-            ui.text(2, message)
+            ui.text(header+1, message)
         end
         if pages > 1 then
             ui.button(height - 1, "< Prev", "prev", 1, math.floor(width / 2), dialog.page > 1)

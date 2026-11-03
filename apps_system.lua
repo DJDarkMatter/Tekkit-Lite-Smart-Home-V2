@@ -177,7 +177,7 @@ local function build(width,height,state,api,context)
         if #lines==0 then lines={"No saved windows"} end
         info("Saved windows",lines,"windows")
     elseif screen=="settings" then
-        menu("Overview settings",{{"UI colour","accent"},{"Client filter: "..state.filter,"filter"},{"About","about"}},"settings")
+        menu("Overview settings",{{"UI color","accent"},{"Client filter: "..state.filter,"filter"},{"About","about"}},"settings")
     elseif screen=="about" then
         info("About CC system",{"Live registry, routes, card catalogs, IO confirmations, enabled apps and saved windows. Offline clients remain visible during this OS session; a restart waits for announcements. Sensors and machine readings are never restored as live. Sensor bindings and app settings are saved by their owning apps. This app is read-only."},"about",{{"Back","settings"}})
     end

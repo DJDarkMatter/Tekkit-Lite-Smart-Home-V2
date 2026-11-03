@@ -118,6 +118,7 @@ local function commit(state, api, view, change)
     return true
 end
 function app.init(state, api, context)
+    assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"me_storage requires bundled-v33 OS; run inst server")
     ready = false
     assert(api.sensorProfiles and api.pickSensor and api.watchSensor, "ME storage requires the bundled-v21 OS")
     appName = context and context.appName or "me_storage"
@@ -347,7 +348,7 @@ local function build(width, height, state, api, context)
             {label="Source / exact figures",action="source"},{label="Drive inventories",action="cells"},{label="Remove system",action="remove"}},height-1)
         footer({{"Back","network"}})
     elseif screen == "settings" then
-        list("ME settings",{{label="UI colour",action="accent"},{label="About / setup",action="about"}},height-1)
+        list("ME settings",{{label="UI color",action="accent"},{label="About / setup",action="about"}},height-1)
         footer({{"Back","home"}})
     elseif screen == "rename" then
         local keyboard = view.keyboard
@@ -405,7 +406,7 @@ function app.handleTouch(x,y,width,height,state,api,context)
         local ok,err=api.pickColour(context.windowId); if not ok then notice(view,err) end
     elseif action=="rename" then view.keyboard,view.screen={draft=entry.name,original=entry.name,page=1,bank=0},"rename"
     elseif action=="key" or action=="space" then
-        if #view.keyboard.draft<24 then view.keyboard.draft=view.keyboard.draft..(action=="space" and " " or value) end
+        api.ui.typeKey(view.keyboard,action=="space" and " " or value,24)
     elseif action=="del" then view.keyboard.draft=view.keyboard.draft:sub(1,-2)
     elseif action=="clearName" then view.keyboard.draft=""
     elseif action=="bank" then view.keyboard.bank,view.keyboard.page=(view.keyboard.bank+1)%3,1

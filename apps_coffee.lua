@@ -228,7 +228,7 @@ local function build(width, height, state, api, context)
                 {label = width >= 16 and "Harvest output" or "Harvest IO", action = "output"},
                 {label = width >= 28 and "Countdown  " .. clock(state.config.countdown) or "Countdown", action = "countdown"},
                 {label = width >= 28 and "Harvest time  " .. clock(state.config.harvest) or "Harvest time", action = "harvest"},
-                {label = "UI colour", action = "colour"}}
+                {label = "UI color", action = "colour"}}
         else
             title, back = "Maintenance", "menu"
             items = {{label = "Reset timer", action = "reset"}, {label = "Import save", action = "import"}}

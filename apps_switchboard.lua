@@ -12,9 +12,12 @@ local function copy(value)
     return result
 end
 local function restore(state, old)
-    local keys = {}; for key in pairs(state) do keys[#keys + 1] = key end
+    local keys = {}; for key in pairs(state) do if old[key] == nil then keys[#keys + 1] = key end end
     for _, key in ipairs(keys) do state[key] = nil end
-    for key, value in pairs(old) do state[key] = value end
+    for key, value in pairs(old) do
+        if type(value) == "table" and type(state[key]) == "table" then restore(state[key], value)
+        else state[key] = value end
+    end
 end
 local function integer(value, low, high)
     return type(value) == "number" and value == math.floor(value) and value >= low and value <= high
@@ -45,8 +48,21 @@ local function wireFor(button, all)
     local wire = all[outputName(button)]
     if button.route and sameRoute(button.route, wire) then return wire end
 end
-local function buttonColour(button, theme)
+local function stateColour(button, board, theme, field)
+    return button and button.stateColors and button.stateColors[field]
+        or board and board.stateColors and board.stateColors[field] or theme[field]
+end
+local function buttonColour(button, theme, statusColour)
+    if button.fillMode == "state" then return statusColour or theme.inactive end
     return button.displayColour or button.route and button.route.color or theme.unbound
+end
+local function validStateColors(value)
+    if value == nil then return true end
+    if type(value) ~= "table" then return false end
+    for key, color in pairs(value) do
+        if not ({active=true,inactive=true,pending=true})[key] or not colour(color) then return false end
+    end
+    return true
 end
 local function notify(view, text, back)
     view.message, view.messageBack, view.screen = tostring(text), back or view.screen or "home", "message"
@@ -78,7 +94,7 @@ end
 
 function app.init(state, api, context)
     ready = false
-    assert(api.sharedOutputs and api.ui and api.pickIO and api.setAppColour, "Switchboard requires the bundled-v14 OS update")
+    assert(api.sharedOutputs and api.ui and api.ui.typeKey and api.ui.breadcrumb and api.pickIO and api.setAppColour, "Switchboard requires bundled-v33 OS; run inst server")
     appName = context and context.appName or "switchboard"
     if state.version == nil then
         state.version, state.boards, state.nextBoardId, state.nextButtonId = 1, {}, 1, 1
@@ -87,21 +103,23 @@ function app.init(state, api, context)
     if type(state.settings) == "table" then
         if state.settings.active == nil then state.settings.active = 32 end
         if state.settings.inactive == nil then state.settings.inactive = state.settings.border end
+        if state.settings.pending == nil then state.settings.pending = 2 end
     end
     assert(state.version == 1 and type(state.boards) == "table" and #state.boards <= MAX_VIEWS, "Invalid saved switchboard")
     assert(type(state.settings) == "table" and colour(state.settings.background) and colour(state.settings.border)
-        and colour(state.settings.unbound) and colour(state.settings.active) and colour(state.settings.inactive)
+        and colour(state.settings.unbound) and colour(state.settings.active) and colour(state.settings.inactive) and colour(state.settings.pending)
         and (state.settings.density == "roomy" or state.settings.density == "compact"), "Invalid saved switchboard style")
     local boardIds, buttonIds, maxBoard, maxButton = {}, {}, 0, 0
     for _, board in ipairs(state.boards) do
         assert(type(board) == "table" and integer(board.id, 1, 2147483000) and not boardIds[board.id]
             and name(board.name, 32) and integer(board.columns, 1, MAX_AXIS) and integer(board.rows, 1, MAX_AXIS)
-            and type(board.buttons) == "table" and #board.buttons == board.columns * board.rows, "Invalid saved view")
+            and type(board.buttons) == "table" and #board.buttons == board.columns * board.rows and validStateColors(board.stateColors), "Invalid saved view")
         boardIds[board.id], maxBoard = true, math.max(maxBoard, board.id)
         for _, button in ipairs(board.buttons) do
             assert(type(button) == "table" and integer(button.id, 1, 2147483000) and not buttonIds[button.id]
                 and name(button.name, 24) and type(button.customName) == "boolean"
-                and (button.displayColour == nil or colour(button.displayColour)), "Invalid saved switch")
+                and (button.displayColour == nil or colour(button.displayColour)) and (button.fillMode == nil or button.fillMode == "state")
+                and validStateColors(button.stateColors), "Invalid saved switch")
             local route = button.route
             assert(route == nil or type(route) == "table" and type(route.clientId) == "string" and route.clientId ~= ""
                 and sideSet[route.side] and (route.color == nil or colour(route.color)), "Invalid saved routing")
@@ -119,13 +137,15 @@ local function build(width, height, state, api, context)
     local view, theme = context.view, state.settings
     local screen = view.screen or "home"
     local board = boardById(state, view.boardId)
-    local needsBoard = {board = true, edit = true, switches = true, button = true, confirm = true}
+    local needsBoard = {board = true, edit = true, switches = true, button = true, confirm = true, buttonColors = true, viewColors = true}
     if needsBoard[screen] and not board and not (screen == "confirm" and view.confirm == "allOff") then screen, view.screen = "home", "home" end
     if screen == "grid" and view.gridDraft.target ~= "new" and not board then screen, view.screen = "home", "home" end
-    if screen == "button" and not buttonById(board, view.buttonId) then screen, view.screen = "edit", "edit" end
+    if (screen == "button" or screen == "buttonColors") and not buttonById(board, view.buttonId) then screen, view.screen = "edit", "edit" end
     if screen == "palette" and view.colourField == "switch" and not buttonById(board, view.buttonId) then
         screen, view.screen = board and "switches" or "home", board and "switches" or "home"
     end
+    if screen == "palette" and (view.colourScope == "button" and not buttonById(board, view.buttonId)
+        or view.colourScope == "board" and not board) then screen, view.screen = "home", "home" end
     if screen == "confirm" and view.confirm == "clear" and not buttonById(board, view.buttonId) then screen, view.screen = "edit", "edit" end
     local ui = api.ui.content(width, height)
     local accent = api.getAppColour(context.appName or appName)
@@ -163,13 +183,16 @@ local function build(width, height, state, api, context)
     local function getPage(key, pages)
         return math.max(1, math.min(view.pages and view.pages[key] and view.pages[key].page or 1, pages))
     end
-    local function menu(title, items, key, back)
+    local function menu(title, items, key, back, previous)
         ui.heading(title, accent)
-        local slots = #items <= height - 2 and height - 2 or height - 3
+        local path = previous and api.ui.breadcrumb(previous,width,height)
+        local header = path and 2 or 1
+        if path then ui.text(2,path); ui.style(1,2,width,1,api.ui.contrast(theme.background),theme.background) end
+        local slots = #items <= height-header-1 and height-header-1 or height-header-2
         local pages = math.max(1, math.ceil(#items / slots))
         local page = getPage(key, pages)
         local gap = pages == 1 and height >= #items * 2 + 2 and 2 or 1
-        local first = pages == 1 and height >= #items * gap + 3 and 3 or 2
+        local first = pages == 1 and height >= #items * gap + header+2 and header+2 or header+1
         local inset = width >= 24 and 2 or 0
         for row = 1, slots do
             local item = items[(page - 1) * slots + row]
@@ -194,11 +217,12 @@ local function build(width, height, state, api, context)
         end
         if action then ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + w - 1, y1 = y, y2 = y + h - 1, action = action, value = value} end
     end
-    local function switchStatus(switch, wire)
+    local function switchStatus(switch, wire, previewTheme, previewBoard)
         local status = not switch.route and "SET IO" or not wire and "ROUTE!" or not wire.online and (wire.value and "ON offline" or "OFF offline")
             or not wire.confirmed and (wire.value and "ON ..." or "OFF ...") or wire.value and "ON" or "OFF"
-        local statusColour = not switch.route and theme.unbound or (not wire or not wire.online) and 16384
-            or not wire.confirmed and 2 or wire.value and theme.active or theme.inactive
+        local theme = previewTheme or theme
+        local field = wire and wire.online and wire.confirmed and (wire.value and "active" or "inactive") or "pending"
+        local statusColour = not switch.route and theme.unbound or stateColour(switch, previewBoard or board, theme, field)
         return status, statusColour
     end
     local function grid(count, wantedColumns, wantedRows, key, bottom, minWidth, minHeight, draw)
@@ -253,8 +277,8 @@ local function build(width, height, state, api, context)
         for _, client in ipairs(api.getIOClients()) do if client.id == view.newClient then available = client.sides; break end end
         local items = {}
         for _, side in ipairs(available) do items[#items + 1] = {label = side, action = "side", value = side} end
-        menu("Select side", items, "sides", "sources")
-        if #items == 0 then ui.text(2, "No free sides", true) end
+        menu("Select side", items, "sides", "sources", {view.newClient})
+        if #items == 0 then ui.text(3, "No free sides", true) end
     elseif screen == "create" then
         ui.heading("16 switches", accent)
         ui.text(2, view.newClient or "Choose client", true)
@@ -271,7 +295,7 @@ local function build(width, height, state, api, context)
                 local wire = wireFor(switch, all)
                 local status, statusColour = switchStatus(switch, wire)
                 -- Appearance overrides are local to this saved switch, not its wire.
-                local fill = buttonColour(switch, theme)
+                local fill = buttonColour(switch, theme, statusColour)
                 tile(rect, switch.name, screen == "switches" and ("#" .. index .. " Edit") or status,
                     screen == "switches" and "editSwitch" or "toggle", switch.id, fill, statusColour)
             end)
@@ -279,7 +303,7 @@ local function build(width, height, state, api, context)
     elseif screen == "edit" then
         local _, index = boardById(state, board.id)
         menu("View settings", {{label = "Rename view", action = "renameView"}, {label = "Edit switches", action = "switches"},
-            {label = "Grid size", action = "resizeGrid"}, {label = "All OFF", action = "askOff"},
+            {label = "State colors", action = "viewColors"}, {label = "Grid size", action = "resizeGrid"}, {label = "All OFF", action = "askOff"},
             {label = "Move earlier", action = "reorder", value = -1, enabled = index > 1},
             {label = "Move later", action = "reorder", value = 1, enabled = index < #state.boards},
             {label = "Delete view", action = "askDelete"}}, "edit", "board")
@@ -293,13 +317,26 @@ local function build(width, height, state, api, context)
             local wire = wireFor(switch, outputs(api))
             ui.text(4, not wire and "Routing changed" or not wire.online and "IO offline" or not wire.confirmed and "Waiting for IO" or wire.value and "ON" or "OFF", true)
         end
-        local half = math.floor(width / 2)
-        button(height - 3, "Rename", "renameSwitch", nil, 1, half)
-        button(height - 3, width - half >= 13 and "Button colour" or "Colour", "switchColour", nil,
-            half + 1, width, true, buttonColour(switch, theme))
+        local third = math.floor(width / 3)
+        button(height - 3, third>=6 and "Rename" or "Name", "renameSwitch", nil, 1, third)
+        local _, statusColor = switchStatus(switch, wireFor(switch, outputs(api)))
+        button(height - 3, "Color", "switchColour", nil, third + 1, 2 * third, true, buttonColour(switch, theme, statusColor))
+        button(height - 3, third>=11 and "State colors" or "States", "buttonColors", nil, 2 * third + 1, width)
         button(height - 2, "Routing", "route")
         button(height - 1, "Disconnect", "askClear", nil, nil, nil, route ~= nil)
         footer("Back", "switches")
+    elseif screen == "buttonColors" or screen == "viewColors" then
+        local scope = screen == "buttonColors" and "button" or "board"
+        local target = scope == "button" and buttonById(board, view.buttonId) or board
+        local items = {}
+        for _, field in ipairs({"active", "inactive", "pending"}) do
+            local inherited = not (target.stateColors and target.stateColors[field])
+            local resolved = stateColour(scope == "button" and target or nil, board, theme, field)
+            local label = field:sub(1,1):upper()..field:sub(2)..": "..api.ui.colourName(resolved)
+            if inherited and width>=27 then label=label.." (inherit)" end
+            items[#items+1]={label=label,action="statePalette",value={scope=scope,field=field}}
+        end
+        menu(scope == "button" and "Button state colors" or "View state colors",items,screen,scope == "button" and "button" or "edit")
     elseif screen == "grid" then
         local draft = view.gridDraft
         ui.heading(draft.target == "new" and "Empty view" or "Grid size", accent)
@@ -325,49 +362,72 @@ local function build(width, height, state, api, context)
         button(height - 1, draft.target == "new" and "Create" or "Save grid", "saveGrid", nil, nil, nil, true, accent)
         footer("Cancel", draft.target == "new" and "sources" or "edit")
     elseif screen == "settings" then
-        menu("App settings", {{label = "UI colour", action = "accent"}, {label = "Background", action = "palette", value = "background"},
+        menu("App settings", {{label = "UI color", action = "accent"}, {label = "Background", action = "palette", value = "background"},
             {label = "Button borders", action = "palette", value = "border"}, {label = "Unwired tiles", action = "palette", value = "unbound"},
-            {label = "Active colour", action = "palette", value = "active"}, {label = "Inactive colour", action = "palette", value = "inactive"},
+            {label = "Active color", action = "palette", value = "active"}, {label = "Inactive color", action = "palette", value = "inactive"},
+            {label = "Pending color", action = "palette", value = "pending"},
             {label = "Density: " .. theme.density, action = "density"}, {label = "All switches OFF", action = "askAllOff"}}, "settings", "home")
     elseif screen == "palette" then
-        local switch = view.colourField == "switch" and buttonById(board, view.buttonId)
-        local titles = {accent = "UI colour", background = "Background", border = "Button borders", unbound = "Unwired tiles",
-            active = "Active colour", inactive = "Inactive colour"}
-        local draft = switch and view.colourAuto and (switch.route and switch.route.color or theme.unbound)
-            or view.colourDraft or (view.colourField == "accent" and accent or theme[view.colourField])
-        local title = switch and (width >= 20 and "Button colour" or "Colour") or titles[view.colourField]
-        ui.lines, ui.hits = api.ui.palette(width, height, not (switch and view.colourAuto) and draft or nil, title)
-        table.remove(ui.hits) -- Replace the stock Back action with Apply/Cancel.
+        local isFill = view.colourField == "switch"
+        local switch = (isFill or view.colourScope == "button") and buttonById(board, view.buttonId)
+        local target = view.colourScope == "button" and switch or view.colourScope == "board" and board
+        local preview, previewBoard, previewSwitch = copy(theme), (isFill or view.colourScope) and copy(board), copy(switch)
+        local titles = {accent = "UI color", background = "Background", border = "Button borders", unbound = "Unwired tiles",
+            active = "Active color", inactive = "Inactive color", pending = "Pending color"}
+        local draft = view.colourDraft or (view.colourField == "accent" and accent or theme[view.colourField])
+        if isFill then
+            if view.colourMode == "io" then previewSwitch.displayColour, previewSwitch.fillMode = nil, nil
+            elseif view.colourMode == "state" then previewSwitch.displayColour, previewSwitch.fillMode = nil, "state"
+            else previewSwitch.displayColour, previewSwitch.fillMode = draft, nil end
+            local _, statusColor = switchStatus(previewSwitch,wireFor(switch,outputs(api)))
+            draft = buttonColour(previewSwitch,theme,statusColor)
+        elseif target then
+            local nextTarget = view.colourScope == "button" and previewSwitch or previewBoard
+            nextTarget.stateColors = nextTarget.stateColors or {}
+            nextTarget.stateColors[view.colourField] = not view.colourAuto and draft or nil
+            draft = stateColour(previewSwitch,previewBoard,preview,view.colourField)
+        elseif view.colourField ~= "accent" then preview[view.colourField] = draft end
+        ui.lines, ui.hits = api.ui.palette(width,height,
+            not (isFill and view.colourMode~="fixed" or target and view.colourAuto) and draft or nil,
+            isFill and "Button color" or titles[view.colourField])
+        table.remove(ui.hits)
         ui.lines.hits = ui.hits
-        local preview = copy(theme)
         local previewAccent = view.colourField == "accent" and draft or accent
-        if not switch and view.colourField ~= "accent" then preview[view.colourField] = draft end
-        ui.style(1, 1, width, 1, api.ui.contrast(previewAccent), previewAccent)
-        if width >= 24 and height >= 15 then
-            local ph = math.min(5, height - 12)
-            local py = height - ph - 1
-            ui.style(1, py - 1, width, ph + 1, api.ui.contrast(preview.background), preview.background)
-            ui.text(py - 1, "Preview", true)
-            ui.style(2, py - 1, width - 2, 1, api.ui.contrast(previewAccent), previewAccent)
-            if switch then
-                local status, statusColour = switchStatus(switch, wireFor(switch, outputs(api)))
-                tile({x = 2, y = py, w = width - 2, h = ph}, switch.name, status, nil, nil, draft, statusColour, preview)
+        ui.style(1,1,width,1,api.ui.contrast(previewAccent),previewAccent)
+        if width>=24 and height>=15 then
+            local ph=math.min(5,height-12); local py=height-ph-1
+            ui.style(1,py-1,width,ph+1,api.ui.contrast(preview.background),preview.background)
+            ui.text(py-1,"Preview",true)
+            ui.style(2,py-1,width-2,1,api.ui.contrast(previewAccent),previewAccent)
+            if isFill then
+                local status,statusColor=switchStatus(previewSwitch,wireFor(switch,outputs(api)))
+                tile({x=2,y=py,w=width-2,h=ph},switch.name,status,nil,nil,draft,statusColor,preview)
             else
-                local half = math.floor((width - 3) / 2)
-                tile({x = 2, y = py, w = half, h = ph}, "Bundled", "ON", nil, nil, 8, preview.active, preview)
-                tile({x = half + 3, y = py, w = width - half - 3, h = ph}, "Digital", "OFF", nil, nil, preview.unbound, preview.inactive, preview)
+                for i,field in ipairs({"active","inactive","pending"}) do
+                    local left=2+math.floor((i-1)*(width-2)/3)
+                    local right=1+math.floor(i*(width-2)/3)
+                    local statusColor=stateColour(previewSwitch,previewBoard,preview,field)
+                    local fill=previewSwitch and buttonColour(previewSwitch,preview,statusColor) or (i==1 and 8 or preview.unbound)
+                    tile({x=left,y=py,w=right-left,h=ph},i==1 and "ON" or i==2 and "OFF" or "...",field,nil,nil,fill,statusColor,preview)
+                end
             end
         end
-        if switch then
-            local third = math.floor(width / 3)
-            button(height, third >= 5 and "Apply" or "Save", "applyColour", nil, 1, third, true, previewAccent)
-            button(height, third >= 9 and "IO default" or "Auto", "autoColour", nil, third + 1, 2 * third,
-                true, view.colourAuto and previewAccent or theme.border)
-            button(height, width - 2 * third >= 6 and "Cancel" or "Back", "cancel", nil, 2 * third + 1, width)
+        if isFill then
+            local labels={width>=28 and "Apply" or "Set",width>=44 and "IO default" or "IO",width>=36 and "By state" or width>=24 and "State" or "St",width>=24 and "Cancel" or "Back"}
+            if view.colourMode=="io" then labels[2]="*"..labels[2] end
+            if view.colourMode=="state" then labels[3]="*"..labels[3] end
+            for i,action in ipairs({"applyColour","autoColour","stateFill","cancel"}) do
+                button(height,labels[i],action,nil,1+math.floor((i-1)*width/4),math.floor(i*width/4),true,i==1 and previewAccent or theme.border)
+            end
+        elseif target then
+            local third=math.floor(width/3)
+            button(height,third>=5 and "Apply" or "Set","applyColour",nil,1,third,true,previewAccent)
+            button(height,third>=7 and "Inherit" or "Base","autoColour",nil,third+1,2*third,true,view.colourAuto and previewAccent or theme.border)
+            button(height,third>=6 and "Cancel" or "Back","cancel",nil,2*third+1,width)
         else
-            local half = math.floor(width / 2)
-            button(height, "Apply", "applyColour", nil, 1, half, true, previewAccent)
-            button(height, "Cancel", "cancel", nil, half + 1, width)
+            local half=math.floor(width/2)
+            button(height,"Apply","applyColour",nil,1,half,true,previewAccent)
+            button(height,"Cancel","cancel",nil,half+1,width)
         end
     elseif screen == "keyboard" then
         local keyboard = view.keyboard
@@ -561,7 +621,7 @@ function app.handleTouch(x, y, width, height, state, api, context)
     elseif action == "keyPage" then view.keyboard.page = view.keyboard.page == 1 and 2 or 1
     elseif action == "key" or action == "space" then
         local keyboard = view.keyboard
-        if #keyboard.draft < (keyboard.kind == "view" and 32 or 24) then keyboard.draft = keyboard.draft .. (action == "space" and " " or value) end
+        api.ui.typeKey(keyboard, action == "space" and " " or value, keyboard.kind == "view" and 32 or 24)
     elseif action == "backspace" then view.keyboard.draft = view.keyboard.draft:sub(1, -2)
     elseif action == "clearName" then view.keyboard.draft = ""
     elseif action == "cancelName" then view.screen = view.keyboard.back; view.keyboard = nil
@@ -579,29 +639,55 @@ function app.handleTouch(x, y, width, height, state, api, context)
             if ok then view.screen, view.keyboard = keyboard.back, nil end
         end
     elseif action == "accent" then
+        view.colourScope = nil
         view.colourField, view.colourDraft, view.screen = "accent", api.getAppColour(context.appName or appName), "palette"
-    elseif action == "palette" then view.colourField, view.colourDraft, view.screen = value, state.settings[value], "palette"
+    elseif action == "palette" then
+        view.colourScope, view.colourAuto = nil, false
+        view.colourField, view.colourDraft, view.screen = value, state.settings[value], "palette"
+    elseif action == "statePalette" then
+        local target = value.scope == "button" and switch or board
+        view.colourScope, view.colourField = value.scope, value.field
+        view.colourBefore = target.stateColors and target.stateColors[value.field]
+        view.colourDraft = stateColour(value.scope == "button" and switch or nil, board, state.settings, value.field)
+        view.colourAuto, view.screen = view.colourBefore == nil, "palette"
     elseif action == "switchColour" then
+        view.colourScope = nil
         view.colourField, view.colourDraft, view.colourBefore = "switch", buttonColour(switch, state.settings), switch.displayColour
-        view.colourAuto, view.screen = switch.displayColour == nil, "palette"
-    elseif action == "colour" then view.colourDraft, view.colourAuto = value, false
-    elseif action == "autoColour" then view.colourAuto = true
+        view.colourModeBefore = switch.fillMode
+        view.colourMode = switch.fillMode == "state" and "state" or switch.displayColour and "fixed" or "io"
+        view.colourAuto, view.screen = switch.displayColour == nil and switch.fillMode ~= "state", "palette"
+    elseif action == "colour" then view.colourDraft, view.colourAuto, view.colourMode = value, false, "fixed"
+    elseif action == "autoColour" then view.colourAuto, view.colourMode = true, "io"
+    elseif action == "stateFill" then view.colourMode, view.colourAuto = "state", false
     elseif action == "applyColour" then
         local ok, err
         if view.colourField == "switch" then
-            if switch.displayColour ~= view.colourBefore then
-                notify(view, "Button colour changed in another window; reopen Colour", "button")
+            if switch.displayColour ~= view.colourBefore or switch.fillMode ~= view.colourModeBefore then
+                notify(view, "Button color changed in another window; reopen Color", "button")
             else
                 ok = commit(state, api, view, function()
-                    if view.colourAuto then switch.displayColour = nil else switch.displayColour = view.colourDraft end
+                    switch.displayColour = view.colourMode == "fixed" and view.colourDraft or nil
+                    switch.fillMode = view.colourMode == "state" and "state" or nil
+                end)
+            end
+        elseif view.colourScope then
+            local target = view.colourScope == "button" and switch or board
+            if (target.stateColors and target.stateColors[view.colourField]) ~= view.colourBefore then
+                notify(view,"State color changed in another window; reopen the editor",view.colourScope == "button" and "buttonColors" or "viewColors")
+            else
+                ok = commit(state,api,view,function()
+                    target.stateColors = target.stateColors or {}
+                    target.stateColors[view.colourField] = not view.colourAuto and view.colourDraft or nil
                 end)
             end
         elseif view.colourField == "accent" then
             ok, err = api.setAppColour(context.appName or appName, view.colourDraft)
             if not ok then notify(view, "Could not save: " .. tostring(err)) end
         else ok = commit(state, api, view, function() state.settings[view.colourField] = view.colourDraft end) end
-        if ok then view.screen = view.colourField == "switch" and "button" or "settings" end
-    elseif action == "cancel" then view.screen = view.colourField == "switch" and "button" or "settings"
+        if ok then view.screen = view.colourScope == "button" and "buttonColors" or view.colourScope == "board" and "viewColors"
+            or view.colourField == "switch" and "button" or "settings"; api.invalidateAppViews(appName) end
+    elseif action == "cancel" then view.screen = view.colourScope == "button" and "buttonColors" or view.colourScope == "board" and "viewColors"
+        or view.colourField == "switch" and "button" or "settings"
     elseif action == "density" then
         commit(state, api, view, function() state.settings.density = state.settings.density == "roomy" and "compact" or "roomy" end)
     elseif action == "reorder" then

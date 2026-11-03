@@ -145,6 +145,7 @@ end
 function app.init(state,api,context)
     ready=false; cache,snapshots,previous,measured,frozen,structures={},{},{},{},{},{}
     assert(api.ui.form and api.migrateAppState and Me.safePatterns,"Solar farm needs bundled-v31 core: update installer, then run inst server")
+    assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"solar_farm requires bundled-v33 OS; run inst server")
     name=context and context.appName or "solar_farm"
     if state.version==nil then
         state.version,state.sources,state.metrics,state.catalog,state.hv=2,{},{},{},{pinned=true,stick=true,order=0,name="HV solar"}
@@ -552,7 +553,7 @@ local function form(w,h,state,api,context)
     elseif screen=="menu" then
         ui.menu("Solar farm menu",{{"ME sources","sources"},{"HV panel type / detection","chooseHV"},{"Graph/change: "..state.settings.window/60 .." minutes","window"},
             {"Rate unit: "..periods[state.settings.period],"period"},{"List sorting","listSort"},{"Reset rate learning","resetRates"},{"Withdrawal filter","dropSettings"},
-            {"UI colour","accent"},{"Source status","sourceInfo"},{"About net rates","about"}},"menu")
+            {"UI color","accent"},{"Source status","sourceInfo"},{"About net rates","about"}},"menu")
     elseif screen=="listSort" then
         ui.menu("Overview order",{{"Pinned first (default)","setOrder","pins"},{"Item A-Z","setOrder","nameUp"},{"Item Z-A","setOrder","nameDown"},
             {"Amount high-low","setOrder","amountDown"},{"Amount low-high","setOrder","amountUp"}},"listSort",{{"Back","menu"}})
@@ -570,7 +571,9 @@ local function form(w,h,state,api,context)
         local rows,s=rowsFor(state,view,context.windowId,view.purpose or "pin",api)
         local hv=view.purpose=="hv"; local start=2
         ui.heading(hv and "HV output: main ME" or "Pin overview item",accent)
-        if hv and w>=28 and h>=10 then ui.put(1,2,"Choose HV output type; Auto is usually enough.",w); start=3 end
+        local source=state.sources[hv and "main" or "farm"] or {}
+        local path=api.ui.breadcrumb({hv and "Main ME" or "Farm ME",source.clientId,source.side,source.target},w,h)
+        if path then ui.put(1,2,path,w); ui.style(1,2,w,1,256,32768); start=3 end
         local rowH=w>=32 and 1 or 2; local slots=math.max(1,math.floor((h-start)/rowH)); if #rows>slots then slots=math.max(1,math.floor((h-start-1)/rowH)) end
         local first=ui.page("items",#rows,slots,h-1)
         for i=1,slots do local item=rows[first+i]; if item then
@@ -609,7 +612,7 @@ local function form(w,h,state,api,context)
         local rows={}
         rows[#rows+1]={"Name: "..m.name,"rename"}
         rows[#rows+1]={m.stick and "Stick: On" or "Stick: Off","stick"}
-        rows[#rows+1]={"Item colour","pinColour"}
+        rows[#rows+1]={"Item color","pinColour"}
         rows[#rows+1]={"Drop minimum: "..(m.dropCount or state.settings.dropCount),"field","dropCount"}
         rows[#rows+1]={"Drop percent: "..(m.dropPercent or state.settings.dropPercent),"field","dropPercent"}
         rows[#rows+1]={"Use default filter","defaultFilter"}
@@ -620,7 +623,7 @@ local function form(w,h,state,api,context)
         ui.menu("Ignore big withdrawals",{{"Minimum: "..state.settings.dropCount,"globalField","dropCount"},{"Percent: "..state.settings.dropPercent,"globalField","dropPercent"}},"drop",{{"Back","menu"}})
     elseif screen=="pinColour" then
         local m=view.key=="hv" and state.hv or metric(state,view.key)
-        local lines,hits=api.ui.palette(w,h,m and m.colour,"Item colour"); for _,hit in ipairs(hits) do if hit.action=="cancel" then hit.action="editPin" end end
+        local lines,hits=api.ui.palette(w,h,m and m.colour,"Item color"); for _,hit in ipairs(hits) do if hit.action=="cancel" then hit.action="editPin" end end
         return lines,hits
     elseif screen=="number" then ui.numberPad(view.number.key,view.number.draft,view.number.back)
     elseif screen=="keyboard" then ui.keyboard(view.keyboard)
@@ -753,7 +756,7 @@ function app.handleTouch(x,y,w,h,state,api,context)
             else ok=pin(state,api,view,item) end
             if ok then view.screen="home" end
         end
-    elseif action=="key" or action=="space" then local k=view.keyboard; if #k.draft<k.limit then k.draft=k.draft..(action=="space" and " " or value) end
+    elseif action=="key" or action=="space" then api.ui.typeKey(view.keyboard,action=="space" and " " or value,view.keyboard.limit)
     elseif action=="backspace" then view.keyboard.draft=view.keyboard.draft:sub(1,-2)
     elseif action=="clearText" then view.keyboard.draft=""
     elseif action=="bank" then view.keyboard.bank,view.keyboard.page=(view.keyboard.bank+1)%3,1

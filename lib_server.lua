@@ -103,7 +103,7 @@ local function validApp(app)
     for _, key in ipairs({"minWidth", "maxWidth", "minHeight", "maxHeight", "preferredWidth", "preferredHeight"}) do
         if app[key] ~= nil and not integer(app[key], 1, 512) then return false end
     end
-    for _,key in ipairs({"backgroundService","fullscreenOnly","transientWindow","hideTaskbar"}) do
+    for _,key in ipairs({"backgroundService","fullscreenOnly","transientWindow","hideTaskbar","handlesFullscreenCorner"}) do
         if app[key]~=nil and type(app[key])~="boolean" then return false end
     end
     if app.animationInterval~=nil and (type(app.animationInterval)~="number" or app.animationInterval~=app.animationInterval
@@ -191,6 +191,7 @@ function Server.new(net, storage, config, logger)
     end
     api.save = server.save
     api.fullscreenApps = true
+    api.fullscreenCornerNavigation = true
     -- App-owned, synchronous upgrade transaction. The transform edits detached
     -- copies; both app namespaces checkpoint together without touching IO maps.
     function api.migrateAppState(from,to,transform)
@@ -237,21 +238,21 @@ function Server.new(net, storage, config, logger)
         return ok, err
     end
     function api.setBackgroundColour(value)
-        if not colour(value) then return false, "Choose a CC colour" end
+        if not colour(value) then return false, "Choose a CC color" end
         return saveAppearance(function(appearance) appearance.backgroundColour = value end)
     end
     function api.setWindowBorderColour(value)
-        if not colour(value) then return false, "Choose a CC colour" end
+        if not colour(value) then return false, "Choose a CC color" end
         return saveAppearance(function(appearance) appearance.windowBorderColour = value end)
     end
     function api.setTaskbarColour(value)
-        if not colour(value) then return false, "Choose a CC colour" end
+        if not colour(value) then return false, "Choose a CC color" end
         return saveAppearance(function(appearance) appearance.taskbarColour = value end)
     end
     local systemColourSetters = {background = api.setBackgroundColour,
         windowBorder = api.setWindowBorderColour, taskbar = api.setTaskbarColour}
     function api.setAppColour(name, value)
-        if not definition(name) or not colour(value) then return false, "Invalid app colour" end
+        if not definition(name) or not colour(value) then return false, "Invalid app color" end
         return saveAppearance(function(appearance) appearance.appColours[name] = value end)
     end
 
@@ -341,13 +342,30 @@ function Server.new(net, storage, config, logger)
         if not client then return end
         if changed then client.revision = client.revision + 1 end
         if not client.online then return end
-        local snapshot = outputSnapshot(clientId)
-        for side in pairs(snapshot) do
+        local snapshot = {}
+        for side, values in pairs(outputSnapshot(clientId)) do
             if not client.capabilities[side] then
                 log("IO " .. clientId .. ": mapped side " .. side .. " is unavailable")
-                snapshot[side] = nil
+            else snapshot[side] = values end
+        end
+        -- A snapshot ACK covers a whole revision, but unrelated wires retain
+        -- their earlier confirmation. Requiring the latest client revision for
+        -- every output made an entire board flash pending after one toggle.
+        client.wireRevisions = client.wireRevisions or {}
+        for side, wanted in pairs(snapshot) do
+            local previous = client.outputSnapshot and client.outputSnapshot[side]
+            local required = client.wireRevisions[side] or {}
+            client.wireRevisions[side] = required
+            if not previous or previous.digital ~= wanted.digital or required.digital == nil then
+                required.digital = client.revision
+            end
+            for bit = 0, 15 do
+                local color = 2 ^ bit
+                if not previous or math.floor(previous.bundled / color) % 2 ~= math.floor(wanted.bundled / color) % 2
+                    or required[color] == nil then required[color] = client.revision end
             end
         end
+        client.outputSnapshot = copy(snapshot)
         net.toClient(client, {type = "ioCommand", command = "syncOutputs", clientId = clientId,
             serverSession = server.session, revision = client.revision, outputs = snapshot})
         client.lastSent = os.clock()
@@ -462,8 +480,10 @@ function Server.new(net, storage, config, logger)
             local item = copy(state.outputMap[name])
             local client = server.ioClients[item.clientId]
             item.name, item.value, item.online = name, api.getOutput(name), client and client.online or false
+            local required = client and client.wireRevisions and client.wireRevisions[item.side]
+            required = required and required[item.color or "digital"]
             item.confirmed = item.online and client.capabilities[item.side]
-                and client.ackedRevision == client.revision or false
+                and required ~= nil and client.ackedRevision >= required or false
             result[#result + 1] = item
         end
         return result
@@ -506,10 +526,10 @@ function Server.new(net, storage, config, logger)
         local win = state.windows[windowId]
         target = target or "app"
         local option = systemColours[target]
-        if not win or (target ~= "app" and not option) then return false, "Invalid colour selector" end
-        if option and win.appName ~= "@settings" then return false, "Open OS settings for system colours" end
+        if not win or (target ~= "app" and not option) then return false, "Invalid color selector" end
+        if option and win.appName ~= "@settings" then return false, "Open OS settings for system colors" end
         local content = Desktop.contentRect(win)
-        if content.width < 12 or content.height < 6 then return false, "Colour settings need a 12x6 content area" end
+        if content.width < 12 or content.height < 6 then return false, "Color settings need a 12x6 content area" end
         server.dialogs[windowId] = {kind = "colour", target = target,
             current = option and state.appearance[option.field] or api.getAppColour(win.appName)}
         invalidateInput(win.monitorId)
@@ -876,7 +896,7 @@ function Server.new(net, storage, config, logger)
                         local option = systemColours[dialog.target]
                         dialog.current = option and state.appearance[option.field] or api.getAppColour(win.appName)
                         content, dialog.hits = Gui.palette(body.width, body.height, dialog.current,
-                            dialog.error or (option and option.title or "UI colour"))
+                            dialog.error or (option and option.title or "UI color"))
                     elseif dialog.kind == "sensor" then content = SensorPicker.render(dialog, body.width, body.height, api.getSensorClients())
                     else content = Picker.render(dialog, body.width, body.height, api.getIOClients()) end
                 else
@@ -1001,20 +1021,20 @@ function Server.new(net, storage, config, logger)
         if notification then
             local popup = monitor.notification
             local x,y,w,h = popup.x,popup.y,popup.width,popup.height
-            surface.fill(x,y,w,h,32768,1)
+            surface.fill(x,y,w,h,1,16384)
             if h>=3 then
-                surface.fill(x,y,w,1,Gui.contrast(borderColour),borderColour)
+                surface.fill(x,y,w,1,1,16384)
                 surface.write(x+(w>=3 and 1 or 0),y,notification.title,nil,nil,math.max(1,w-2))
                 local span=math.max(1,w-2)
                 for row=1,math.max(0,h-4) do
                     local text=popup.lines[row] or ""
-                    surface.write(x+1+math.max(0,math.floor((span-#text)/2)),y+row,text,32768,1,span)
+                    surface.write(x+1+math.max(0,math.floor((span-#text)/2)),y+row,text,1,16384,span)
                 end
-                if monitor.notificationError and h>=5 then surface.write(x+1,y+h-3,w>=22 and "Save failed; retry OK" or "Save failed",16384,1,math.max(1,w-2)) end
+                if monitor.notificationError and h>=5 then surface.write(x+1,y+h-3,w>=22 and "Save failed; retry OK" or "Save failed",16,16384,math.max(1,w-2)) end
             end
             local hit=popup.ok
-            surface.fill(hit.x1,hit.y,hit.x2-hit.x1+1,1,1,8192)
-            surface.write(hit.x1+math.max(0,math.floor((hit.x2-hit.x1-1)/2)),hit.y,"OK",1,8192,hit.x2-hit.x1+1)
+            surface.fill(hit.x1,hit.y,hit.x2-hit.x1+1,1,16384,1)
+            surface.write(hit.x1+math.max(0,math.floor((hit.x2-hit.x1-1)/2)),hit.y,"OK",16384,1,hit.x2-hit.x1+1)
         end
         return surface.frame()
     end
@@ -1052,7 +1072,7 @@ function Server.new(net, storage, config, logger)
             return -- Modal: no click-through into apps, taskbar or placement.
         end
         local fullscreen = fullscreenWindow(id)
-        if fullscreen and x == monitor.width and y == 1 then
+        if fullscreen and x == monitor.width and y == 1 and not definition(fullscreen.appName).handlesFullscreenCorner then
             if definition(fullscreen.appName).fullscreenOnly then api.closeWindow(fullscreen.id)
             else api.layoutWindow(fullscreen.id, "restore") end
             return -- The invisible exit cell never reaches the app underneath.
@@ -1278,7 +1298,7 @@ function Server.new(net, storage, config, logger)
                         if previousCapabilities[side] ~= client.capabilities[side] then ioChanged = true end
                     end
                 end
-                ioChanged = ioChanged or ioReset and not reconnect
+                ioChanged = ioChanged or ioReset
                 ioReset = ioReset or ioChanged
                 client.announceNonce = message.nonce
             end
@@ -1288,7 +1308,9 @@ function Server.new(net, storage, config, logger)
             if message.clientType == "io" then
                 -- Routine announcements resend the same snapshot as a health
                 -- check. They do not revoke an acknowledgement already earned.
-                if ioReset then client.ackedRevision = -1 end
+                if ioReset then
+                    client.ackedRevision, client.outputSnapshot, client.wireRevisions = -1, nil, {}
+                end
                 server.syncIO(id, ioChanged)
             end
             server.refreshMonitors(false)

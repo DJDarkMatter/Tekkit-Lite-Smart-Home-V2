@@ -49,6 +49,7 @@ local function commit(state, api, view, change, changes)
     return true
 end
 function app.init(state, api, context)
+    assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"reactors requires bundled-v33 OS; run inst server")
     ready = false
     assert(api.pickSensor and api.watchSensor and api.sharedOutputs, "Reactors requires bundled-v15 OS")
     appName = context and context.appName or "reactors"
@@ -62,7 +63,7 @@ function app.init(state, api, context)
         ids[entry.id], maximum = true, math.max(maximum, entry.id)
     end
     assert(type(state.nextId) == "number" and state.nextId > maximum and state.nextId == math.floor(state.nextId), "Invalid reactor ID counter")
-    assert(api.ui.colourName(state.panelColour) ~= "Unknown", "Invalid panel colour")
+    assert(api.ui.colourName(state.panelColour) ~= "Unknown", "Invalid panel color")
     ready = true
     app.background(0, state, api)
 end
@@ -308,8 +309,8 @@ local function build(width, height, state, api, context)
     elseif screen == "edit" or screen == "settings" then
         local items = screen == "edit" and {{label = "Rename", action = "rename"}, {label = "Sensor target", action = "sensor"},
             {label = "Control output", action = "output", value = entry.id}, {label = "Raw readings", action = "raw"},
-            {label = "Delete reactor", action = "delete"}} or {{label = "UI colour", action = "accent"},
-            {label = "Panel colour", action = "panel"}, {label = "About readings", action = "about"}}
+            {label = "Delete reactor", action = "delete"}} or {{label = "UI color", action = "accent"},
+            {label = "Panel color", action = "panel"}, {label = "About readings", action = "about"}}
         local lines, hits, page, total = api.ui.menu(width, height, screen == "edit" and "Reactor settings" or "App settings", items,
             view.menuPage, screen == "edit" and "reactor" or "home", accent)
         view.menuPage, view.menuPages = page, total
@@ -318,7 +319,7 @@ local function build(width, height, state, api, context)
     elseif screen == "palette" then
         local previewAccent = view.colourField == "accent" and view.colourDraft or accent
         local previewPanel = view.colourField == "accent" and state.panelColour or view.colourDraft
-        local lines, hits = api.ui.palette(width, height, view.colourDraft, view.colourField == "accent" and "UI colour" or "Panel colour")
+        local lines, hits = api.ui.palette(width, height, view.colourDraft, view.colourField == "accent" and "UI color" or "Panel color")
         ui.lines, ui.hits = lines, hits; table.remove(ui.hits); ui.lines.hits = ui.hits
         ui.style(1, 1, width, 1, api.ui.contrast(previewAccent), previewAccent)
         if width >= 24 and height >= 15 then
@@ -430,7 +431,7 @@ function app.handleTouch(x, y, width, height, state, api, context)
     elseif action == "previous" or action == "next" then view.menuPage = math.max(1, math.min(view.menuPages, view.menuPage + (action == "next" and 1 or -1)))
     elseif action == "rename" then view.keyboard, view.screen = {draft = entry.name, original = entry.name, page = 1, bank = "abc"}, "rename"
     elseif action == "key" or action == "space" then
-        if #view.keyboard.draft < 32 then view.keyboard.draft = view.keyboard.draft .. (action == "space" and " " or value) end
+        api.ui.typeKey(view.keyboard, action == "space" and " " or value, 32)
     elseif action == "bank" then view.keyboard.bank, view.keyboard.page = view.keyboard.bank == "abc" and "ABC" or view.keyboard.bank == "ABC" and "123" or "abc", 1
     elseif action == "keyPage" then view.keyboard.page = view.keyboard.page == 1 and 2 or 1
     elseif action == "del" then view.keyboard.draft = view.keyboard.draft:sub(1, -2)

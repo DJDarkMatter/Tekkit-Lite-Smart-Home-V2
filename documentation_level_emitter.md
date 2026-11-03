@@ -10,7 +10,7 @@ Each occurrence creates an OK popup above every monitor, including fullscreen ap
 
 ## Signals and acknowledgement
 
-Output selection is optional; without it, the rule only raises a popup. Select any IO client, available side and bundled colour, or digital line, through the normal picker.
+Output selection is optional; without it, the rule only raises a popup. Select any IO client, available side and bundled color, or digital line, through the normal picker.
 
 - **Constant**: ON for the configured real seconds. Length **0** stays ON until dismissed.
 - **Pattern**: alternate the selected ON/OFF seconds. Total **0** repeats until dismissed; a positive total stops after that many real seconds.

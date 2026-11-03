@@ -19,7 +19,7 @@ return function(newBus,monitor,serialize,unserialize,equal)
             local env=setmetatable({os={clock=function() return t.now end}},{__index=_G})
             t.app=assert(loadstring(sources["apps_"..which..".lua"])); setfenv(t.app,env); t.app=t.app()
             t.state=options.state or {}; t.views={[1]={}}; t.outputs={}; t.outputMap={}; t.notifications={}
-            local api={aeItemProfiles=true,fullscreenApps=true,ui=dofile("lib_gui.lua"),getAppColour=function() return 2048 end,
+            local api={aeItemProfiles=true,fullscreenApps=true,fullscreenCornerNavigation=true,ui=dofile("lib_gui.lua"),getAppColour=function() return 2048 end,
                 getSensorClients=function() return {{id="sensor_14",bootId=t.boot}} end,watchSensor=function() end,unwatchSensor=function() end,
                 getOutput=function(name) return t.outputs[name]==true end,readInput=function() return t.input end,
                 pickIO=function() return true end,pickSensor=function() return true end,pickColour=function() return true end}

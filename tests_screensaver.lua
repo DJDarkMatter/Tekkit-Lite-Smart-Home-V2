@@ -7,13 +7,16 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         t.id=t.open(); local w=t.window(); equal(w.fullscreen,true); equal(w.x,1); equal(w.y,1); equal(w.width,t.top.width); equal(w.height,t.top.height)
         equal(t.central.server.monitors["monitor_13:top"].fullscreen,t.id); equal(t.central.server.nextTickInterval(),.2)
         equal(t.api.placeWindow(t.id,2,2,20,10),false)
-        touch(t,"top",t.top.width,1); equal(t.window(),nil); equal(t.central.server.running.screensaver,nil); equal(t.central.server.nextTickInterval(),.5)
+        touch(t,"top",t.top.width,1); equal(t.view().design,2); assert(t.window()); touch(t,"top",2,2); equal(t.window(),nil); equal(t.central.server.running.screensaver,nil); equal(t.central.server.nextTickInterval(),.5)
     end
-    function tests.screensaver_top_left_cycles_and_every_new_open_rotates_saved_design()
-        local t=setup("screensaver"); equal(t.view().design,1); touch(t,"top",1,1); equal(t.view().design,2)
+    function tests.screensaver_corners_cycle_both_directions_and_open_rotates_saved_design()
+        local t=setup("screensaver"); equal(t.view().design,1)
+        touch(t,"top",1,1); equal(t.view().design,15)
+        touch(t,"top",t.top.width,1); equal(t.view().design,1)
+        touch(t,"top",t.top.width,1); equal(t.view().design,2)
         assert(t.api.closeWindow(t.id)); t.id=t.open(); equal(t.view().design,3)
         local left=t.open("left"); equal(t.view(left).design,4); equal(t.view().design,3)
-        touch(t,"left",1,1); equal(t.view(left).design,5); equal(t.view().design,3)
+        touch(t,"left",1,1); equal(t.view(left).design,3); equal(t.view().design,3)
         local nextDesign=t.state.nextDesign; t.reboot(); equal(t.central.server.running.screensaver,nil)
         t.id=t.open(); equal(t.view().design,nextDesign)
     end
@@ -40,11 +43,11 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         t.advance(3); assert(t.popup()); assert(table.concat(t.top.lines,"\n"):find("Farm alert",1,true))
         local design=t.view().design; touch(t,"top",1,1); equal(t.view().design,design)
         touch(t,"top",t.top.width,1); assert(t.window()); assert(t.popup())
-        t.ack(); equal(t.popup(),nil); assert(t.window()); touch(t,"top",t.top.width,1); equal(t.window(),nil)
+        t.ack(); equal(t.popup(),nil); assert(t.window()); touch(t,"top",t.top.width,1); assert(t.window()); equal(t.view().design,design+1); touch(t,"top",2,2); equal(t.window(),nil)
     end
     function tests.screensaver_all_patterns_animate_fit_tiny_screens_and_keep_large_frames_under_modem_limit()
         local t=setup("screensaver",true); assert(t.app.onOpen(t.state,t.api,t.context()))
-        for design=1,8 do
+        for design=1,15 do
             t.view().design=design
             for _,size in ipairs({{2,2},{12,6},{64,26},{256,128}}) do
                 local w,h=size[1],size[2]; local content=t.content(nil,w,h); equal(#content,h)
@@ -62,10 +65,40 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
     end
     function tests.screensaver_failed_open_or_cycle_does_not_consume_rotation_or_close_other_views()
         local t=setup("screensaver"); local old=t.view().design; local nextIndex=t.state.nextDesign
-        t.central.disk.failWrite=true; touch(t,"top",1,1); equal(t.view().design,old); equal(t.state.nextDesign,nextIndex)
+        t.central.disk.failWrite=true; touch(t,"top",t.top.width,1); equal(t.view().design,old); equal(t.state.nextDesign,nextIndex)
         local id=t.api.openApp("screensaver","monitor_13:left"); equal(id,nil); assert(t.window()); equal(t.state.nextDesign,nextIndex)
-        t.central.disk.failWrite=false; touch(t,"top",1,1); equal(t.view().design,old+1)
+        t.central.disk.failWrite=false; touch(t,"top",t.top.width,1); equal(t.view().design,old+1)
     end
+    function tests.screensaver_dense_matrix_has_no_blank_cells_even_on_large_monitors()
+        local t=setup("screensaver",true); assert(t.app.onOpen(t.state,t.api,t.context()))
+        for _,size in ipairs({{12,6},{64,26},{256,128}}) do
+            for _,time in ipairs({0,2,17}) do
+                t.now=time; t.view().design=2; local dense=t.content(nil,size[1],size[2])
+                for _,row in ipairs(dense) do assert(not row:find(" ",1,true),"Dense Matrix has a blank column") end
+                for _,style in ipairs(dense.styles) do assert(style.fg~=32768) end
+                t.view().design=1; local sparse=t.content(nil,size[1],size[2]); local blank=0
+                for _,row in ipairs(sparse) do local _,count=row:gsub(" ",""); blank=blank+count end
+                assert(blank>=size[1]*size[2]*.4,"Sparse and dense modes must be distinct")
+            end
+        end
+    end
+    function tests.screensaver_nyan_preserves_sprite_height_and_white_eye_pixels_on_large_windows()
+        local t=setup("screensaver",true); assert(t.app.onOpen(t.state,t.api,t.context()));t.view().design=9
+        local lines=t.content(nil,92,32); local first,last,white=32,1,false
+        for _,style in ipairs(lines.styles) do
+            if style.bg==32768 then first=math.min(first,style.y); last=math.max(last,style.y+style.height-1) end
+            if style.bg==1 then white=true end
+        end
+        assert(last-first>=10,"The Nyan sprite must not flatten with large-frame grouping");assert(white,"Nyan eye pixels must remain white")
+    end
+    function tests.screensaver_exit_tap_stays_on_its_monitor_and_never_reaches_underlying_controls()
+        local t=setup("screensaver",false,{noOpen=true}); local normal=t.open("top","solar_farm")
+        local before=serialize(t.central.server.views[normal]); local left=t.open("left")
+        t.id=t.open(); touch(t,"top",5,1); equal(t.window(),nil)
+        equal(serialize(t.central.server.views[normal]),before); assert(t.window(left))
+        t.id=t.open(); touch(t,"top",1,t.top.height); equal(t.window(),nil); assert(t.window(left))
+    end
+
     function tests.start_menu_sorts_displayed_titles_alphabetically_including_os_settings()
         local bus=newBus(); local sources={}
         for name,title in pairs({zebra="Alpha",alpha="zebra",middle="beta"}) do sources["apps_"..name..".lua"]='return {title="'..title..'",minWidth=2,minHeight=2,render=function() return {} end}' end

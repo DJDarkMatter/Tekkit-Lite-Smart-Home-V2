@@ -15,7 +15,7 @@ inst app coffee
 reboot
 ```
 
-The current installer banner says `bundled-v27`. `inst app coffee` downloads only `apps_coffee.lua` from GitHub and enables it in `configs_os.txt`; rerunning the command preserves saved timer/settings state. Coffee declares `backgroundService = true`; every OS boot starts its service without opening a window. V22 restores the compact Player: on/off line. Large digits keep side clearance filled with the selected clock background colour, so a white clock background has white margins rather than black stripes. The OS also saves per-window navigation. Timer behavior, business-state schema, IO protocol, text scale and calibration are unchanged. The central computer must stay loaded for any code to run.
+The current installer banner says `bundled-v27`. `inst app coffee` downloads only `apps_coffee.lua` from GitHub and enables it in `configs_os.txt`; rerunning the command preserves saved timer/settings state. Coffee declares `backgroundService = true`; every OS boot starts its service without opening a window. V22 restores the compact Player: on/off line. Large digits keep side clearance filled with the selected clock background color, so a white clock background has white margins rather than black stripes. The OS also saves per-window navigation. Timer behavior, business-state schema, IO protocol, text scale and calibration are unchanged. The central computer must stay loaded for any code to run.
 
 The installer uses GitHub's contents API at `api.github.com` first, because that is the route confirmed working on the target server. It validates the API's base64 file and checks Lua syntax before replacing installed code/settings. If that request fails, it tries `raw.githubusercontent.com`. Check that GitHub has the latest app file before testing. You can optionally select a known branch/commit with `inst app coffee --ref REF`; Pastebin-ID and `--file PATH` modes remain available for other app sources.
 
@@ -25,16 +25,16 @@ If installation fails, record the separate `Raw:` and `API:` lines. A no-respons
 
 On an advanced monitor, touch bottom-left `[+]` → **Coffee** → **Menu** → **Settings**:
 
-1. **Player IO:** select the IO computer, the physical side carrying the presence signal, and `Digital` for ordinary redstone or the bundled wire colour. Review and touch `Use`.
-2. **Harvest IO:** select the output client, side and Digital/colour the same way.
+1. **Player IO:** select the IO computer, the physical side carrying the presence signal, and `Digital` for ordinary redstone or the bundled wire color. Review and touch `Use`.
+2. **Harvest IO:** select the output client, side and Digital/color the same way.
 
-The modem side is excluded. `+` beside an IO client means online; `-` means offline. Lists show a page count, disabled Prev/Next controls at the ends, and coloured swatches for bundled wires. The app does not assume the original left input/right output; select your actual wiring.
+The modem side is excluded. `+` beside an IO client means online; `-` means offline. Lists show a page count, disabled Prev/Next controls at the ends, and colored swatches for bundled wires. The app does not assume the original left input/right output; select your actual wiring.
 
 After both bindings are configured, an online player signal starts the countdown. With no valid input/output or with a disconnected client, it waits for configuration/reconnection. Wires may also be referenced by Switchboard or another logical output; all copies share one desired state. Coffee continues to drive its normal automation state, so it may change a manually toggled shared wire again. Rewiring an active harvest removes Coffee's old reference and pauses the app; an unused old wire turns OFF, while any remaining references keep their state. Use `Resume` to run on the new output.
 
 The picker belongs to the OS and can be used by future switchboard/other apps as well. It is not coffee-specific.
 
-**UI colour** in Settings opens the shared OS palette. Pick a swatch to apply one accent across all Coffee views. It is saved centrally and restored after reboot; changing it does not reset timers, counters or IO. The window title bar remains neutral so it is separate from both the desktop and app header.
+**UI color** in Settings opens the shared OS palette. Pick a swatch to apply one accent across all Coffee views. It is saved centrally and restored after reboot; changing it does not reset timers, counters or IO. The window title bar remains neutral so it is separate from both the desktop and app header.
 
 ## Behavior and controls
 

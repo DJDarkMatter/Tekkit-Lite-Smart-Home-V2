@@ -43,6 +43,34 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         return t
     end
 
+    function tests.appearance_all_keyboards_use_one_letter_shift_without_changing_number_or_lowercase_banks()
+        local Gui=dofile("lib_gui.lua")
+        for _,bank in ipairs({1,"ABC"}) do
+            local k={bank=bank,draft="",page=2}; assert(Gui.typeKey(k,"A",3))
+            equal(k.bank,type(bank)=="number" and 0 or "abc"); equal(k.page,2)
+            assert(Gui.typeKey(k,"b",3)); equal(k.draft,"Ab")
+            k.bank=bank; assert(Gui.typeKey(k," ",3)); equal(k.bank,bank)
+            equal(Gui.typeKey(k,"C",3),false); equal(k.bank,bank)
+        end
+        for _,bank in ipairs({2,"123"}) do local k={bank=bank,draft=""}; Gui.typeKey(k,"1",4); equal(k.bank,bank) end
+    end
+    function tests.appearance_route_selectors_keep_previous_choices_visible_and_preserve_compact_paging()
+        local Gui=dofile("lib_gui.lua"); local IO=dofile("lib_io_picker.lua"); local Sensor=dofile("lib_sensor_picker.lua")
+        local io=IO.new("route","output",{clientId="io_12345",side="bottom"})
+        for stage=2,3 do
+            io.stage=stage; local lines=IO.render(io,32,12,{})
+            assert(lines[2]:find("io_12345",1,true)); if stage==3 then assert(lines[2]:find("bottom",1,true)) end
+            for _,hit in ipairs(io.hits) do if hit.action=="select" then assert(hit.y>=3 and hit.y<11) end end
+            lines=IO.render(io,12,6,{}); assert(not lines[2]:find("io_12345",1,true))
+        end
+        local sensor=Sensor.new("source",{clientId="sensor_12345",side="top"},"ae")
+        for stage=2,3 do sensor.stage=stage; local lines=Sensor.render(sensor,40,12,{})
+            assert(lines[2]:find("sensor_12345",1,true)); if stage==3 then assert(lines[2]:find("top",1,true)) end
+        end
+        local path=Gui.breadcrumb({string.rep("x",64),"bottom",string.rep("y",80)},30,10)
+        assert(#path<=30); assert(path:find("bottom",1,true)); equal(Gui.breadcrumb({"x"},23,10),nil)
+    end
+
     function tests.appearance_os_settings_is_in_start_without_enabling_user_apps_and_survives_reboot()
         local t = setup(false)
         equal(t.top.lines[1], string.rep(" ", t.top.width), "Desktop has no branding")
@@ -62,7 +90,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.api.getOSSettings().backgroundColour, 128)
         equal(t.top.bg[20][60], 128); equal(t.left.bg[2][2], 128)
         local win = t.window(id)
-        equal(t.top.bg[win.y][win.x], 128, "Changing the desktop must not override the selected window-border colour")
+        equal(t.top.bg[win.y][win.x], 128, "Changing the desktop must not override the selected window-border color")
         equal(next(t.central.server.state.appRegistry), nil)
         equal(next(unserialize(t.central.disk.files["configs_os.txt"]).enabledApps), nil)
         t.reboot()

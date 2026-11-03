@@ -1,5 +1,6 @@
 -- Reusable, server-rendered IO selector. No peripheral or network calls here.
 local Picker = {}
+local Gui = dofile("lib_gui.lua")
 local sideNames = {"top", "bottom", "left", "right", "front", "back"}
 local colorNames = {"white", "orange", "magenta", "lightBlue", "yellow", "lime", "pink", "gray",
     "lightGray", "cyan", "purple", "blue", "brown", "green", "red", "black"}
@@ -68,18 +69,21 @@ function Picker.render(dialog, width, height, clients)
     else
         local titles = {"Select IO", "Select side", "Select wire"}
         local list = choices(dialog, clients)
-        local slots = #list <= height - 2 and height - 2 or math.max(1, height - 3)
+        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {dialog.chosen.clientId,dialog.chosen.side} or {dialog.chosen.clientId},width,height)
+        local header = path and 2 or 1
+        local slots = #list <= height-header-1 and height-header-1 or math.max(1,height-header-2)
         local pages = math.max(1, math.ceil(#list / slots))
         dialog.page = math.max(1, math.min(dialog.page, pages))
         text(1, titles[dialog.stage] .. (pages > 1 and (" " .. dialog.page .. "/" .. pages) or ""))
+        if path then text(2,path); lines.styles[#lines.styles+1]={x=1,y=2,width=width,height=1,fg=256,bg=32768} end
         for row = 1, slots do
             local item = list[(dialog.page - 1) * slots + row]
             if item then
-                button(row + 1, 1, width, (item.colour and "  " or "") .. item.label, "select", item.value)
-                if item.colour then lines.styles[#lines.styles + 1] = {x = 1, y = row + 1, width = 2, height = 1, bg = item.colour} end
+                button(row + header, 1, width, (item.colour and "  " or "") .. item.label, "select", item.value)
+                if item.colour then lines.styles[#lines.styles + 1] = {x = 1, y = row + header, width = 2, height = 1, bg = item.colour} end
             end
         end
-        if #list == 0 then text(2, "No IO clients") end
+        if #list == 0 then text(header+1, "No IO clients") end
         if pages > 1 then
             button(height - 1, 1, half, "< Prev", "prev", nil, dialog.page > 1)
             button(height - 1, half + 1, width, "Next >", "next", pages, dialog.page < pages)

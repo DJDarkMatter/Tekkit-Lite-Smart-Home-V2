@@ -61,7 +61,7 @@ New flat files: `lib_desktop.lua`, `tests_desktop.lua`, and `documentation_deskt
 
 The installer now tries GitHub's contents API after a failed raw download and reports both failure reasons. No new files: changed files are `tools_build_installer.py`, generated `install.lua`, `tests_run.lua`, `README.md`, `documentation_api.md`, `documentation_coffee.md`, and this map. Runtime/app sources and saved formats are unchanged. Updating the installer paste is sufficient for this app-download change.
 
-## Colour GUI and input update (bundled-v8)
+## Color GUI and input update (bundled-v8)
 
 New file: `lib_gui.lua`, installed on OS and monitor roles. Updated source/build: `lib_server.lua`, `lib_monitor.lua`, `clients_monitor_client.lua`, `lib_desktop.lua`, `lib_io_picker.lua`, `apps_coffee.lua`, `tools_build_installer.py`, and generated `install.lua`. Updated tests: `tests_run.lua`, `tests_desktop.lua`. Updated guides: `README.md`, `documentation_desktop.md`, `documentation_api.md`, `documentation_coffee.md`, `documentation_design.md`, `documentation_review.md`, and this map. All files remain in the root. Reinstall both OS and monitor roles; update the Coffee source on GitHub before running `inst app coffee`. App/window state is preserved, and measured touch offsets use the existing `configs_monitor.txt`.
 
@@ -71,13 +71,13 @@ New files: `lib_settings.lua` (built-in OS settings) and `tests_appearance.lua`.
 
 ## Grid submenus and Coffee presentation (bundled-v10)
 
-No new files. Updated source/build: `apps_coffee.lua`, `lib_desktop.lua`, `lib_server.lua`, `lib_gui.lua`, `tools_build_installer.py`, `install.lua`. Updated tests: `tests_run.lua`, `tests_coffee.lua`, `tests_desktop.lua`, `tests_appearance.lua`. Updated guides: `README.md`, `documentation_desktop.md`, `documentation_api.md`, `documentation_coffee.md`, `documentation_design.md`, `documentation_review.md`, and this map. The clock retains its original size/scaling with its colours swapped; Coffee has a cleaner main view. Layouts use a grid screen followed by a position screen, including 3×3; Resize/Move remain at the first level. App downloads now try the confirmed working GitHub API first. Update the server role and Coffee; existing bundled-v8 monitor and IO programs remain compatible. Saved timer/settings data is preserved.
+No new files. Updated source/build: `apps_coffee.lua`, `lib_desktop.lua`, `lib_server.lua`, `lib_gui.lua`, `tools_build_installer.py`, `install.lua`. Updated tests: `tests_run.lua`, `tests_coffee.lua`, `tests_desktop.lua`, `tests_appearance.lua`. Updated guides: `README.md`, `documentation_desktop.md`, `documentation_api.md`, `documentation_coffee.md`, `documentation_design.md`, `documentation_review.md`, and this map. The clock retains its original size/scaling with its colors swapped; Coffee has a cleaner main view. Layouts use a grid screen followed by a position screen, including 3×3; Resize/Move remain at the first level. App downloads now try the confirmed working GitHub API first. Update the server role and Coffee; existing bundled-v8 monitor and IO programs remain compatible. Saved timer/settings data is preserved.
 
 ## Console and calibration repairs (bundled-v11)
 
 New files: `lib_console.lua`, `tests_console.lua`. Updated source/build: `main_os.lua`, `lib_network.lua`, `lib_server.lua`, `lib_monitor.lua`, `clients_monitor_client.lua`, `tools_build_installer.py`, `install.lua`. Updated existing tests: `tests_run.lua`, `tests_desktop.lua`. Updated guides: `README.md`, `documentation_desktop.md`, `documentation_api.md`, `documentation_coffee.md`, `documentation_review.md`, and this map. The installer contains thirteen core sources and no apps. Update the server role for the bottom-row console/clear command and the monitor role for tolerant calibration with Retry/Cancel. Use the full filename `clients_monitor_client.lua calibrate [side]`. Coffee, desktop geometry, saved data formats and the IO client are unchanged.
 
-## Global colours and calibration testing (bundled-v12)
+## Global colors and calibration testing (bundled-v12)
 
 No new files. Updated source/build: `lib_settings.lua`, `lib_server.lua`, `lib_monitor.lua`, `clients_monitor_client.lua`, `tools_build_installer.py`, `install.lua`. Updated tests: `tests_run.lua`, `tests_desktop.lua`, `tests_appearance.lua`. Updated guides: `README.md`, `documentation_api.md`, `documentation_coffee.md`, `documentation_desktop.md`, `documentation_review.md`, and this map. OS settings adds global Window border and Taskbar palettes. Monitor calibration uses nine circles, agreement reporting, a live test, manual nudges and stock reset (`--reset` or the on-screen Reset followed by Save). Update the server and monitor roles; Coffee, IO, window resizing, taskbar dimensions/coordinates and file layout are unchanged.
 
@@ -87,7 +87,7 @@ New files: `apps_switchboard.lua`, `tests_switchboard.lua`, `documentation_switc
 
 ## Shared Switchboard routes, steady ACK status and palette previews (bundled-v14)
 
-No new files. Updated runtime/build: `lib_server.lua`, `apps_switchboard.lua`, `tools_build_installer.py`, generated `install.lua`. Updated tests: `tests_run.lua`, `tests_switchboard.lua`, `tests_coffee.lua`. Updated guides: `README.md`, `documentation_api.md`, `documentation_coffee.md`, `documentation_design.md`, `documentation_switchboard.md`, `documentation_review.md`, and this map. Update the central server role and Switchboard; clients need no update. Duplicate routes now share a physical state, ordinary announcements preserve earned confirmation, and every Switchboard colour picker has draft previews on larger windows plus Apply/Cancel. Active/inactive status colours are configurable. Existing state migrates without resetting views or outputs; no new data files or folders. Coffee runtime, calibration, client code, IO cooldown and window/taskbar geometry are unchanged.
+No new files. Updated runtime/build: `lib_server.lua`, `apps_switchboard.lua`, `tools_build_installer.py`, generated `install.lua`. Updated tests: `tests_run.lua`, `tests_switchboard.lua`, `tests_coffee.lua`. Updated guides: `README.md`, `documentation_api.md`, `documentation_coffee.md`, `documentation_design.md`, `documentation_switchboard.md`, `documentation_review.md`, and this map. Update the central server role and Switchboard; clients need no update. Duplicate routes now share a physical state, ordinary announcements preserve earned confirmation, and every Switchboard color picker has draft previews on larger windows plus Apply/Cancel. Active/inactive status colors are configurable. Existing state migrates without resetting views or outputs; no new data files or folders. Coffee runtime, calibration, client code, IO cooldown and window/taskbar geometry are unchanged.
 
 ## Generic sensor client and Reactors (bundled-v15)
 
@@ -111,7 +111,7 @@ No new files. Updated runtime/build: `lib_sensor_server.lua`, `tools_build_insta
 
 ## Switchboard button appearance (v20 app update)
 
-No new files. Updated app: `apps_switchboard.lua`. Updated test: `tests_switchboard.lua`. Updated guides: `README.md`, `documentation_switchboard.md`, `documentation_review.md`, and this map. Per-switch appearance palettes add an optional saved `displayColour` without changing the real route or wire state. Missing overrides preserve automatic wire-colour behavior. Update only Switchboard using the existing installer; `install.lua`, its builder, all core/client programs and other apps are byte-identical to v19. The full v20 package retains all fifty-one flat root files and the bundled-v19 installer.
+No new files. Updated app: `apps_switchboard.lua`. Updated test: `tests_switchboard.lua`. Updated guides: `README.md`, `documentation_switchboard.md`, `documentation_review.md`, and this map. Per-switch appearance palettes add an optional saved `displayColour` without changing the real route or wire state. Missing overrides preserve automatic wire-color behavior. Update only Switchboard using the existing installer; `install.lua`, its builder, all core/client programs and other apps are byte-identical to v19. The full v20 package retains all fifty-one flat root files and the bundled-v19 installer.
 
 
 ## ME storage, window navigation and Coffee spacing (bundled-v21)
@@ -141,7 +141,7 @@ Updated existing tests: `tests_run.lua`, `tests_desktop.lua`, `tests_me_monitor.
 
 Updated existing guides: `README.md`, `documentation_api.md`, `documentation_desktop.md`, `documentation_me_monitor.md`, `documentation_me_storage.md`, `documentation_review.md`, and this map.
 
-All sixty-three root files are included in the complete package. The installer retains twenty core sources and no apps. Update only the central server role and explicitly install `me_storage`, `me_monitor`, `system` and `clock`. No client, Coffee, Switchboard or Reactors files change. Existing configs and state filenames remain unchanged; the optional new apps add independent appStates entries. ME selections, colours, clocks, routes and per-window navigation are checkpointed centrally; live telemetry remains runtime-only.
+All sixty-three root files are included in the complete package. The installer retains twenty core sources and no apps. Update only the central server role and explicitly install `me_storage`, `me_monitor`, `system` and `clock`. No client, Coffee, Switchboard or Reactors files change. Existing configs and state filenames remain unchanged; the optional new apps add independent appStates entries. ME selections, colors, clocks, routes and per-window navigation are checkpointed centrally; live telemetry remains runtime-only.
 
 ## Clock popups and indefinite signals (bundled-v25)
 
@@ -226,4 +226,9 @@ The full archive retains **75 unique root files**. `install.lua` and all 21 embe
 
 Changed files: `apps_solar_farm.lua`, `tests_solar_farm.lua`, `README.md`, `documentation_solar_farm.md`, `documentation_design.md`, `documentation_api.md`, `documentation_review.md`, `documentation_file_map.md`.
 
-Solar's saved schema-2 namespace gains bounded cumulative ledgers and a fine HV curve, while each window saves its sorting preference. Source bindings, HV identity, pins, Stick flags, colours and compatible recent history remain intact. The overview starts with Live indicators, headers sort/reverse, and the three-row graph uses six glyph-height steps. No new files or other app/core changes are introduced.
+Solar's saved schema-2 namespace gains bounded cumulative ledgers and a fine HV curve, while each window saves its sorting preference. Source bindings, HV identity, pins, Stick flags, colors and compatible recent history remain intact. The overview starts with Live indicators, headers sort/reverse, and the three-row graph uses six glyph-height steps. No new files or other app/core changes are introduced.
+
+
+`documentation_update_v33.md` records the v33 installation steps, behavior changes and exact changed filenames. The complete v33 archive includes every root file, not just updates.
+
+`documentation_update_v34.md` explains the per-wire confirmation fix and lists the exact combined changes across v33 and v34 (since v32).

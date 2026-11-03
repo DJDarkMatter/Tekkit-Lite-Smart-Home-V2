@@ -115,6 +115,29 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local text = table.concat(t.content(t.id), "\n")
         assert(text:find("48 036", 1, true) and text:find("49 300", 1, true) and not text:find("Remaining", 1, true))
     end
+    function tests.reactors_one_control_change_keeps_other_reactor_confirmed_without_requerying_sensors()
+        local t = setup(); local a, b = t.add(t.id), t.add(t.id, "-1,0,0")
+        t.route(t.id, a, 1); t.route(t.id, b, 2); t.bus.advance(1)
+        t.view(t.id).screen = "home"; t.paint()
+        local calls = #t.sensor.sensorCalls
+        t.bus.drop = function(packet) return packet.sender == t.io and packet.message.type == "ioAck" end
+        t.click(t.id, "toggle", a.id); t.paint()
+        equal(#t.sensor.sensorCalls, calls, "A toggle must not query both reactors again")
+        for _, output in ipairs(t.api.getOutputs()) do
+            equal(output.confirmed, output.color ~= 1)
+        end
+        local win, found = t.window(t.id), {}
+        for _, hit in ipairs(t.content(t.id).hits) do if hit.action == "toggle" then
+            local bg = t.top.bg[win.y + hit.y][win.x + hit.x1]
+            equal(bg, hit.value == a.id and 2 or 128, "Only the changed reactor control turns orange")
+            found[hit.value] = true
+        end end
+        assert(found[a.id] and found[b.id])
+        t.bus.advance(1); equal(t.io.bundled.left, 1)
+        t.bus.drop = nil; t.central.server.syncIO("io_11", false); t.bus.pump()
+        for _, output in ipairs(t.api.getOutputs()) do equal(output.confirmed, true) end
+    end
+
     function tests.sensor_direct_and_yielding_peripherals_work_without_yielding_through_pcall()
         for _, options in ipairs({{async = false}, {yielding = true}}) do
             local t = setup(options)

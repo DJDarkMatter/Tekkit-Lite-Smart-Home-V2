@@ -24,12 +24,12 @@ Existing startup, settings and other apps are retained. No client update or extr
 | Relay client | Observed relay path/hops and last announced forwarded-packet count |
 | Sensor client | Peripheral sides, actual card identities/statuses, target counts, protocol/boot generation, catalog errors and incomplete parts |
 | Sensor targets | Name, raw identity, exact target key, kind/position when reported and any already cached sample; no additional subscriptions |
-| Outputs | Logical names, exact IO routing/colour, desired ON/OFF, online and ACK state |
+| Outputs | Logical names, exact IO routing/color, desired ON/OFF, online and ACK state |
 | Apps | Enabled apps, running/stopped and background-service status |
 | Windows | Saved app/monitor, geometry, layout and minimized status |
 
 Lists and wrapped details page on small windows. Sensor target sample fields are informational; only a currently valid cached observation is shown as data. AE target details request the existing capacity projection so opening diagnostics does not repeatedly copy a large item catalog.
 
-Settings offers UI colour and a client-role filter (All, IO, Monitor, Sensor, Relay). The filter and each window's page/selection are checkpointed. Live device/sensor data is rebuilt after restart; an old client detail page can therefore say it is waiting for an announcement. Offline clients stay visible during the current OS session. Distance, chunk load status and unreported machine fields are not inferred.
+Settings offers UI color and a client-role filter (All, IO, Monitor, Sensor, Relay). The filter and each window's page/selection are checkpointed. Live device/sensor data is rebuilt after restart; an old client detail page can therefore say it is waiting for an announcement. Offline clients stay visible during the current OS session. Distance, chunk load status and unreported machine fields are not inferred.
 
 The overview cannot change outputs, rename devices or delete app state. It opens no sensor watches, so viewing catalogs does not add peripheral polling load. Source selections continue to belong to each app; identical targets can be reused across apps and monitors.

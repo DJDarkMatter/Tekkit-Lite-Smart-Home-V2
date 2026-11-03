@@ -1,6 +1,6 @@
 # Reactor panel
 
-`apps_reactors.lua` is the optional **Reactors** app. It runs on the central OS, using the generic [sensor client](documentation_sensors.md). The display follows the supplied Core 1/Core 2 reference: heat, maximum heat, melting threshold, output and actual On/Off state, with a coloured heat bar and separate manual switch.
+`apps_reactors.lua` is the optional **Reactors** app. It runs on the central OS, using the generic [sensor client](documentation_sensors.md). The display follows the supplied Core 1/Core 2 reference: heat, maximum heat, melting threshold, output and actual On/Off state, with a colored heat bar and separate manual switch.
 
 ## Install and add reactors
 
@@ -44,7 +44,7 @@ Bundled-v18 expands the detail view with heat headroom to melting/MaxHeat, suppl
 | Output | Sensor-reported EU/t |
 | On / Off | Actual `Active` reading from the sensor, independent of the manual switch |
 
-**The stock old IC2 card does not supply fuel lifetime or reactor inventory.** Its [reactor-target source](https://github.com/Cloudhunter/OpenCCSensors/blob/6a8c39407ebfde0d2ccfb049b7f9ff7108dd5b62/src/openccsensors/common/sensors/targets/industrialcraft/ReactorTarget.java) reports heat, maximum heat, output, activity and percentage; the [IC2 card implementation](https://github.com/Cloudhunter/OpenCCSensors/blob/6a8c39407ebfde0d2ccfb049b7f9ff7108dd5b62/src/openccsensors/common/sensors/IndustrialCraftSensor.java) offers no extra lifetime method. Selecting the core instead of a chamber does not add that missing field. Adding chamber views cannot repair it. A real fuel countdown needs another source that exposes fuel wear/lifetime. The original reference panel uses a different data interface; it cannot establish that OCS supplies the same fields. V26 removes the Remaining readout from overview cards, detail pages and colour previews. It does not guess fuel lifetime from heat/output or create a manual countdown.
+**The stock old IC2 card does not supply fuel lifetime or reactor inventory.** Its [reactor-target source](https://github.com/Cloudhunter/OpenCCSensors/blob/6a8c39407ebfde0d2ccfb049b7f9ff7108dd5b62/src/openccsensors/common/sensors/targets/industrialcraft/ReactorTarget.java) reports heat, maximum heat, output, activity and percentage; the [IC2 card implementation](https://github.com/Cloudhunter/OpenCCSensors/blob/6a8c39407ebfde0d2ccfb049b7f9ff7108dd5b62/src/openccsensors/common/sensors/IndustrialCraftSensor.java) offers no extra lifetime method. Selecting the core instead of a chamber does not add that missing field. Adding chamber views cannot repair it. A real fuel countdown needs another source that exposes fuel wear/lifetime. The original reference panel uses a different data interface; it cannot establish that OCS supplies the same fields. V26 removes the Remaining readout from overview cards, detail pages and color previews. It does not guess fuel lifetime from heat/output or create a manual countdown.
 
 For adapters that do supply time, supported seconds fields are `RemainingTime`, `TimeRemaining`, `Remaining`, `remainingTime`, `FuelRemainingSeconds`, `RemainingSeconds`, `remainingSeconds`, `RemainingTimeSeconds`, `TimeLeft` and `timeLeft`. Numeric strings and hours:minutes:seconds are accepted. Explicit `RemainingTicks`, `remainingTicks` and `TimeLeftTicks` accept numbers/numeric strings and are divided by 20. Invalid, negative, nonfinite or oversized durations are ignored; genuine zero is retained. This backend compatibility parsing remains intact, but the operational app no longer displays a Remaining or Time field row. Raw diagnostics retain data that was actually reported.
 
@@ -54,17 +54,17 @@ Data age is shown in roomy readouts. Missing cards/targets, a changed card/type,
 
 ## Per-reactor switch and editing
 
-Press **Set IO** on a card/readout, or Edit → **Control output**. Select **IO client → physical side → Digital or bundled colour → Use**. Each reactor can use any available output on any IO client; its sensor and control computer need not be the same. Previously unused wires start OFF; shared routes adopt their existing state.
+Press **Set IO** on a card/readout, or Edit → **Control output**. Select **IO client → physical side → Digital or bundled color → Use**. Each reactor can use any available output on any IO client; its sensor and control computer need not be the same. Previously unused wires start OFF; shared routes adopt their existing state.
 
 The control reads **ON** or **OFF**, showing saved requested output intent rather than naming the next action. Orange/dots mean acknowledgement is pending; offline output status is red. The reactor's separate **On/Off** indicator reflects observed activity. The app never assumes that a commanded output successfully started the reactor, and it does not add automatic shutdown or restart logic. ON means energize the selected output; wire the reactor accordingly.
 
 Each Edit menu offers **Rename**, **Sensor target**, **Control output**, **Raw readings** and confirmed **Delete reactor**. Names use a touch keyboard with letter pages, case/digit modes, Space, Del, Clear, Save and Back. Changing or deleting an output reference releases only that reference; an unused old wire turns OFF after a successful checkpoint, while other shared references retain their state. Every copy controls the same shared desired value.
 
-Home → **Settings** offers **UI colour**, **Panel colour** and **About readings**. Both colour palettes stage selection before Apply/Cancel and include a preview at 24×15 content characters or larger. OS window borders/taskbar stay independent.
+Home → **Settings** offers **UI color**, **Panel color** and **About readings**. Both color palettes stage selection before Apply/Cancel and include a preview at 24×15 content characters or larger. OS window borders/taskbar stay independent.
 
 ## Persistence and lifecycle
 
-Names, sensor bindings, output bindings, panel colour and stable IDs are saved in `appStates.reactors` within `configs_os_state.txt`. Desired output state remains in the OS's shared output map. Important edits and commands save before IO; failed saves roll back. Geometry is restored by the OS. Current readings are runtime data and must arrive again after restart.
+Names, sensor bindings, output bindings, panel color and stable IDs are saved in `appStates.reactors` within `configs_os_state.txt`. Desired output state remains in the OS's shared output map. Important edits and commands save before IO; failed saves roll back. Geometry is restored by the OS. Current readings are runtime data and must arrive again after restart.
 
 Reactors is a normal app: it runs while at least one window exists, including minimized/covered windows. Closing its last window releases its sensor subscriptions and stops detailed polling, while saved manual switch intent stays applied by the OS. Reopening/restoring a window subscribes again. No background alarm/history service or automatic reactor control is introduced.
 
@@ -83,3 +83,8 @@ The Remaining/n/a/Unavailable lifetime row and its palette preview are removed c
 Detail pages show genuine reported extra numeric, boolean and short string fields (up to 32), omitting duplicate normalized fields and fuel-time aliases. Examples such as Chambers or Cooling appear only if the installed sensor actually provides them; the stock OCS 1.4.7 card normally supplies only Heat, MaxHeat, Output, Active, HeatPercentage and basic identity/relative position. Large detail windows use two columns; long label/value pairs keep a fitting number together on its own row. Integer counters use plain grouped digits without depending on legacy float formatting. Relative Position and raw type are shown when supplied. Heat percentage is not duplicated as a text row when the large detail heat bar already displays it.
 
 No fuel/chamber/inventory subscriptions, output behaviour or state schema changes are introduced. Raw readings continues to expose actual source fields, including nested structures; unsupported metrics are omitted rather than filled with unavailable labels. Updating only this app uses `inst app reactors` on the central OS and a reboot; the core OS and client roles need no change for the display update itself.
+
+
+## Independent output confirmation (v34 core update)
+
+A reactor's manual IO switch now loses confirmation only when its own physical output changes. Other reactor controls on the same IO computer or bundled cable retain their known state. Controls sharing the same route change together. A toggle reads cached sensor data; it does not re-query every reactor. Real IO restarts/reconnects still invalidate all of that client's outputs until restoration is acknowledged. Update the central server with the bundled-v34 installer; neither the Reactors app nor the remote clients require reinstalling for this fix.

@@ -118,6 +118,7 @@ local function newTile(state)
     local tile={id=state.nextTileId}; state.nextTileId=state.nextTileId+1; return tile
 end
 function app.init(state,api,context)
+    assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"me_monitor requires bundled-v33 OS; run inst server")
     ready=false; sources,pickers,elapsed={},{},0
     assert(api.aeItemProfiles and api.pickSensor and api.watchSensor,"ME monitors requires bundled-v22 OS")
     appName=context and context.appName or "me_monitor"
@@ -365,16 +366,19 @@ local function build(width,height,state,api,context)
         local data=source(board)
         local title=view.query and view.query~="" and "Find: "..view.query or "Select item"
         ui.heading(data.status=="ok" and title or "Items / "..data.status,data.status=="ok" and accent or 2)
+        local path=api.ui.breadcrumb({board.name,board.sensor.clientId,board.sensor.side,board.sensor.target},width,height)
+        local sortRow=path and 3 or 2
+        if path then ui.text(2,path); ui.style(1,2,width,1,256,32768) end
         local half=math.floor(width/2)
-        button(2,view.sort=="amount" and "Amount" or "Name","sort",nil,1,half,true,accent)
-        button(2,view.sort=="amount" and (view.descending and "Hi-Low" or "Low-Hi") or (view.descending and "Z-A" or "A-Z"),"direction",nil,half+1,width)
+        button(sortRow,view.sort=="amount" and "Amount" or "Name","sort",nil,1,half,true,accent)
+        button(sortRow,view.sort=="amount" and (view.descending and "Hi-Low" or "Low-Hi") or (view.descending and "Z-A" or "A-Z"),"direction",nil,half+1,width)
         local rowH=width>=28 and 1 or 2
-        local slots=math.max(1,math.floor((height-4)/rowH))
+        local slots=math.max(1,math.floor((height-sortRow-2)/rowH))
         local first=frozen.waiting and 0 or page("items",#frozen.rows,slots,height-1)
         for i=1,slots do
             local item=frozen.rows[first+i]
             if item then
-                local y=3+(i-1)*rowH
+                local y=sortRow+1+(i-1)*rowH
                 local current=data.items[item.key]
                 local count=data.status=="ok" and (current and current.count or 0) or nil
                 local valueText=amount(count,width)
@@ -387,7 +391,7 @@ local function build(width,height,state,api,context)
                 ui.hits[#ui.hits+1]={x1=1,x2=width,y1=y,y2=y+rowH-1,action="selectItem",value=item.key}
             end
         end
-        if #frozen.rows==0 then ui.text(3,frozen.waiting and (data.error or "Waiting for items") or view.query and view.query~="" and "No matches" or "No stored items",true) end
+        if #frozen.rows==0 then ui.text(sortRow+1,frozen.waiting and (data.error or "Waiting for items") or view.query and view.query~="" and "No matches" or "No stored items",true) end
         footer({{width>=18 and "Search" or "Find","search"},{width>=21 and "Refresh" or "Sync","refresh"},{"Back","pickerBack"}})
     elseif screen=="item" then
         local data=source(board)
@@ -405,14 +409,14 @@ local function build(width,height,state,api,context)
         local slots=#wrapped<=height-3 and height-3 or height-4
         local first=page("item",#wrapped,slots,height-2)
         for i=1,slots do ui.text(i+1,wrapped[first+i] or "") end
-        button(height-1,"Colour","tileColour",nil,nil,nil,true,tile.displayColour or 128)
+        button(height-1,"Color","tileColour",nil,nil,nil,true,tile.displayColour or 128)
         -- Reserve the colour control even when details span multiple pages.
         footer({{"Item","changeItem"},{"Clear","clearItem"},{"Back","board"}})
     elseif screen=="edit" then
         menu("View settings",{{"Rename view","rename"},{"Edit items","tiles"},{"Layout / size","resize"},{"AE source","sensor"},
             {"Source information","source"},{"Delete view","delete"}},"edit","board")
     elseif screen=="settings" then
-        menu("Monitor settings",{{"UI colour","accent"},{"Density: "..state.settings.density,"density"},{"About","about"}},"settings","home")
+        menu("Monitor settings",{{"UI color","accent"},{"Density: "..state.settings.density,"density"},{"About","about"}},"settings","home")
     elseif screen=="grid" then
         local draft=view.gridDraft
         ui.heading(draft.target=="new" and "New view layout" or "Layout / size",accent)
@@ -442,7 +446,7 @@ local function build(width,height,state,api,context)
         footer({{"Cancel",draft.target=="new" and "home" or "edit"}})
     elseif screen=="colour" then
         local draft=view.colourDraft
-        local lines,hits=api.ui.palette(width,height,draft.auto and nil or draft.value,"Item colour")
+        local lines,hits=api.ui.palette(width,height,draft.auto and nil or draft.value,"Item color")
         ui.lines,ui.hits=lines,hits
         table.remove(hits) -- Replace the palette's Back row with draft controls.
         if width>=24 and height>=14 then
@@ -478,7 +482,7 @@ local function build(width,height,state,api,context)
             "Status: "..(data.error or data.status),"Age: "..(data.age and amount(math.floor(data.age)).." seconds" or "Unknown")},"source","edit")
     elseif screen=="about" or screen=="message" then
         info("Information",{screen=="message" and view.message or
-            "Each saved view selects an AE1 sensor client, side and ME Wireless Access Point. Choose a 1-16 by 1-16 grid or a list of up to 256 rows, then touch an entry to select an item. Item details offer Colour; Auto restores the default tile or alternating list colours. Appearance does not change the item or AE source. Name/Amount and direction sort the picker; Search filters names/raw IDs. Rows keep their positions until Sort, Search or Refresh so live count changes cannot select the wrong item. Counts update about every two seconds. A live complete catalog with no selected item means zero; offline/unpowered/missing data shows --. Counts use plain decimal digits without k/M/E notation. The native card does not expose NBT; indistinguishable raw-name/damage variants are combined. Items are never moved, requested or crafted. Each app configures its own source; the OS shares physical sensor reads."},"info",screen=="message" and "messageBack" or "settings")
+            "Each saved view selects an AE1 sensor client, side and ME Wireless Access Point. Choose a 1-16 by 1-16 grid or a list of up to 256 rows, then touch an entry to select an item. Item details offer Color; Auto restores the default tile or alternating list colors. Appearance does not change the item or AE source. Name/Amount and direction sort the picker; Search filters names/raw IDs. Rows keep their positions until Sort, Search or Refresh so live count changes cannot select the wrong item. Counts update about every two seconds. A live complete catalog with no selected item means zero; offline/unpowered/missing data shows --. Counts use plain decimal digits without k/M/E notation. The native card does not expose NBT; indistinguishable raw-name/damage variants are combined. Items are never moved, requested or crafted. Each app configures its own source; the OS shares physical sensor reads."},"info",screen=="message" and "messageBack" or "settings")
     end
     return ui.lines,ui.hits
 end
@@ -536,7 +540,7 @@ function app.handleTouch(x,y,width,height,state,api,context)
         view.screen="keyboard"
     elseif action=="key" or action=="space" then
         local k=view.keyboard
-        if #k.draft<(k.kind=="search" and 48 or 24) then k.draft=k.draft..(action=="space" and " " or value) end
+        api.ui.typeKey(k,action=="space" and " " or value,k.kind=="search" and 48 or 24)
     elseif action=="del" then view.keyboard.draft=view.keyboard.draft:sub(1,-2)
     elseif action=="clearText" then view.keyboard.draft=""
     elseif action=="bank" then view.keyboard.bank,view.keyboard.page=(view.keyboard.bank+1)%3,1
@@ -585,7 +589,7 @@ function app.handleTouch(x,y,width,height,state,api,context)
     elseif action=="colour" then view.colourDraft.value,view.colourDraft.auto=value,false
     elseif action=="autoColour" then view.colourDraft.auto=true
     elseif action=="applyColour" then
-        if tile.displayColour~=view.colourDraft.before then notice(view,"Colour changed in another window","item")
+        if tile.displayColour~=view.colourDraft.before then notice(view,"Color changed in another window","item")
         elseif commit(state,api,view,function() tile.displayColour=not view.colourDraft.auto and view.colourDraft.value or nil end) then view.screen="item" end
     elseif action=="accent" then local ok,err=api.pickColour(context.windowId); if not ok then notice(view,err) end
     elseif action=="density" then commit(state,api,view,function() state.settings.density=state.settings.density=="roomy" and "compact" or "roomy" end)

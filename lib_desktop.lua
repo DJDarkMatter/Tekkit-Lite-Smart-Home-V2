@@ -116,7 +116,8 @@ function Desktop.layoutOptions(win, app, monitor, selectedGrid)
                 enabled = enabled or Desktop.fits(Desktop.zone(Desktop.gridMode(grid[1], grid[2], column, row), monitor), app, monitor)
             end end
             local name = grid[1] .. "x" .. grid[2]
-            options[#options + 1] = {label = name, value = "choose_" .. name, enabled = enabled}
+            options[#options + 1] = {label = name,
+                value = name == "1x1" and Desktop.gridMode(1, 1, 1, 1) or "choose_" .. name, enabled = enabled}
         end
         options[#options + 1] = {label = "Restore", value = "restore", enabled = win.layout ~= nil and win.layout ~= "normal"}
         options[#options + 1] = {label = "Fullscreen", value = "fullscreen", enabled = Desktop.fullscreen(app, monitor) ~= nil}
@@ -208,7 +209,7 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
             if grid then
                 local x, y = 2 + (slot - 1) % columns * (cardWidth + 1), 2 + math.floor((slot - 1) / columns) * 6
                 local name = grid[1] .. "x" .. grid[2]
-                local item = byMode["choose_" .. name]
+                local item = byMode[name == "1x1" and Desktop.gridMode(1, 1, 1, 1) or "choose_" .. name]
                 local labelX = x + math.floor((cardWidth - #name) / 2)
                 local line = ui.lines[y]
                 ui.lines[y] = line:sub(1, labelX - 1) .. name .. line:sub(labelX + #name)

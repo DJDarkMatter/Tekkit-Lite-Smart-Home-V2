@@ -93,7 +93,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
                 assert(style.x>=3 and style.x+style.width-1<=60,"White clock background has a dark edge stripe")
             end
         end
-        assert(band,"Clock background must cover the side clearance in the selected colour")
+        assert(band,"Clock background must cover the side clearance in the selected color")
     end
 
     function tests.coffee_harvest_manual_pause_force_and_offline_player_behavior()
