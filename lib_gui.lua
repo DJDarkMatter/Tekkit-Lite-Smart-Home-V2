@@ -1,5 +1,6 @@
 -- CC 1.5 colour surfaces. Uses write/setTextColor/setBackgroundColor, never blit.
 local Gui = {}
+local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
 local digits = "0123456789abcdef"
 local names = {"White", "Orange", "Magenta", "Light blue", "Yellow", "Lime", "Pink", "Gray",
     "Light gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
@@ -41,9 +42,10 @@ end
 function Gui.content(width, height)
     local ui = {lines = {styles = {}}, hits = {}}
     ui.lines.hits = ui.hits
-    for y = 1, height do ui.lines[y] = string.rep(" ", width) end
+    for y = 1, height do ui.lines[y] = string.rep(" ", width); Work.check(width) end
     function ui.style(x, y, w, h, fg, bg)
         ui.lines.styles[#ui.lines.styles + 1] = {x = x, y = y, width = w, height = h, fg = fg, bg = bg}
+        Work.check(w * h)
     end
     function ui.text(y, text, centred)
         if y < 1 or y > height then return end
@@ -194,6 +196,7 @@ function Gui.pack(row)
         local last = x
         while last < #row and last - x < 254 and row:sub(last + 1, last + 1) == row:sub(x, x) do last = last + 1 end
         runs[#runs + 1] = string.format("%02x", last - x + 1) .. row:sub(x, x)
+        Work.check(last - x + 1)
         x = last + 1
     end
     return table.concat(runs)
@@ -217,6 +220,7 @@ function Gui.new(width, height, foreground, background)
         surface.lines[y] = string.rep(" ", width)
         surface.foreground[y] = string.rep(Gui.code(foreground, "0"), width)
         surface.background[y] = string.rep(Gui.code(background, "f"), width)
+        Work.check(width)
     end
     local function replace(row, x, value) return row:sub(1, x - 1) .. value .. row:sub(x + #value) end
     function surface.style(x, y, w, h, fg, bg)
@@ -226,6 +230,7 @@ function Gui.new(width, height, foreground, background)
             local f, b = Gui.code(fg), Gui.code(bg)
             if f then surface.foreground[row] = replace(surface.foreground[row], first, string.rep(f, last - first + 1)) end
             if b then surface.background[row] = replace(surface.background[row], first, string.rep(b, last - first + 1)) end
+            Work.check(last - first + 1)
         end
     end
     function surface.write(x, y, value, fg, bg, limit)

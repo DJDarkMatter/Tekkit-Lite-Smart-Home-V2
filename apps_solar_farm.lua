@@ -145,6 +145,7 @@ end
 function app.init(state,api,context)
     ready=false; cache,snapshots,previous,measured,frozen,structures={},{},{},{},{},{}
     assert(api.ui.form and api.migrateAppState and Me.safePatterns,"Solar farm needs bundled-v31 core: update installer, then run inst server")
+    assert(Me.cooperativeCalls,"Solar farm needs bundled-v35 core; run inst server")
     assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"solar_farm requires bundled-v33 OS; run inst server")
     name=context and context.appName or "solar_farm"
     if state.version==nil then
@@ -263,9 +264,9 @@ end
 function app.background(dt,state,api)
     if not ready then return end
     state.elapsed=state.elapsed+math.max(0,dt or 0)
-    local ok,boots=pcall(Me.boots,api); if not ok then boots={} end
+    local ok,boots=Me.protect(Me.boots,api); if not ok then boots={} end
     for _,role in ipairs({"main","farm"}) do
-        local success,err=pcall(observe,role,state,api,boots)
+        local success,err=Me.protect(observe,role,state,api,boots)
         if not success then
             snapshots[role]={status="error",error=tostring(err),items={}}
             previous[role],measured[role]=nil,false

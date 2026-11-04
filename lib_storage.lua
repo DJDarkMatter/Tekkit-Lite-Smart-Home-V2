@@ -1,5 +1,7 @@
 -- Lua 5.1 / ComputerCraft 1.5. Only plain, serializable data belongs here.
 local storage = {}
+local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
+local validatedContents = {}
 
 local function readTable(path)
     if not fs.exists(path) or fs.isDir(path) then return nil end
@@ -8,7 +10,7 @@ local function readTable(path)
     local contents = file.readAll()
     file.close()
     local ok, value = pcall(textutils.unserialize, contents)
-    if ok and type(value) == "table" then return value end
+    if ok and type(value) == "table" then validatedContents[path] = contents; return value end
 end
 
 function storage.load(path, validate)
@@ -19,8 +21,8 @@ function storage.load(path, validate)
 end
 
 function storage.save(path, value)
-    local ok, err = pcall(function()
-        local contents = textutils.serialize(value)
+    local ok, err = Work.call(function()
+        local contents = Work.serialize(value)
         -- fs.getDir was only added in CC 1.63; Tekkit Lite uses older CC.
         local dir = path:match("^(.*)/[^/]+$") or ""
         if dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
@@ -28,7 +30,12 @@ function storage.save(path, value)
         file.write(contents)
         file.close()
         if fs.exists(path) then
-            if readTable(path) then
+            -- Compare with the last validated/written bytes before parsing the
+            -- entire old state again. External corruption still gets checked.
+            local oldFile = fs.open(path, "r")
+            local previous = oldFile and oldFile.readAll()
+            if oldFile then oldFile.close() end
+            if previous and previous == validatedContents[path] or readTable(path) then
                 if fs.exists(path .. ".bak") then fs.delete(path .. ".bak") end
                 fs.move(path, path .. ".bak")
             else
@@ -37,6 +44,7 @@ function storage.save(path, value)
             end
         end
         fs.move(path .. ".tmp", path)
+        validatedContents[path] = contents
     end)
     return ok, err
 end

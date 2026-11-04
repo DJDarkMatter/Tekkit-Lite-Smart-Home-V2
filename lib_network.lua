@@ -1,5 +1,6 @@
 -- All wire packets are serialized strings, including on old CC modems.
 local Network = {}
+local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
 local sides = {"top", "bottom", "left", "right", "front", "back"}
 local protocol = "SmartHomeOS/1"
 local relayChannel = 65533
@@ -133,7 +134,7 @@ function Network.new(config, isServer, logger)
         packet._route = nil
         packet._transport = {version = 1, boot = boot.bootCounter, sequence = net.sequence,
             serverChannel = config.channel, channel = channel, path = {}}
-        local raw = textutils.serialize(packet)
+        local raw = Work.serialize(packet)
         -- Leave headroom for routes; forwarding still checks CC's 64 KiB wire cap.
         if #raw > 61440 then return false end
         local ok = pcall(function()

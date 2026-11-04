@@ -49,7 +49,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(bridge.digital.left, true)
         bus.advance(1); equal(central.server.lastTick, bus.now); equal(bridge.client.connected, true)
         bus.command(central, "help")
-        assert(table.concat(central.console.lines, "\n"):find("clear | save | quit", 1, true))
+        assert(table.concat(central.console.lines, "\n"):find("clear | save | errorlog | quit", 1, true))
     end
 
     function tests.console_editing_history_and_clear_preserve_an_unsubmitted_draft()

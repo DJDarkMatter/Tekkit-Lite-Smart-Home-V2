@@ -1,8 +1,9 @@
 -- Shared AE1 item identities, safe snapshots and bounded stock-rate history.
 local MAX=9007199254740991
+local Work=rawget(_G,"__smarthomeWork") or dofile("lib_work.lua")
 local function copy(value)
     if type(value)~="table" then return value end
-    local result={}; for key,item in pairs(value) do result[key]=copy(item) end; return result
+    local result={}; for key,item in pairs(value) do result[key]=copy(item); Work.check(8) end; return result
 end
 local function restore(state,old)
     local keys={}; for key in pairs(state) do keys[#keys+1]=key end
@@ -58,6 +59,7 @@ local function catalog(reading)
     local compact=data.ItemsFormat=="ae_compact_v1"
     local result,seen,total={},0,0
     for _,row in pairs(data.Items) do
+        Work.check(64)
         seen=seen+1
         if seen>8192 or type(row)~="table" then return nil,"Invalid item list" end
         local raw,name,damage,count
@@ -76,7 +78,7 @@ local function catalog(reading)
     return result,nil,total
 end
 
-local Me={safePatterns=true,MAX=MAX,copy=copy,restore=restore,number=number,integer=integer,digits=digits,amount=amount,rateText=rateText,
+local Me={safePatterns=true,cooperativeCalls=true,protect=Work.call,MAX=MAX,copy=copy,restore=restore,number=number,integer=integer,digits=digits,amount=amount,rateText=rateText,
     colour=colour,textValue=textValue,label=label,address=address,route=route,sourceKey=sourceKey,itemKey=itemKey,
     itemValid=itemValid,identity=identity,find=find,catalog=catalog}
 function Me.boots(api)
@@ -93,7 +95,7 @@ function Me.snapshot(cache,api,binding,boots)
     local saved=cache[key] or {key=key,items={}}
     saved.address=sourceKey(binding)
     cache[key]=saved
-    local ok,reading=pcall(api.getSensorReading,binding,{profile="ae_items"})
+    local ok,reading=Work.call(api.getSensorReading,binding,{profile="ae_items"})
     if not ok or type(reading)~="table" then
         saved.status,saved.error,saved.sequence,saved.time="error","Cannot read ME: "..tostring(reading),nil,nil
         return saved
@@ -104,7 +106,7 @@ function Me.snapshot(cache,api,binding,boots)
     if reading.status~="ok" then return saved end
     if reading.data and reading.data.Powered==false then saved.status,saved.error="unpowered","ME unpowered"; return saved end
     if oldStatus~="ok" or saved.dataSequence~=reading.dataSequence then
-        local parsed,items,err,total=pcall(catalog,reading)
+        local parsed,items,err,total=Work.call(catalog,reading)
         if not parsed or not items then saved.status,saved.error="unsupported",tostring(parsed and err or items); return saved end
         saved.items,saved.total,saved.dataSequence=items,total,reading.dataSequence
         saved.types=0; for _ in pairs(items) do saved.types=saved.types+1 end

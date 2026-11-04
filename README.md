@@ -6,15 +6,17 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
-## Updating to v34
+## Updating to v35
 
-Upload the complete package root to the V2 repository. Replace your one installer Pastebin with this version's `install.lua` and download a fresh `inst` (banner **bundled-v34**). On the **central OS computer**, quit the OS, run `cd /`, then `inst server`. Reinstall the optional apps you use with `inst app NAME`, then `reboot`.
+Upload the complete package root to the V2 repository. Replace your one installer Pastebin with this version's `install.lua` and download a fresh `inst` (banner **bundled-v35**). On the **central OS computer**, quit the OS, run `cd /`, then `inst server`. Reinstall the optional apps you use with `inst app NAME`, then `reboot`.
 
-If you already installed v33, this fix needs only the central `inst server` update and `reboot`; apps and remote clients are unchanged. If updating from an earlier version, also apply the v33 app changes below.
+If you already installed v33 or v34, update the central OS and `solar_farm` (if installed), then reboot. From v32 or earlier, also update the installed v33 apps below. No remote IO, monitor, sensor or relay reinstall is needed in v33, v34 or v35.
 
 The main app changes are `inst app clock`, `inst app switchboard` and `inst app screensaver`. Also update `me_storage`, `me_monitor`, `reactors`, `solar_farm` and `level_emitter` for the shared one-letter Shift behavior and selection breadcrumbs. `coffee` and `system` have wording updates. Each command still installs just that requested app. Existing saved configurations and client installations are retained; remote IO/sensor/relay/monitor computers do not need reinstalling.
 
-See [the v34 fix and combined v33/v34 changed-file list](documentation_update_v34.md), and [the v33 UI changes](documentation_update_v33.md).
+See [the v33/v34/v35 reinstall checklist, v35 runtime changes and exact changed-file list](documentation_update_v35.md). The earlier [v34 confirmation fix](documentation_update_v34.md) and [v33 UI changes](documentation_update_v33.md) are included.
+
+If an OS error was caught, v35 saves its message and last operation in `diagnostics_os_error.txt`. Type `errorlog` in the running OS console after restarting to read it. This is best-effort logging; a forced computer shutdown may prevent a report. Large redraws, serialization and shared ME processing now cooperate in bounded batches while incoming events are buffered. Routine IO announcements no longer repaint all monitors.
 
 ## First working IO connection
 
@@ -22,7 +24,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty-one runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v34`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty-two runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v35`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 

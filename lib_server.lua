@@ -1,5 +1,6 @@
 -- Central state, app lifecycle, desktops and logical IO routing. No redstone here.
 local Server = {}
+local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
 local Picker = dofile("lib_io_picker.lua")
 local Desktop = dofile("lib_desktop.lua")
 local Gui = dofile("lib_gui.lua")
@@ -29,7 +30,7 @@ end
 local function copy(value)
     if type(value) ~= "table" then return value end
     local result = {}
-    for key, item in pairs(value) do result[key] = copy(item) end
+    for key, item in pairs(value) do result[key] = copy(item); Work.check(8) end
     return result
 end
 -- Window UI state is plain bounded data, independent of sensor caches and app
@@ -54,7 +55,7 @@ local function viewSnapshot(value)
         seen[item] = nil
         return result
     end
-    local ok, result = pcall(clean, value, 0)
+    local ok, result = Work.call(clean, value, 0)
     return ok and type(result) == "table" and result or {}
 end
 
@@ -142,6 +143,7 @@ function Server.new(net, storage, config, logger)
     local api, errors = {}, {}
     server.api = api
     api.ui, api.log, api.sharedOutputs, api.sensorProfiles = Gui, log, true, true
+    api.cooperate, api.protectedCall = Work.check, Work.call
     api.aeItemProfiles = true
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
@@ -175,6 +177,8 @@ function Server.new(net, storage, config, logger)
     if not loaded and fs.exists(config.saveFile) then log("Unreadable OS state; starting with defaults") end
 
     function server.save()
+        local previousStage = Work.stage
+        Work.stage = "Saving OS state"
         local saved = {}
         for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides",
             "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance"}) do saved[name] = state[name] end
@@ -187,6 +191,7 @@ function Server.new(net, storage, config, logger)
         end
         local ok, err = storage.save(config.saveFile, saved)
         if not ok then log("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
+        Work.stage = previousStage
         return ok, err
     end
     api.save = server.save
@@ -200,7 +205,7 @@ function Server.new(net, storage, config, logger)
         if type(sourceState)~="table" or type(targetState)~="table" then return false,"App state is unavailable" end
         local oldSource,oldTarget=copy(sourceState),copy(targetState)
         local nextSource,nextTarget=copy(sourceState),copy(targetState)
-        local ok,accepted,err=pcall(transform,nextSource,nextTarget)
+        local ok,accepted,err=Work.call(transform,nextSource,nextTarget)
         if not ok or accepted~=true then return false,tostring(ok and err or accepted) end
         local function replace(target,value)
             local keys={}; for key in pairs(target) do keys[#keys+1]=key end
@@ -259,11 +264,18 @@ function Server.new(net, storage, config, logger)
     local function appCall(name, hook, ...)
         local app = definition(name)
         if not app or not app[hook] then return true end
-        local ok, a, b = pcall(app[hook], ...)
+        local previousStage = Work.stage
+        Work.stage = "App " .. name .. "." .. hook
+        local ok, a, b = Work.call(app[hook], ...)
         if not ok then
             local key = name .. "." .. hook
-            if errors[key] ~= a then log("App " .. key .. " failed: " .. tostring(a)); errors[key] = a end
+            if errors[key] ~= a then
+                Work.report(Work.stage, a)
+                log("App " .. key .. " failed: " .. tostring(a)); errors[key] = a
+            end
+            Work.check(16384)
         end
+        Work.stage = previousStage
         return ok, a, b
     end
 
@@ -1039,9 +1051,11 @@ function Server.new(net, storage, config, logger)
         return surface.frame()
     end
 
-    function server.refreshMonitors(force)
+    function server.refreshMonitors(force, onlyId)
         for id, monitor in pairs(server.monitors) do
-            if monitor.online then
+            if monitor.online and (not onlyId or onlyId == id) then
+                local previousStage = Work.stage
+                Work.stage = "Rendering " .. id
                 local lines, foreground, background = renderMonitor(id, monitor)
                 local signature = table.concat(lines, "\n") .. table.concat(foreground, "\n")
                     .. table.concat(background, "\n") .. tostring(monitor.inputRevision or 0)
@@ -1054,6 +1068,8 @@ function Server.new(net, storage, config, logger)
                         monitor.lastRender = signature
                     end
                 end
+                Work.stage = previousStage
+                Work.check(16384)
             end
         end
     end
@@ -1313,7 +1329,7 @@ function Server.new(net, storage, config, logger)
                 end
                 server.syncIO(id, ioChanged)
             end
-            server.refreshMonitors(false)
+            if message.clientType == "monitor" then server.refreshMonitors(false, id) end
         elseif message.type == "inputData" then
             local client = registered(server.ioClients, message, replyChannel)
             if not client or not client.capabilities[message.side] or not integer(message.value, 0, 65535)
@@ -1375,7 +1391,7 @@ function Server.new(net, storage, config, logger)
                 if config.enabledApps and config.enabledApps[name] == true then
                     local chunk, err = loadfile(file)
                     local ok, app = false, err
-                    if chunk then ok, app = pcall(chunk) end
+                    if chunk then ok, app = Work.call(chunk) end
                     if ok and validApp(app) then
                         server.apps[name], state.appRegistry[name] = app, true
                         if type(state.appStates[name]) ~= "table" then state.appStates[name] = {} end
@@ -1416,7 +1432,12 @@ function Server.new(net, storage, config, logger)
         local dt = math.max(0, now - server.lastTick)
         server.lastTick = now
         updateClock()
-        for name in pairs(server.running) do appCall(name, "background", dt, state.appStates[name], api) end
+        for _, name in ipairs(sortedKeys(server.running)) do
+            if server.running[name] then
+                appCall(name, "background", dt, state.appStates[name], api)
+                Work.check(16384)
+            end
+        end
         sensors.tick(now)
         for id, client in pairs(server.ioClients) do
             if client.online and client.ackedRevision ~= client.revision
@@ -1448,9 +1469,15 @@ function Server.new(net, storage, config, logger)
             "set <name> <on|off> | toggle <name>",
             "open <app> <monitor> | close <windowId>",
             "move <id> <x> <y> | resize <id> <width> <height>",
-            "clear | save | quit (saves and exits)",
+            "clear | save | errorlog | quit (saves and exits)",
         } end
         if cmd == "clear" then return {}, false, "clear"
+        elseif cmd == "errorlog" then
+            local file = fs.open("diagnostics_os_error.txt", "r")
+            if not file then return {"No saved OS error report"} end
+            local report = file.readAll(); file.close()
+            local lines = {}; for line in (report .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
+            return lines
         elseif cmd == "clients" then
             local lines = {}
             for _, item in ipairs(api.getClients()) do

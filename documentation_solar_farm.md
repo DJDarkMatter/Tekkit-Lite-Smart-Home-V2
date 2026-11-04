@@ -2,6 +2,10 @@
 
 `apps_solar_farm.lua` is the optional `solar_farm` app. Its overview combines farm-ME amounts with **farm-ME net stock-change rates**. Only **HV solar** uses main-ME stock/rate data; it starts pinned with **Stick** enabled. You can turn Stick off or unpin it. No other main-ME item is listed. If HV panels are also in the farm, their farm amount/rate is a separate row labelled `(farm)`; it is not replaced by the main output amount. Machinery control, recipes and direct SMF output measurement remain external.
 
+## Update to v35
+
+V35 uses the core's cooperative shared-ME helpers and yield-safe per-source sampling. Upload the full current package, replace/download the **bundled-v35** installer, then run `cd /`, `inst server`, `inst app solar_farm`, `reboot` on the central computer. Existing sources, pins, learned averages, history and layouts are retained. No remote clients need reinstalling. See `documentation_update_v35.md` for all app updates required when jumping from v32.
+
 ## Update from v31
 
 Upload the complete v32 ZIP contents to GitHub, then stop the central OS and run `cd /`, `inst app solar_farm`, `reboot` with the existing bundled-v31 installer. This is an app-only update: no new Pastebin paste, core/client or other app update is needed. All 75 root files remain in the full release. Earlier installations still need the v31 shared-helper repair below.

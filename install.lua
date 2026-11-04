@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v34
+-- SmartHome OS installer: bundled-v35
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -6,8 +6,103 @@
 -- Alternatives: inst app NAME PASTE_ID   or   inst app NAME --file PATH
 -- OS/client installation is offline. Apps are fetched only on request.
 local sources = {
+    ["lib_work.lua"] = [=[-- Cooperative central work, portable to Lua 5.1 and legacy LuaJ.
+-- One serial worker owns OS state; the event collector remains responsive.
+local existing = rawget(_G, "__smarthomeWork")
+if existing then return existing end
+local Work = {stage = "Starting OS", yields = 0}
+local parents, owner, pause, budget, spent = {}, nil, nil, 16384, 0
+local function pack(...) return {n = select("#", ...), ...} end
+local function active()
+    local thread = coroutine.running()
+    while thread do
+        if thread == owner then return pause ~= nil end
+        thread = parents[thread]
+    end
+    return false
+end
+function Work.protect(fn, ...)
+    local thread = coroutine.create(fn)
+    parents[thread] = coroutine.running()
+    local args = pack(...)
+    while true do
+        local result = pack(coroutine.resume(thread, unpack(args, 1, args.n)))
+        if not result[1] or coroutine.status(thread) == "dead" then
+            parents[thread] = nil
+            if not result[1] and tostring(result[2]):lower():find("too long without yielding", 1, true) then
+                Work.report(Work.stage, result[2])
+            end
+            return unpack(result, 1, result.n)
+        end
+        args = pack(coroutine.yield(unpack(result, 2, result.n)))
+    end
+end
+function Work.call(fn, ...)
+    if active() then return Work.protect(fn, ...) end
+    return pcall(fn, ...)
+end
+function Work.enable(callback, limit)
+    owner, pause, budget, spent = coroutine.running(), callback, limit or 16384, 0
+end
+function Work.disable() owner, pause, spent, parents = nil, nil, 0, {} end
+function Work.check(cost)
+    if not pause or not active() then return end
+    spent = spent + (cost or 1)
+    if spent >= budget then
+        spent = 0; Work.yields = Work.yields + 1
+        pause()
+    end
+end
+-- Serialize plain saved data in small steps. Repeated references are rejected,
+-- matching old CraftOS, and output remains readable by textutils.unserialize.
+function Work.serialize(value)
+    if not pause or not active() then return textutils.serialize(value) end
+    local parts, seen = {}, {}
+    local function write(item)
+        local kind = type(item)
+        Work.check(16)
+        if kind == "string" then
+            parts[#parts + 1] = string.format("%q", item); Work.check(#item)
+        elseif kind == "number" then
+            assert(item == item and math.abs(item) < math.huge, "Cannot serialize non-finite number")
+            parts[#parts + 1] = tostring(item)
+        elseif kind == "boolean" or kind == "nil" then parts[#parts + 1] = tostring(item)
+        else
+            assert(kind == "table", "Cannot serialize " .. kind)
+            assert(not seen[item], "Cannot serialize table with recursive entries")
+            seen[item] = true; parts[#parts + 1] = "{"
+            for key, child in pairs(item) do
+                parts[#parts + 1] = "["; write(key); parts[#parts + 1] = "]="
+                write(child); parts[#parts + 1] = ","
+            end
+            parts[#parts + 1] = "}"
+        end
+    end
+    write(value)
+    return table.concat(parts)
+end
+function Work.report(stage, err)
+    local message = "SmartHome OS error\nStage: " .. tostring(stage or Work.stage)
+        .. "\nError: " .. tostring(err) .. "\n"
+    message = message:sub(1, 16384)
+    if Work.lastReport == message then return true end
+    local ok = pcall(function()
+        local path = "diagnostics_os_error.txt"
+        local file = assert(fs.open(path .. ".tmp", "w"), "Cannot write OS error report")
+        file.write(message); file.close()
+        if fs.exists(path) then fs.delete(path) end
+        fs.move(path .. ".tmp", path)
+    end)
+    if ok then Work.lastReport = message end
+    return ok
+end
+rawset(_G, "__smarthomeWork", Work)
+return Work
+]=],
     ["lib_storage.lua"] = [=[-- Lua 5.1 / ComputerCraft 1.5. Only plain, serializable data belongs here.
 local storage = {}
+local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
+local validatedContents = {}
 
 local function readTable(path)
     if not fs.exists(path) or fs.isDir(path) then return nil end
@@ -16,7 +111,7 @@ local function readTable(path)
     local contents = file.readAll()
     file.close()
     local ok, value = pcall(textutils.unserialize, contents)
-    if ok and type(value) == "table" then return value end
+    if ok and type(value) == "table" then validatedContents[path] = contents; return value end
 end
 
 function storage.load(path, validate)
@@ -27,8 +122,8 @@ function storage.load(path, validate)
 end
 
 function storage.save(path, value)
-    local ok, err = pcall(function()
-        local contents = textutils.serialize(value)
+    local ok, err = Work.call(function()
+        local contents = Work.serialize(value)
         -- fs.getDir was only added in CC 1.63; Tekkit Lite uses older CC.
         local dir = path:match("^(.*)/[^/]+$") or ""
         if dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
@@ -36,7 +131,12 @@ function storage.save(path, value)
         file.write(contents)
         file.close()
         if fs.exists(path) then
-            if readTable(path) then
+            -- Compare with the last validated/written bytes before parsing the
+            -- entire old state again. External corruption still gets checked.
+            local oldFile = fs.open(path, "r")
+            local previous = oldFile and oldFile.readAll()
+            if oldFile then oldFile.close() end
+            if previous and previous == validatedContents[path] or readTable(path) then
                 if fs.exists(path .. ".bak") then fs.delete(path .. ".bak") end
                 fs.move(path, path .. ".bak")
             else
@@ -45,6 +145,7 @@ function storage.save(path, value)
             end
         end
         fs.move(path .. ".tmp", path)
+        validatedContents[path] = contents
     end)
     return ok, err
 end
@@ -69,6 +170,7 @@ return storage
 ]=],
     ["lib_network.lua"] = [=[-- All wire packets are serialized strings, including on old CC modems.
 local Network = {}
+local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
 local sides = {"top", "bottom", "left", "right", "front", "back"}
 local protocol = "SmartHomeOS/1"
 local relayChannel = 65533
@@ -202,7 +304,7 @@ function Network.new(config, isServer, logger)
         packet._route = nil
         packet._transport = {version = 1, boot = boot.bootCounter, sequence = net.sequence,
             serverChannel = config.channel, channel = channel, path = {}}
-        local raw = textutils.serialize(packet)
+        local raw = Work.serialize(packet)
         -- Leave headroom for routes; forwarding still checks CC's 64 KiB wire cap.
         if #raw > 61440 then return false end
         local ok = pcall(function()
@@ -407,6 +509,7 @@ return Console
 ]=],
     ["lib_gui.lua"] = [=[-- CC 1.5 colour surfaces. Uses write/setTextColor/setBackgroundColor, never blit.
 local Gui = {}
+local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
 local digits = "0123456789abcdef"
 local names = {"White", "Orange", "Magenta", "Light blue", "Yellow", "Lime", "Pink", "Gray",
     "Light gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
@@ -448,9 +551,10 @@ end
 function Gui.content(width, height)
     local ui = {lines = {styles = {}}, hits = {}}
     ui.lines.hits = ui.hits
-    for y = 1, height do ui.lines[y] = string.rep(" ", width) end
+    for y = 1, height do ui.lines[y] = string.rep(" ", width); Work.check(width) end
     function ui.style(x, y, w, h, fg, bg)
         ui.lines.styles[#ui.lines.styles + 1] = {x = x, y = y, width = w, height = h, fg = fg, bg = bg}
+        Work.check(w * h)
     end
     function ui.text(y, text, centred)
         if y < 1 or y > height then return end
@@ -601,6 +705,7 @@ function Gui.pack(row)
         local last = x
         while last < #row and last - x < 254 and row:sub(last + 1, last + 1) == row:sub(x, x) do last = last + 1 end
         runs[#runs + 1] = string.format("%02x", last - x + 1) .. row:sub(x, x)
+        Work.check(last - x + 1)
         x = last + 1
     end
     return table.concat(runs)
@@ -624,6 +729,7 @@ function Gui.new(width, height, foreground, background)
         surface.lines[y] = string.rep(" ", width)
         surface.foreground[y] = string.rep(Gui.code(foreground, "0"), width)
         surface.background[y] = string.rep(Gui.code(background, "f"), width)
+        Work.check(width)
     end
     local function replace(row, x, value) return row:sub(1, x - 1) .. value .. row:sub(x + #value) end
     function surface.style(x, y, w, h, fg, bg)
@@ -633,6 +739,7 @@ function Gui.new(width, height, foreground, background)
             local f, b = Gui.code(fg), Gui.code(bg)
             if f then surface.foreground[row] = replace(surface.foreground[row], first, string.rep(f, last - first + 1)) end
             if b then surface.background[row] = replace(surface.background[row], first, string.rep(b, last - first + 1)) end
+            Work.check(last - first + 1)
         end
     end
     function surface.write(x, y, value, fg, bg, limit)
@@ -677,9 +784,10 @@ return Gui
 ]=],
     ["lib_me.lua"] = [=[-- Shared AE1 item identities, safe snapshots and bounded stock-rate history.
 local MAX=9007199254740991
+local Work=rawget(_G,"__smarthomeWork") or dofile("lib_work.lua")
 local function copy(value)
     if type(value)~="table" then return value end
-    local result={}; for key,item in pairs(value) do result[key]=copy(item) end; return result
+    local result={}; for key,item in pairs(value) do result[key]=copy(item); Work.check(8) end; return result
 end
 local function restore(state,old)
     local keys={}; for key in pairs(state) do keys[#keys+1]=key end
@@ -735,6 +843,7 @@ local function catalog(reading)
     local compact=data.ItemsFormat=="ae_compact_v1"
     local result,seen,total={},0,0
     for _,row in pairs(data.Items) do
+        Work.check(64)
         seen=seen+1
         if seen>8192 or type(row)~="table" then return nil,"Invalid item list" end
         local raw,name,damage,count
@@ -753,7 +862,7 @@ local function catalog(reading)
     return result,nil,total
 end
 
-local Me={safePatterns=true,MAX=MAX,copy=copy,restore=restore,number=number,integer=integer,digits=digits,amount=amount,rateText=rateText,
+local Me={safePatterns=true,cooperativeCalls=true,protect=Work.call,MAX=MAX,copy=copy,restore=restore,number=number,integer=integer,digits=digits,amount=amount,rateText=rateText,
     colour=colour,textValue=textValue,label=label,address=address,route=route,sourceKey=sourceKey,itemKey=itemKey,
     itemValid=itemValid,identity=identity,find=find,catalog=catalog}
 function Me.boots(api)
@@ -770,7 +879,7 @@ function Me.snapshot(cache,api,binding,boots)
     local saved=cache[key] or {key=key,items={}}
     saved.address=sourceKey(binding)
     cache[key]=saved
-    local ok,reading=pcall(api.getSensorReading,binding,{profile="ae_items"})
+    local ok,reading=Work.call(api.getSensorReading,binding,{profile="ae_items"})
     if not ok or type(reading)~="table" then
         saved.status,saved.error,saved.sequence,saved.time="error","Cannot read ME: "..tostring(reading),nil,nil
         return saved
@@ -781,7 +890,7 @@ function Me.snapshot(cache,api,binding,boots)
     if reading.status~="ok" then return saved end
     if reading.data and reading.data.Powered==false then saved.status,saved.error="unpowered","ME unpowered"; return saved end
     if oldStatus~="ok" or saved.dataSequence~=reading.dataSequence then
-        local parsed,items,err,total=pcall(catalog,reading)
+        local parsed,items,err,total=Work.call(catalog,reading)
         if not parsed or not items then saved.status,saved.error="unsupported",tostring(parsed and err or items); return saved end
         saved.items,saved.total,saved.dataSequence=items,total,reading.dataSequence
         saved.types=0; for _ in pairs(items) do saved.types=saved.types+1 end
@@ -1378,6 +1487,7 @@ return Desktop
 ]=],
     ["lib_server.lua"] = [=[-- Central state, app lifecycle, desktops and logical IO routing. No redstone here.
 local Server = {}
+local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
 local Picker = dofile("lib_io_picker.lua")
 local Desktop = dofile("lib_desktop.lua")
 local Gui = dofile("lib_gui.lua")
@@ -1407,7 +1517,7 @@ end
 local function copy(value)
     if type(value) ~= "table" then return value end
     local result = {}
-    for key, item in pairs(value) do result[key] = copy(item) end
+    for key, item in pairs(value) do result[key] = copy(item); Work.check(8) end
     return result
 end
 -- Window UI state is plain bounded data, independent of sensor caches and app
@@ -1432,7 +1542,7 @@ local function viewSnapshot(value)
         seen[item] = nil
         return result
     end
-    local ok, result = pcall(clean, value, 0)
+    local ok, result = Work.call(clean, value, 0)
     return ok and type(result) == "table" and result or {}
 end
 
@@ -1520,6 +1630,7 @@ function Server.new(net, storage, config, logger)
     local api, errors = {}, {}
     server.api = api
     api.ui, api.log, api.sharedOutputs, api.sensorProfiles = Gui, log, true, true
+    api.cooperate, api.protectedCall = Work.check, Work.call
     api.aeItemProfiles = true
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
@@ -1553,6 +1664,8 @@ function Server.new(net, storage, config, logger)
     if not loaded and fs.exists(config.saveFile) then log("Unreadable OS state; starting with defaults") end
 
     function server.save()
+        local previousStage = Work.stage
+        Work.stage = "Saving OS state"
         local saved = {}
         for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides",
             "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance"}) do saved[name] = state[name] end
@@ -1565,6 +1678,7 @@ function Server.new(net, storage, config, logger)
         end
         local ok, err = storage.save(config.saveFile, saved)
         if not ok then log("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
+        Work.stage = previousStage
         return ok, err
     end
     api.save = server.save
@@ -1578,7 +1692,7 @@ function Server.new(net, storage, config, logger)
         if type(sourceState)~="table" or type(targetState)~="table" then return false,"App state is unavailable" end
         local oldSource,oldTarget=copy(sourceState),copy(targetState)
         local nextSource,nextTarget=copy(sourceState),copy(targetState)
-        local ok,accepted,err=pcall(transform,nextSource,nextTarget)
+        local ok,accepted,err=Work.call(transform,nextSource,nextTarget)
         if not ok or accepted~=true then return false,tostring(ok and err or accepted) end
         local function replace(target,value)
             local keys={}; for key in pairs(target) do keys[#keys+1]=key end
@@ -1637,11 +1751,18 @@ function Server.new(net, storage, config, logger)
     local function appCall(name, hook, ...)
         local app = definition(name)
         if not app or not app[hook] then return true end
-        local ok, a, b = pcall(app[hook], ...)
+        local previousStage = Work.stage
+        Work.stage = "App " .. name .. "." .. hook
+        local ok, a, b = Work.call(app[hook], ...)
         if not ok then
             local key = name .. "." .. hook
-            if errors[key] ~= a then log("App " .. key .. " failed: " .. tostring(a)); errors[key] = a end
+            if errors[key] ~= a then
+                Work.report(Work.stage, a)
+                log("App " .. key .. " failed: " .. tostring(a)); errors[key] = a
+            end
+            Work.check(16384)
         end
+        Work.stage = previousStage
         return ok, a, b
     end
 
@@ -2417,9 +2538,11 @@ function Server.new(net, storage, config, logger)
         return surface.frame()
     end
 
-    function server.refreshMonitors(force)
+    function server.refreshMonitors(force, onlyId)
         for id, monitor in pairs(server.monitors) do
-            if monitor.online then
+            if monitor.online and (not onlyId or onlyId == id) then
+                local previousStage = Work.stage
+                Work.stage = "Rendering " .. id
                 local lines, foreground, background = renderMonitor(id, monitor)
                 local signature = table.concat(lines, "\n") .. table.concat(foreground, "\n")
                     .. table.concat(background, "\n") .. tostring(monitor.inputRevision or 0)
@@ -2432,6 +2555,8 @@ function Server.new(net, storage, config, logger)
                         monitor.lastRender = signature
                     end
                 end
+                Work.stage = previousStage
+                Work.check(16384)
             end
         end
     end
@@ -2691,7 +2816,7 @@ function Server.new(net, storage, config, logger)
                 end
                 server.syncIO(id, ioChanged)
             end
-            server.refreshMonitors(false)
+            if message.clientType == "monitor" then server.refreshMonitors(false, id) end
         elseif message.type == "inputData" then
             local client = registered(server.ioClients, message, replyChannel)
             if not client or not client.capabilities[message.side] or not integer(message.value, 0, 65535)
@@ -2753,7 +2878,7 @@ function Server.new(net, storage, config, logger)
                 if config.enabledApps and config.enabledApps[name] == true then
                     local chunk, err = loadfile(file)
                     local ok, app = false, err
-                    if chunk then ok, app = pcall(chunk) end
+                    if chunk then ok, app = Work.call(chunk) end
                     if ok and validApp(app) then
                         server.apps[name], state.appRegistry[name] = app, true
                         if type(state.appStates[name]) ~= "table" then state.appStates[name] = {} end
@@ -2794,7 +2919,12 @@ function Server.new(net, storage, config, logger)
         local dt = math.max(0, now - server.lastTick)
         server.lastTick = now
         updateClock()
-        for name in pairs(server.running) do appCall(name, "background", dt, state.appStates[name], api) end
+        for _, name in ipairs(sortedKeys(server.running)) do
+            if server.running[name] then
+                appCall(name, "background", dt, state.appStates[name], api)
+                Work.check(16384)
+            end
+        end
         sensors.tick(now)
         for id, client in pairs(server.ioClients) do
             if client.online and client.ackedRevision ~= client.revision
@@ -2826,9 +2956,15 @@ function Server.new(net, storage, config, logger)
             "set <name> <on|off> | toggle <name>",
             "open <app> <monitor> | close <windowId>",
             "move <id> <x> <y> | resize <id> <width> <height>",
-            "clear | save | quit (saves and exits)",
+            "clear | save | errorlog | quit (saves and exits)",
         } end
         if cmd == "clear" then return {}, false, "clear"
+        elseif cmd == "errorlog" then
+            local file = fs.open("diagnostics_os_error.txt", "r")
+            if not file then return {"No saved OS error report"} end
+            local report = file.readAll(); file.close()
+            local lines = {}; for line in (report .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
+            return lines
         elseif cmd == "clients" then
             local lines = {}
             for _, item in ipairs(api.getClients()) do
@@ -3404,53 +3540,101 @@ function Monitor.new(net, config)
 end
 return Monitor
 ]=],
-    ["main_os.lua"] = [=[-- Start from / with: main_os.lua
-local storage = dofile("lib_storage.lua")
-local Network = dofile("lib_network.lua")
-local Server = dofile("lib_server.lua")
-local Console = dofile("lib_console.lua")
-local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
-local config = storage.config("configs_os.txt", {
-    saveFile = "configs_os_state.txt", tickInterval = 0.5,
-    saveInterval = 1, clientTimeout = 15, retryInterval = 2, enabledApps = {},
-})
-assert(type(config.enabledApps) == "table", "Invalid enabledApps setting")
-for _, name in ipairs({"tickInterval", "saveInterval", "clientTimeout", "retryInterval"}) do
-    assert(type(config[name]) == "number" and config[name] > 0, "Invalid OS setting: " .. name)
-end
-local console = Console.new(term)
-local net = Network.new(networkConfig, true, console.log)
-local server = Server.new(net, storage, config, console.log)
-server.start()
-console.log("Type help for commands; clear clears this console")
-
--- The bottom-row editor owns its cursor independently of asynchronous logs.
--- Network/timer events continue while commands are being edited.
-parallel.waitForAny(function()
-    local timer = os.startTimer(server.nextTickInterval())
-    while true do
-        local event, p1, p2, p3, p4 = os.pullEvent()
-        if event == "modem_message" then
-            local message = net.receive(p1, p2, p3, p4)
-            if message then server.handle(message, p3, os.clock()) end
-        elseif event == "timer" and p1 == timer then
-            server.tick(os.clock())
-            timer = os.startTimer(server.nextTickInterval())
-        elseif event == "peripheral" or event == "peripheral_detach" then
-            net.peripheralChanged(p1)
-        end
+    ["main_os.lua"] = [=[-- Central OS. The collector buffers events while one serial worker changes
+-- app state, paints monitors or checkpoints. No command can interleave a save.
+local Work = dofile("lib_work.lua")
+local console
+local ok, err = Work.protect(function()
+    Work.stage = "Loading OS configuration"
+    local storage = dofile("lib_storage.lua")
+    local Network = dofile("lib_network.lua")
+    local Server = dofile("lib_server.lua")
+    local Console = dofile("lib_console.lua")
+    local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
+    local config = storage.config("configs_os.txt", {
+        saveFile = "configs_os_state.txt", tickInterval = 0.5,
+        saveInterval = 1, clientTimeout = 15, retryInterval = 2, enabledApps = {},
+    })
+    assert(type(config.enabledApps) == "table", "Invalid enabledApps setting")
+    for _, name in ipairs({"tickInterval", "saveInterval", "clientTimeout", "retryInterval"}) do
+        assert(type(config[name]) == "number" and config[name] > 0, "Invalid OS setting: " .. name)
     end
-end, function()
-    while true do
-        local line = console.handle(os.pullEvent())
-        if line ~= nil then
-            local lines, quit, action = server.command(line)
-            if action == "clear" then console.clear() end
-            for _, output in ipairs(lines) do console.log(output) end
-            if quit then console.finish(); return end
-        end
+    console = Console.new(term)
+    local net = Network.new(networkConfig, true, console.log)
+    local server, timer
+    local pending, head, sequence = {}, 1, 0
+    local function enqueue(item)
+        local empty = head > #pending
+        item.received = os.clock()
+        pending[#pending + 1] = item
+        if empty then os.queueEvent("smarthome_server_work") end
     end
+    parallel.waitForAny(function()
+        while true do
+            local item = {os.pullEvent()}
+            local event = item[1]
+            if event == "modem_message" or event == "peripheral" or event == "peripheral_detach" then enqueue(item)
+            elseif event == "timer" and item[2] == timer then enqueue(item)
+            else
+                local command = console.handle(unpack(item))
+                if command ~= nil then enqueue({"command", command}) end
+            end
+        end
+    end, function()
+        Work.enable(function()
+            sequence = sequence + 1
+            os.queueEvent("smarthome_server_yield", sequence)
+            local _, current
+            repeat _, current = os.pullEvent("smarthome_server_yield") until current == sequence
+        end)
+        Work.stage = "Loading saved OS state"
+        server = Server.new(net, storage, config, console.log)
+        server.start()
+        console.log("Type help for commands; clear clears this console")
+        if fs.exists("diagnostics_os_error.txt") then console.log("Saved OS error: type errorlog to read it") end
+        timer = os.startTimer(server.nextTickInterval())
+        while true do
+            if head > #pending then
+                Work.stage = "Waiting for events"
+                os.pullEvent("smarthome_server_work")
+            else
+                local item = pending[head]
+                pending[head], head = false, head + 1
+                local event, p1, p2, p3, p4 = unpack(item)
+                if event == "modem_message" then
+                    Work.stage = "Receiving modem message"
+                    local message = net.receive(p1, p2, p3, p4)
+                    if message then
+                        Work.stage = "Message " .. message.type .. " from " .. tostring(message.clientId)
+                        server.handle(message, p3, item.received)
+                    end
+                elseif event == "timer" and p1 == timer then
+                    Work.stage = "Background tick"
+                    server.tick(os.clock())
+                    timer = os.startTimer(server.nextTickInterval())
+                elseif event == "peripheral" or event == "peripheral_detach" then
+                    Work.stage = "Peripheral change"
+                    net.peripheralChanged(p1)
+                elseif event == "command" then
+                    Work.stage = "Command " .. p1
+                    local lines, quit, action = server.command(p1)
+                    if action == "clear" then console.clear() end
+                    for _, output in ipairs(lines) do console.log(output) end
+                    if quit then console.finish(); return end
+                end
+                if head > #pending then pending, head = {}, 1 end
+                Work.check(16384)
+            end
+        end
+    end)
 end)
+Work.disable()
+if not ok then
+    local cancelled = tostring(err) == "Terminated" or tostring(err):match(":%s*Terminated$")
+    if not cancelled then Work.report(Work.stage, err) end
+    if console then pcall(console.finish) end
+    error(err, 0)
+end
 ]=],
     ["clients_io_client.lua"] = [=[-- Run from the computer root. Configs survive program updates.
 local storage = dofile("lib_storage.lua")
@@ -4555,10 +4739,13 @@ while true do
 end
 ]=],
 }
+local workChunk = assert(loadstring(sources["lib_work.lua"], "lib_work.lua"))
+setfenv(workChunk, getfenv(1))
+workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v34")
+print("SmartHome installer: bundled-v35")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
@@ -4701,7 +4888,7 @@ else
         assert(args[index] == "--startup", "Usage: inst server|io|monitor|sensor|relay [--startup]")
         autorun = true
     end
-    files = {"lib_storage.lua", "lib_network.lua"}
+    files = {"lib_work.lua", "lib_storage.lua", "lib_network.lua"}
     if role == "server" or role == "monitor" then files[#files + 1] = "lib_gui.lua" end
     if role == "server" then
         files[#files + 1] = "lib_me.lua"

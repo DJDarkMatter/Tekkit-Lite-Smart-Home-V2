@@ -232,3 +232,6 @@ Solar's saved schema-2 namespace gains bounded cumulative ledgers and a fine HV 
 `documentation_update_v33.md` records the v33 installation steps, behavior changes and exact changed filenames. The complete v33 archive includes every root file, not just updates.
 
 `documentation_update_v34.md` explains the per-wire confirmation fix and lists the exact combined changes across v33 and v34 (since v32).
+
+
+V35 adds `lib_work.lua` (bounded cooperative work and protected calls), `tests_work.lua` (runtime/queue/checkpoint stress checks), and `documentation_update_v35.md` (v33/v34/v35 reinstall checklist and exact filenames). Runtime errors may create `diagnostics_os_error.txt` and its temporary write file in the computer root.

@@ -4,7 +4,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 PATHS = [
-    "lib_storage.lua", "lib_network.lua", "lib_console.lua", "lib_gui.lua", "lib_me.lua", "lib_settings.lua", "lib_io_picker.lua", "lib_desktop.lua", "lib_server.lua", "lib_io.lua", "lib_monitor.lua",
+    "lib_work.lua", "lib_storage.lua", "lib_network.lua", "lib_console.lua", "lib_gui.lua", "lib_me.lua", "lib_settings.lua", "lib_io_picker.lua", "lib_desktop.lua", "lib_server.lua", "lib_io.lua", "lib_monitor.lua",
     "main_os.lua", "clients_io_client.lua", "clients_monitor_client.lua",
     "lib_sensor_data.lua", "lib_sensor.lua", "lib_sensor_server.lua", "lib_sensor_picker.lua", "clients_sensor_client.lua",
     "lib_relay.lua", "clients_relay_client.lua",
@@ -16,7 +16,7 @@ def lua_string(value):
         equals += "="
     return "[" + equals + "[" + value + "]" + equals + "]"
 
-header = '''-- SmartHome OS installer: bundled-v34
+header = '''-- SmartHome OS installer: bundled-v35
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -27,10 +27,13 @@ local sources = {
 '''
 entries = [f'    ["{path}"] = {lua_string((ROOT / path).read_text())},\n' for path in PATHS]
 runner = r'''}
+local workChunk = assert(loadstring(sources["lib_work.lua"], "lib_work.lua"))
+setfenv(workChunk, getfenv(1))
+workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v34")
+print("SmartHome installer: bundled-v35")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
@@ -173,7 +176,7 @@ else
         assert(args[index] == "--startup", "Usage: inst server|io|monitor|sensor|relay [--startup]")
         autorun = true
     end
-    files = {"lib_storage.lua", "lib_network.lua"}
+    files = {"lib_work.lua", "lib_storage.lua", "lib_network.lua"}
     if role == "server" or role == "monitor" then files[#files + 1] = "lib_gui.lua" end
     if role == "server" then
         files[#files + 1] = "lib_me.lua"
