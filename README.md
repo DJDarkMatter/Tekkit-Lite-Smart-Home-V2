@@ -6,6 +6,12 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
+## Updating to v37 — Screensaver
+
+The corner navigation areas are now **2×2 character cells**. Matrix streams uses the original 5–20-cell/second falling speeds, and Matrix wall follows the reference's eight falling-source steps per second with stable digits/symbols, white heads and lime/green/gray trails that expire into small gaps. Visible screensavers request a 0.1-second refresh. Monitor text scale is unchanged.
+
+Upload the complete v37 root to the V2 repository. On an existing v36 central OS, quit to CraftOS and run `inst app screensaver`, then `reboot`. **Only the Screensaver app needs reinstalling.** The bundled installer remains **bundled-v36**, with the v36 startup fix and all 22 core sources unchanged; no new Pastebin or remote-client install is needed. See [the v37 update and exact changed filenames](documentation_update_v37.md).
+
 ## Updating to v36
 
 V36 repairs a startup/event-loop stall introduced in v35. A lost private wake-up event could leave the worker waiting indefinitely; during saved-state startup this could happen before the modem opened. The central OS now uses one serial event loop, buffers input during cooperative pauses and uses a native timer fallback if a yield marker is lost. Startup shows its progress, opens the modem before restoring app state, and prints a caught failure's stage and message.

@@ -2,12 +2,43 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
     local Gui=dofile("lib_gui.lua")
     local setup=assert(loadfile("tests_app_helpers.lua"))()(newBus,monitor,serialize,unserialize,equal)
     local function touch(t,side,x,y) t.bus.queue(t.display,{"monitor_touch",side,x,y}); t.bus.pump(); t.paint() end
+    local function frame(t,w,h)
+        local content=t.content(nil,w,h);local surface=Gui.new(w,h)
+        for y=1,h do surface.write(1,y,content[y]) end
+        for _,style in ipairs(content.styles) do surface.style(style.x,style.y,style.width,style.height,style.fg,style.bg) end
+        return content,surface.foreground
+    end
     function tests.screensaver_never_autostarts_and_explicit_open_is_always_fullscreen()
         local t=setup("screensaver",false,{noOpen=true}); equal(t.central.server.running.screensaver,nil)
         t.id=t.open(); local w=t.window(); equal(w.fullscreen,true); equal(w.x,1); equal(w.y,1); equal(w.width,t.top.width); equal(w.height,t.top.height)
-        equal(t.central.server.monitors["monitor_13:top"].fullscreen,t.id); equal(t.central.server.nextTickInterval(),.2)
+        equal(t.central.server.monitors["monitor_13:top"].fullscreen,t.id); equal(t.central.server.nextTickInterval(),.1)
         equal(t.api.placeWindow(t.id,2,2,20,10),false)
-        touch(t,"top",t.top.width,1); equal(t.view().design,2); assert(t.window()); touch(t,"top",2,2); equal(t.window(),nil); equal(t.central.server.running.screensaver,nil); equal(t.central.server.nextTickInterval(),.5)
+        touch(t,"top",t.top.width,1); equal(t.view().design,2); assert(t.window()); touch(t,"top",3,3); equal(t.window(),nil); equal(t.central.server.running.screensaver,nil); equal(t.central.server.nextTickInterval(),.5)
+    end
+    function tests.screensaver_all_four_cells_in_each_corner_cycle_and_neighbors_exit()
+        local t=setup("screensaver")
+        for _,point in ipairs({{1,1},{2,1},{1,2},{2,2}}) do
+            local previous=t.view().design
+            touch(t,"top",point[1],point[2]);equal(t.view().design,(previous+13)%15+1);assert(t.window())
+            touch(t,"top",t.top.width-point[1]+1,point[2]);equal(t.view().design,previous);assert(t.window())
+        end
+        local content=t.content();equal(#content.hits,2)
+        for _,hit in ipairs(content.hits) do equal(hit.x2-hit.x1+1,2);equal(hit.y2-hit.y1+1,2) end
+        for _,point in ipairs({{3,1},{t.top.width-2,2},{1,3},{t.top.width,3}}) do
+            touch(t,"top",point[1],point[2]);equal(t.window(),nil)
+            t.id=t.open()
+        end
+    end
+    function tests.screensaver_tiny_corner_areas_never_overlap_and_leave_an_exit_row()
+        for _,size in ipairs({{2,2},{3,2},{4,2},{4,3},{12,6}}) do
+            local t=setup("screensaver",true);assert(t.app.onOpen(t.state,t.api,t.context()))
+            local w,h=size[1],size[2];local content=t.content(nil,w,h);local closed=false
+            for y=1,h do for x=1,w do
+                assert(not(Gui.hit(content.hits[1],x,y) and Gui.hit(content.hits[2],x,y)),"Navigation areas overlap")
+            end end
+            t.api.closeWindow=function(id) equal(id,t.id);closed=true;return true end
+            assert(t.app.handleTouch(1,h,w,h,t.state,t.api,t.context()));assert(closed)
+        end
     end
     function tests.screensaver_corners_cycle_both_directions_and_open_rotates_saved_design()
         local t=setup("screensaver"); equal(t.view().design,1)
@@ -43,7 +74,9 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         t.advance(3); assert(t.popup()); assert(table.concat(t.top.lines,"\n"):find("Farm alert",1,true))
         local design=t.view().design; touch(t,"top",1,1); equal(t.view().design,design)
         touch(t,"top",t.top.width,1); assert(t.window()); assert(t.popup())
-        t.ack(); equal(t.popup(),nil); assert(t.window()); touch(t,"top",t.top.width,1); assert(t.window()); equal(t.view().design,design+1); touch(t,"top",2,2); equal(t.window(),nil)
+        touch(t,"top",2,2);equal(t.view().design,design);assert(t.popup())
+        touch(t,"top",t.top.width-1,2);equal(t.view().design,design);assert(t.popup())
+        t.ack(); equal(t.popup(),nil); assert(t.window()); touch(t,"top",t.top.width,1); assert(t.window()); equal(t.view().design,design+1); touch(t,"top",3,3); equal(t.window(),nil)
     end
     function tests.screensaver_all_patterns_animate_fit_tiny_screens_and_keep_large_frames_under_modem_limit()
         local t=setup("screensaver",true); assert(t.app.onOpen(t.state,t.api,t.context()))
@@ -69,18 +102,97 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local id=t.api.openApp("screensaver","monitor_13:left"); equal(id,nil); assert(t.window()); equal(t.state.nextDesign,nextIndex)
         t.central.disk.failWrite=false; touch(t,"top",t.top.width,1); equal(t.view().design,old+1)
     end
-    function tests.screensaver_dense_matrix_has_no_blank_cells_even_on_large_monitors()
+    function tests.screensaver_dense_matrix_matches_symbol_trails_with_small_expiring_gaps()
         local t=setup("screensaver",true); assert(t.app.onOpen(t.state,t.api,t.context()))
         for _,size in ipairs({{12,6},{64,26},{256,128}}) do
             for _,time in ipairs({0,2,17}) do
                 t.now=time; t.view().design=2; local dense=t.content(nil,size[1],size[2])
-                for _,row in ipairs(dense) do assert(not row:find(" ",1,true),"Dense Matrix has a blank column") end
-                for _,style in ipairs(dense.styles) do assert(style.fg~=32768) end
+                local blank=0
+                for _,row in ipairs(dense) do
+                    assert(not row:find("[A-Za-z]"),"The reference uses digits and symbols, not an alphabet wall")
+                    local _,count=row:gsub(" ","");blank=blank+count
+                end
+                assert(blank>=size[1]*size[2]*.03,"Old Matrix trails must clear, leaving small gaps")
+                assert(blank<=size[1]*size[2]*.65,"Dense Matrix must remain well populated")
+                for _,style in ipairs(dense.styles) do assert(style.fg~=32768);equal(style.bg,32768) end
                 t.view().design=1; local sparse=t.content(nil,size[1],size[2]); local blank=0
                 for _,row in ipairs(sparse) do local _,count=row:gsub(" ",""); blank=blank+count end
                 assert(blank>=size[1]*size[2]*.4,"Sparse and dense modes must be distinct")
             end
         end
+    end
+    function tests.screensaver_matrix_heads_move_at_original_speed_and_wall_glyphs_remain_in_their_trails()
+        local t=setup("screensaver",true);assert(t.app.onOpen(t.state,t.api,t.context()))
+        local w,h=64,26
+        for design=1,2 do
+            t.view().design=design;t.now=0;local before,oldFG=frame(t,w,h)
+            t.now=design==1 and .2 or .125;local after,newFG=frame(t,w,h)
+            local heads,stable,shared=0,0,0
+            for y=1,h-4 do for x=1,w do
+                if oldFG[y]:sub(x,x)=="0" and before[y]:sub(x,x)~=" " then
+                    heads=heads+1;local moved=false
+                    for offset=1,design==1 and 4 or 1 do
+                        if newFG[y+offset]:sub(x,x)=="0" and after[y+offset]:sub(x,x)~=" " then moved=true end
+                    end
+                    assert(moved,"Matrix head did not advance at the reference speed")
+                end
+                if design==2 and before[y]:sub(x,x)~=" " and after[y]:sub(x,x)~=" " then
+                    shared=shared+1
+                    if before[y]:sub(x,x)==after[y]:sub(x,x) then stable=stable+1 end
+                end
+            end end
+            assert(heads>=3,"Test did not observe enough falling sources")
+            if design==2 then assert(stable>shared*.8,"Wall characters should remain while their trail fades") end
+        end
+    end
+    function tests.screensaver_wall_keeps_native_cell_detail_and_full_fade_palette_on_normal_monitors()
+        local t=setup("screensaver",true);assert(t.app.onOpen(t.state,t.api,t.context()));t.view().design=2
+        local seen={}
+        for _,time in ipairs({0,.125,.25,1,3}) do
+            t.now=time;local content,fg=frame(t,64,26)
+            for y=1,26 do for x=1,64 do if content[y]:sub(x,x)~=" " then seen[fg[y]:sub(x,x)]=true end end end
+        end
+        for _,code in ipairs({"0","5","d","7"}) do assert(seen[code],"Missing reference Matrix fade color "..code) end
+        -- The same source at a given coordinate is independent of window size;
+        -- native glyph columns are not duplicated or replaced by spacer cells.
+        t.now=1;local small=t.content(nil,32,12);local large=t.content(nil,64,26)
+        for y=1,12 do equal(small[y],large[y]:sub(1,32)) end
+    end
+    function tests.screensaver_large_matrix_wall_keeps_frames_sendable_across_seeds_and_long_pauses()
+        local t=setup("screensaver",true);assert(t.app.onOpen(t.state,t.api,t.context()));t.view().design=2
+        for _,seed in ipairs({1,48723,104728}) do
+            t.view().seed=seed
+            for _,time in ipairs({0,.125,17,86400}) do
+                t.now=time
+                local content,fg=frame(t,256,128)
+                local lines,foreground,background={},{},{}
+                for y=1,128 do
+                    lines[y]=content[y];foreground[y]=Gui.pack(fg[y]);background[y]=Gui.pack(string.rep("f",256))
+                    equal(#lines[y],256);assert(not lines[y]:find("[A-Za-z]"))
+                end
+                local packet={type="render",clientId="monitor_12345:bottom",monitorId="monitor_12345:bottom",
+                    serverSession="12345:12345",width=256,height=128,lines=lines,foreground=foreground,background=background,
+                    colourFormat="rle1",frameId=100000,inputRevision=100000,protocol="SmartHomeOS/1",networkId="home",
+                    sender=12345,recipient=12346,_transport={version=1,boot=12345,sequence=1000000,channel=45231,serverChannel=45231,path={}}}
+                assert(#serialize(packet)<61440,"Matrix frame cannot be sent after a seed/time change")
+            end
+        end
+    end
+    function tests.screensaver_matrix_wall_delivers_faster_animation_to_the_real_monitor_client()
+        local t=setup("screensaver",false,{monitorWidth=128,monitorHeight=48})
+        touch(t,"top",t.top.width-1,2);equal(t.view().design,2)
+        t.advance(.6)
+        local first=#t.bus.wire;t.advance(1)
+        local frames=0
+        for i=first+1,#t.bus.wire do
+            local packet=t.bus.wire[i]
+            if packet.sender==t.central and packet.channel~=65533 and packet.message.type=="render"
+                and packet.message.clientId=="monitor_13:top" then
+                frames=frames+1;assert(#packet.raw<61440)
+            end
+        end
+        assert(frames>=7,"Matrix wall should deliver the reference eight updates per simulated second")
+        assert(t.window());assert(not t.central.disk.files["diagnostics_os_error.txt"],table.concat(t.central.log,"\n"))
     end
     function tests.screensaver_nyan_preserves_sprite_height_and_white_eye_pixels_on_large_windows()
         local t=setup("screensaver",true); assert(t.app.onOpen(t.state,t.api,t.context()));t.view().design=9

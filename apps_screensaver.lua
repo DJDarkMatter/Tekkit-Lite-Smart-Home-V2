@@ -4,7 +4,7 @@
 -- The latter credits Felix Maxwell, 2013, CC BY-SA 3.0.
 -- These renderers are new implementations; no IO or standalone loops are used.
 -- https://creativecommons.org/licenses/by-sa/3.0/
-local app={title="Screensaver",minWidth=2,minHeight=2,fullscreenOnly=true,transientWindow=true,hideTaskbar=true,handlesFullscreenCorner=true,animationInterval=0.2}
+local app={title="Screensaver",minWidth=2,minHeight=2,fullscreenOnly=true,transientWindow=true,hideTaskbar=true,handlesFullscreenCorner=true,animationInterval=0.1}
 local titles={"Matrix streams","Matrix wall","Plasma","Ripple fields","Truchet flow","Silk waves","Kaleidoscope","Life garden",
     "Nyan Cat","Starflight","Northern lights","Lava lamp","Neon tunnel","Fireworks","Spiral ribbons"}
 local name="screensaver"
@@ -12,6 +12,7 @@ local runtime={}
 local pi=math.pi
 local palette={2048,1024,4,64,2,16,32,512,8}
 local letters="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ:;<>+-*/={}[]"
+local wallGlyphs=[=[1234567890!@#$%^&*()_-+=~,<>./?:{}[]\"']=]..string.char(96)
 -- nyancat.lua
 -- Cropped animation frames adapted from K. Lange's ComputerCraft port.
 -- Original Nyan Cat animation: prguitarman (Chris Torres).
@@ -80,6 +81,92 @@ function app.init(state,api,context)
 end
 function app.onOpen(state,api,context) return opened(state,api,context,state.nextDesign) end
 function app.onClose(state,api,context) runtime[context.windowId]=nil end
+local function navigationSize(w,h)
+    -- Clip very small screens so the corners do not overlap and an exit row
+    -- remains available. Ordinary monitors get the requested 2x2 touch areas.
+    return math.min(2,math.floor(w/2)),math.min(2,math.max(1,h-1))
+end
+local function navigation(ui,w,h)
+    local cw,ch=navigationSize(w,h)
+    ui.hits[1]={x1=1,x2=cw,y=1,y1=1,y2=ch,action="previousDesign"}
+    ui.hits[2]={x1=w-cw+1,x2=w,y=1,y1=1,y2=ch,action="nextDesign"}
+    return ui.lines
+end
+-- Felix Maxwell's source uses eight falling-source steps per second. Each
+-- source leaves a stable digit/symbol, with an 8..40-step lime/green/gray
+-- lifetime before it clears. Sampling the most recent source at each cell
+-- preserves those trails without a standalone loop or unbounded catch-up.
+local function matrixWall(frame,w,h,t,seed,api)
+    local tick=math.floor(t*8)
+    local wall=frame.wall
+    if wall and wall.width==w and wall.height==h and wall.tick==tick and wall.seed==seed then return wall end
+    wall={width=w,height=h,tick=tick,seed=seed,lines={},colors={}}
+    local glyphs={}
+    for y=1,h do glyphs[y]={};wall.colors[y]={} end
+    for x=1,w do
+        local source
+        for step=tick-h-39,tick do
+            -- Average one new source per column per twenty steps, keeping
+            -- the original filled-but-not-solid look on every monitor size.
+            if hash(x,step,seed)%20==0 then source=step end
+            local y=tick-step+1
+            if y<=h then
+                local char,fg=" ",8192
+                if source then
+                    local age=step-source
+                    local life=8+hash(x,y,source+seed)%33
+                    if age<=life then
+                        local index=hash(y,x,source+seed)%#wallGlyphs+1
+                        char=wallGlyphs:sub(index,index)
+                        fg=age==0 and 1 or age>life*.8 and 128 or age>life*.2 and 8192 or 32
+                    end
+                end
+                glyphs[y][x],wall.colors[y][x]=char,fg
+            end
+        end
+        if api.cooperate then api.cooperate((h+40)*16) end
+    end
+    for y=1,h do wall.lines[y]=table.concat(glyphs[y]) end
+    frame.wall=wall
+    return wall
+end
+local function renderWall(w,h,wall,api)
+    local ui=api.ui.content(w,h)
+    local textBytes=2048+h*40+3*h*math.ceil(w/255)
+    for y=1,h do
+        ui.lines[y]=wall.lines[y]
+        textBytes=textBytes+#string.format("%q",wall.lines[y])
+    end
+    local group,styles=1
+    repeat
+        styles={}
+        local bytes=textBytes
+        for y=1,h do
+            local first,current=1,8192
+            local function span(last)
+                styles[#styles+1]={x=first,y=y,width=last-first+1,height=1,fg=current,bg=32768}
+                bytes=bytes+3*math.ceil((last-first+1)/255)
+            end
+            for x=1,w,group do
+                local fg=current
+                -- Blank glyphs can share a neighboring foreground without
+                -- becoming visible. Only very large frames group colors;
+                -- every cell keeps its own glyph, lifetime and empty space.
+                for cell=x,math.min(w,x+group-1) do
+                    if wall.lines[y]:sub(cell,cell)~=" " then fg=wall.colors[y][cell];break end
+                end
+                if x==1 then current=fg
+                elseif fg~=current then span(x-1);first,current=x,fg end
+            end
+            span(w)
+            if api.cooperate then api.cooperate(w*8) end
+        end
+        if bytes<=56000 or group>=w then break end
+        group=group*2
+    until false
+    for _,style in ipairs(styles) do ui.style(style.x,style.y,style.width,1,style.fg,style.bg) end
+    return navigation(ui,w,h)
+end
 local function life(frame,cols,rows,seed,t)
     local function seedGrid(generation)
         local cells={}
@@ -114,21 +201,18 @@ local function life(frame,cols,rows,seed,t)
     return frame.life
 end
 local function pattern(design,x,y,cols,rows,t,seed,cells)
-    if design<=2 then
-        local speed=2+hash(x,0,seed)%8
-        local length=3+hash(x,1,seed)%math.max(4,rows)
+    if design==1 then
+        local speed=20/(1+hash(x,0,seed)%4)
+        local length=8+hash(x,1,seed)%13
         local cycle=rows+length+4
-        local head=(math.floor(t*speed)+hash(x,2,seed)%cycle)%cycle
+        local travel=math.floor(t*speed)+hash(x,2,seed)%cycle
+        local head=travel%cycle
         local distance=(head-(y-1))%cycle
-        if design==2 then
-            local distance=(math.floor(t*speed)+hash(x,2,seed)-(y-1))%rows
-            local index=hash(x,y,math.floor(t*3)+seed)%#letters+1
-            return letters:sub(index,index),distance==0 and 1 or distance<3 and 32 or distance<rows*.6 and 8192 or 128,32768
-        end
         if x%2==0 then return " ",32768,32768 end
         if distance<length then
-            local char=letters:sub(hash(x,y,math.floor(t*3)+seed)%#letters+1,hash(x,y,math.floor(t*3)+seed)%#letters+1)
-            local fg=distance==0 and 1 or distance<3 and 32 or distance<length*0.65 and 8192 or design==2 and 128 or 32768
+            local index=hash(x,y,math.floor(travel/cycle)+seed)%#letters+1
+            local char=letters:sub(index,index)
+            local fg=distance==0 and 1 or distance==1 and 32 or 8192
             return char,fg,32768
         end
         return " ",32768,32768
@@ -235,10 +319,11 @@ function app.render(w,h,state,api,context)
     local frame=runtime[context.windowId]
     if not frame then frame={start=os.clock()}; runtime[context.windowId]=frame end
     local t=os.clock()-frame.start; local seed=view.seed or context.windowId
+    if design==2 then return renderWall(w,h,matrixWall(frame,w,h,t,seed,api),api) end
     -- Coarse horizontal color runs bound large frames below the legacy modem
     -- packet limit. Tiny screens retain one-cell detail and the same patterns.
-    local blockX=design==9 and 1 or math.max(1,math.ceil(w/48))
-    local blockY=(design<=2 or design==9) and 1 or math.max(1,math.ceil(h/36))
+    local blockX=(design==1 or design==9) and 1 or math.max(1,math.ceil(w/48))
+    local blockY=(design==1 or design==9) and 1 or math.max(1,math.ceil(h/36))
     local cols,rows=math.ceil(w/blockX),math.ceil(h/blockY)
     local cells=design==8 and life(frame,cols,rows,seed,t)
     local ui=api.ui.content(w,h)
@@ -250,11 +335,7 @@ function app.render(w,h,state,api,context)
             local char,fg,bg=pattern(design,bx,by,cols,rows,t,seed,cells)
             local x=(bx-1)*blockX+1
             local width=math.min(blockX,w-x+1)
-            if design==2 then
-                local glyphs={}
-                for offset=0,width-1 do local index=hash(x+offset,by,math.floor(t*3)+seed)%#letters+1; glyphs[#glyphs+1]=letters:sub(index,index) end
-                parts[#parts+1]=table.concat(glyphs)
-            else parts[#parts+1]=char..string.rep(" ",width-1) end
+            parts[#parts+1]=char..string.rep(" ",width-1)
             if not runX then runX,runFG,runBG=x,fg,bg
             elseif fg~=runFG or bg~=runBG then
                 ui.style(runX,y,x-runX,height,runFG,runBG); runX,runFG,runBG=x,fg,bg
@@ -264,14 +345,15 @@ function app.render(w,h,state,api,context)
         local line=table.concat(parts)
         for y=(by-1)*blockY+1,math.min(h,by*blockY) do ui.lines[y]=line end
     end
-    ui.hits[1]={x1=1,x2=1,y=1,action="previousDesign"}
-    ui.hits[2]={x1=w,x2=w,y=1,action="nextDesign"}
-    return ui.lines
+    return navigation(ui,w,h)
 end
 function app.handleTouch(x,y,w,h,state,api,context)
-    if y==1 and (x==1 or x==w) then
+    local cw,ch=navigationSize(w,h)
+    local previous=x>=1 and x<=cw
+    local next=x>w-cw and x<=w
+    if y>=1 and y<=ch and (previous or next) then
         local current=context.view.design or state.nextDesign
-        local nextIndex=(current-1+(x==1 and -1 or 1))%#titles+1
+        local nextIndex=(current-1+(previous and -1 or 1))%#titles+1
         local ok,err=opened(state,api,context,nextIndex)
         if ok then api.invalidateAppViews(name) end
         return ok,err

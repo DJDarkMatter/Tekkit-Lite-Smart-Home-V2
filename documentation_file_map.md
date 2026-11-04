@@ -238,3 +238,6 @@ V35 adds `lib_work.lua` (bounded cooperative work and protected calls), `tests_w
 
 
 `documentation_update_v36.md` records the startup recovery, exact v36 changed files and cumulative v33–v36 reinstall checklist. V36 changes the central `main_os.lua` and its bundled installer; existing app and remote-client program files are unchanged.
+
+
+`documentation_update_v37.md` records the Screensaver-only update, including 2×2 navigation, reference Matrix motion/trails and exact changed filenames. V37 retains every v36 core/installer/client source unchanged; the full package's installer still says bundled-v36.
