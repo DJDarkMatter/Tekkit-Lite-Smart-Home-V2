@@ -6,17 +6,17 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
-## Updating to v35
+## Updating to v36
 
-Upload the complete package root to the V2 repository. Replace your one installer Pastebin with this version's `install.lua` and download a fresh `inst` (banner **bundled-v35**). On the **central OS computer**, quit the OS, run `cd /`, then `inst server`. Reinstall the optional apps you use with `inst app NAME`, then `reboot`.
+V36 repairs a startup/event-loop stall introduced in v35. A lost private wake-up event could leave the worker waiting indefinitely; during saved-state startup this could happen before the modem opened. The central OS now uses one serial event loop, buffers input during cooperative pauses and uses a native timer fallback if a yield marker is lost. Startup shows its progress, opens the modem before restoring app state, and prints a caught failure's stage and message.
 
-If you already installed v33 or v34, update the central OS and `solar_farm` (if installed), then reboot. From v32 or earlier, also update the installed v33 apps below. No remote IO, monitor, sensor or relay reinstall is needed in v33, v34 or v35.
+Upload the complete package root to the V2 repository. Replace your one installer Pastebin with this version's `install.lua` and download a fresh `inst` (banner **bundled-v36**). On the **central OS computer**, hold Ctrl+T to leave the stalled OS, run `cd /`, then `inst server` and `reboot`.
 
-The main app changes are `inst app clock`, `inst app switchboard` and `inst app screensaver`. Also update `me_storage`, `me_monitor`, `reactors`, `solar_farm` and `level_emitter` for the shared one-letter Shift behavior and selection breadcrumbs. `coffee` and `system` have wording updates. Each command still installs just that requested app. Existing saved configurations and client installations are retained; remote IO/sensor/relay/monitor computers do not need reinstalling.
+**From v35: no app or remote-client reinstall is needed.** From v33/v34, also update `solar_farm` if installed. From v32 or earlier, also update your installed v33 apps: `clock`, `coffee`, `level_emitter`, `me_monitor`, `me_storage`, `reactors`, `screensaver`, `solar_farm`, `switchboard` and `system`. Use `inst app NAME` only for apps you already use. Existing saved settings, routing, counters, learned rates and layouts are retained.
 
-See [the v33/v34/v35 reinstall checklist, v35 runtime changes and exact changed-file list](documentation_update_v35.md). The earlier [v34 confirmation fix](documentation_update_v34.md) and [v33 UI changes](documentation_update_v33.md) are included.
+See [the v36 recovery instructions and exact changed filenames](documentation_update_v36.md). The [v33/v34/v35 reinstall checklist](documentation_update_v35.md), [v34 confirmation fix](documentation_update_v34.md) and [v33 UI changes](documentation_update_v33.md) are included.
 
-If an OS error was caught, v35 saves its message and last operation in `diagnostics_os_error.txt`. Type `errorlog` in the running OS console after restarting to read it. This is best-effort logging; a forced computer shutdown may prevent a report. Large redraws, serialization and shared ME processing now cooperate in bounded batches while incoming events are buffered. Routine IO announcements no longer repaint all monitors.
+Caught OS errors are saved in `diagnostics_os_error.txt`; type `errorlog` in the OS console after restarting, or `edit diagnostics_os_error.txt` in CraftOS. Logging is best effort; a forced shutdown may prevent a report. The original blank startup's exact server-side trigger is not confirmed. Regression tests reproduce v35's stall by dropping a wake-up event from a full simulated queue and verify recovery in v36.
 
 ## First working IO connection
 
@@ -24,7 +24,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty-two runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v35`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty-two runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v36`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -50,7 +50,7 @@ For direct file copying instead, preserve these paths:
 
 | Role | Required files |
 | --- | --- |
-| All roles | `lib_network.lua`, `lib_storage.lua` |
+| All roles | `lib_work.lua`, `lib_network.lua`, `lib_storage.lua` |
 | Central OS | Also `main_os.lua`, `lib_me.lua`, `lib_server.lua`, `lib_console.lua`, `lib_io_picker.lua`, `lib_desktop.lua`, `lib_settings.lua`, `lib_sensor_data.lua`, `lib_sensor_server.lua`, `lib_sensor_picker.lua` |
 | IO client | Also `clients_io_client.lua`, `lib_io.lua` |
 | Monitor client | Also `clients_monitor_client.lua`, `lib_monitor.lua` |

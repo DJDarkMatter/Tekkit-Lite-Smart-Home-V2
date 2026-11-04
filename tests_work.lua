@@ -9,6 +9,76 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
             if hook then hook() end
         end
     end
+    function tests.work_startup_with_saved_state_recovers_when_software_wake_events_are_lost()
+        local bus=newBus()
+        local saved={appStates={retained={rows={}}},windows={},outputs={},outputMap={},managedSides={}}
+        for i=1,1600 do saved.appStates.retained.rows[i]={id=i,text="Saved configuration "..i} end
+        local disk={files={["configs_os_state.txt"]=serialize(saved)},dirs={[""]=true}}
+        local central=bus.computer(10,"server",{disk=disk})
+        -- Fill the native queue before boot, then drop a software event when
+        -- that computer already has 256 pending events. The old startup never
+        -- reached modem discovery after its first yield marker was dropped.
+        for i=1,256 do bus.queue(central,{"queued_before_boot",i}) end
+        local nativeQueue,dropped=central.env.os.queueEvent,0
+        central.env.os.queueEvent=function(name,...)
+            local count=0
+            for _,item in ipairs(bus.events) do if item.comp==central then count=count+1 end end
+            if count>=256 then dropped=dropped+1;return end
+            nativeQueue(name,...)
+        end
+        central:start(); bus.advance(.2)
+        assert(dropped>0,"Test did not exercise a dropped wake-up event")
+        assert(central.server and central.open[45231],"OS startup stalled before opening its modem")
+        local bridge=bus.computer(11,"io"):start(); bus.advance(1)
+        assert(bridge.client.connected,"IO could not connect after saved-state startup")
+        equal(#central.server.state.appStates.retained.rows,1600)
+        equal(assert(unserialize(disk.files["configs_os_state.txt"])).appStates.retained.rows[1600].id,1600)
+        assert(not disk.files["diagnostics_os_error.txt"])
+    end
+    function tests.work_running_os_handles_clients_and_commands_without_software_wake_events()
+        local bus=newBus(); local central=bus.computer(10,"server"):start()
+        central.env.os.queueEvent=function() end
+        local bridge=bus.computer(11,"io"):start()
+        local display=bus.computer(13,"monitor",{monitors={top=monitor(40,18)}}):start()
+        local sensor=bus.computer(14,"sensor"):start()
+        local relay=bus.computer(15,"relay"):start()
+        bus.advance(2)
+        assert(bridge.client.connected,"Lost software wake-up stalled IO discovery")
+        assert(central.server.monitors["monitor_13:top"].online)
+        assert(central.server.sensorClients["sensor_14"].online)
+        assert(central.server.relayClients["relay_15"].online)
+        bus.command(central,"help"); bus.advance(.1)
+        assert(table.concat(central.console.lines,"\n"):find("clear | save | errorlog | quit",1,true))
+        assert(central.server.lastTick>0)
+    end
+    function tests.work_boot_errors_leave_visible_progress_and_saved_diagnostics()
+        local central=newBus().computer(10,"server")
+        central.disk.files["configs_os.txt"]=serialize({tickInterval="invalid"})
+        local ok,err=pcall(central.start)
+        equal(ok,false);assert(tostring(err):find("Invalid OS setting: tickInterval",1,true))
+        local lines=table.concat(central.console.lines,"\n")
+        assert(lines:find("SmartHome OS v36: starting",1,true))
+        assert(lines:find("OS stopped at: Loading OS configuration",1,true))
+        assert(lines:find("Invalid OS setting: tickInterval",1,true))
+        local report=assert(central.disk.files["diagnostics_os_error.txt"])
+        assert(report:find("Loading OS configuration",1,true))
+        assert(report:find("Invalid OS setting: tickInterval",1,true))
+    end
+    function tests.work_fast_startup_pauses_share_one_native_fallback_timer()
+        local bus=newBus();local rows={}
+        for i=1,1600 do rows[i]={id=i,text="Saved configuration "..i} end
+        local central=bus.computer(10,"server")
+        central.disk.files["configs_os_state.txt"]=serialize({appStates={retained={rows=rows}}})
+        local startTimer,nativeFallbacks=central.env.os.startTimer,0
+        central.env.os.startTimer=function(delay)
+            if delay==0 then nativeFallbacks=nativeFallbacks+1 end
+            return startTimer(delay)
+        end
+        central:start()
+        assert(central.env.__smarthomeWork.yields>10)
+        equal(nativeFallbacks,1,"Fast cooperative pauses must not accumulate fallback timers")
+        assert(central.open[45231]);bus.advance(1);assert(central.active)
+    end
     function tests.work_nested_protected_calls_yield_portably_preserve_nil_results_and_ignore_unowned_callers()
         local comp=newBus().computer(10,"server"); local work=comp.env.dofile("lib_work.lua")
         local calls=0

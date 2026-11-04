@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v35
+-- SmartHome OS installer: bundled-v36
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -3540,18 +3540,36 @@ function Monitor.new(net, config)
 end
 return Monitor
 ]=],
-    ["main_os.lua"] = [=[-- Central OS. The collector buffers events while one serial worker changes
--- app state, paints monitors or checkpoints. No command can interleave a save.
+    ["main_os.lua"] = [=[-- Central OS. One serial loop owns state; cooperative pauses buffer incoming
+-- events without running commands or changing app state during a checkpoint.
+local Console = dofile("lib_console.lua")
+local console = Console.new(term)
+console.log("SmartHome OS v36: starting")
 local Work = dofile("lib_work.lua")
-local console
-local ok, err = Work.protect(function()
+-- The installer and another OS run may share CraftOS globals until reboot.
+Work.disable()
+local storage, Network, Server, networkConfig, config, net
+local function finish(ok, err)
+    Work.disable()
+    if ok then return end
+    local cancelled = tostring(err) == "Terminated" or tostring(err):match(":%s*Terminated$")
+    if not cancelled then
+        Work.report(Work.stage, err)
+        console.log("OS stopped at: " .. Work.stage)
+        console.log(tostring(err))
+    end
+    pcall(console.finish)
+    error(err, 0)
+end
+-- Keep native bootstrap calls on the program's original thread, before any
+-- protected cooperative worker. Show progress before loading saved app state.
+local ok, err = pcall(function()
     Work.stage = "Loading OS configuration"
-    local storage = dofile("lib_storage.lua")
-    local Network = dofile("lib_network.lua")
-    local Server = dofile("lib_server.lua")
-    local Console = dofile("lib_console.lua")
-    local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
-    local config = storage.config("configs_os.txt", {
+    storage = dofile("lib_storage.lua")
+    Network = dofile("lib_network.lua")
+    Server = dofile("lib_server.lua")
+    networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
+    config = storage.config("configs_os.txt", {
         saveFile = "configs_os_state.txt", tickInterval = 0.5,
         saveInterval = 1, clientTimeout = 15, retryInterval = 2, enabledApps = {},
     })
@@ -3559,82 +3577,89 @@ local ok, err = Work.protect(function()
     for _, name in ipairs({"tickInterval", "saveInterval", "clientTimeout", "retryInterval"}) do
         assert(type(config[name]) == "number" and config[name] > 0, "Invalid OS setting: " .. name)
     end
-    console = Console.new(term)
-    local net = Network.new(networkConfig, true, console.log)
-    local server, timer
-    local pending, head, sequence = {}, 1, 0
-    local function enqueue(item)
-        local empty = head > #pending
-        item.received = os.clock()
-        pending[#pending + 1] = item
-        if empty then os.queueEvent("smarthome_server_work") end
-    end
-    parallel.waitForAny(function()
-        while true do
-            local item = {os.pullEvent()}
-            local event = item[1]
-            if event == "modem_message" or event == "peripheral" or event == "peripheral_detach" then enqueue(item)
-            elseif event == "timer" and item[2] == timer then enqueue(item)
-            else
-                local command = console.handle(unpack(item))
-                if command ~= nil then enqueue({"command", command}) end
-            end
-        end
-    end, function()
-        Work.enable(function()
-            sequence = sequence + 1
-            os.queueEvent("smarthome_server_yield", sequence)
-            local _, current
-            repeat _, current = os.pullEvent("smarthome_server_yield") until current == sequence
-        end)
-        Work.stage = "Loading saved OS state"
-        server = Server.new(net, storage, config, console.log)
-        server.start()
-        console.log("Type help for commands; clear clears this console")
-        if fs.exists("diagnostics_os_error.txt") then console.log("Saved OS error: type errorlog to read it") end
-        timer = os.startTimer(server.nextTickInterval())
-        while true do
-            if head > #pending then
-                Work.stage = "Waiting for events"
-                os.pullEvent("smarthome_server_work")
-            else
-                local item = pending[head]
-                pending[head], head = false, head + 1
-                local event, p1, p2, p3, p4 = unpack(item)
-                if event == "modem_message" then
-                    Work.stage = "Receiving modem message"
-                    local message = net.receive(p1, p2, p3, p4)
-                    if message then
-                        Work.stage = "Message " .. message.type .. " from " .. tostring(message.clientId)
-                        server.handle(message, p3, item.received)
-                    end
-                elseif event == "timer" and p1 == timer then
-                    Work.stage = "Background tick"
-                    server.tick(os.clock())
-                    timer = os.startTimer(server.nextTickInterval())
-                elseif event == "peripheral" or event == "peripheral_detach" then
-                    Work.stage = "Peripheral change"
-                    net.peripheralChanged(p1)
-                elseif event == "command" then
-                    Work.stage = "Command " .. p1
-                    local lines, quit, action = server.command(p1)
-                    if action == "clear" then console.clear() end
-                    for _, output in ipairs(lines) do console.log(output) end
-                    if quit then console.finish(); return end
-                end
-                if head > #pending then pending, head = {}, 1 end
-                Work.check(16384)
-            end
-        end
-    end)
+    Work.stage = "Opening wireless modem"
+    net = Network.new(networkConfig, true, console.log)
+    net.ensureModem()
 end)
-Work.disable()
-if not ok then
-    local cancelled = tostring(err) == "Terminated" or tostring(err):match(":%s*Terminated$")
-    if not cancelled then Work.report(Work.stage, err) end
-    if console then pcall(console.finish) end
-    error(err, 0)
+finish(ok, err)
+
+local server, timer, pauseTimer
+local pending, head, tail, sequence = {}, 1, 0, 0
+local function enqueue(item)
+    item.received = os.clock()
+    tail = tail + 1; pending[tail] = item
 end
+local function collect(item)
+    local event = item[1]
+    if event == "timer" and item[2] == pauseTimer then pauseTimer = nil; return end
+    if event == "modem_message" or event == "peripheral" or event == "peripheral_detach" then enqueue(item)
+    elseif event == "timer" and item[2] == timer then enqueue(item)
+    else
+        local command = console.handle(unpack(item))
+        if command ~= nil then enqueue({"command", command}) end
+    end
+end
+local function cooperate()
+    sequence = sequence + 1
+    -- A queued marker is the fast path. A native timer also wakes this pause
+    -- if CC drops the marker from its finite event queue. Reuse one timer so
+    -- fast successive pauses do not leave hundreds of timer events behind.
+    if not pauseTimer then pauseTimer = os.startTimer(0) end
+    local fallback = pauseTimer
+    os.queueEvent("smarthome_server_yield", sequence)
+    while true do
+        local item = {os.pullEvent()}
+        if item[1] == "smarthome_server_yield" and item[2] == sequence then return end
+        if item[1] == "timer" and item[2] == fallback then pauseTimer = nil; return end
+        collect(item)
+    end
+end
+ok, err = Work.protect(function()
+    Work.enable(cooperate)
+    Work.stage = "Loading saved OS state"
+    console.log("Loading saved OS state...")
+    server = Server.new(net, storage, config, console.log)
+    Work.stage = "Starting apps"
+    console.log("Starting enabled apps...")
+    server.start()
+    console.log("Type help for commands; clear clears this console")
+    if fs.exists("diagnostics_os_error.txt") then console.log("Saved OS error: type errorlog to read it") end
+    timer = os.startTimer(server.nextTickInterval())
+    while true do
+        if head > tail then
+            Work.stage = "Waiting for events"
+            collect({os.pullEvent()})
+        else
+            local item = pending[head]
+            pending[head], head = nil, head + 1
+            local event, p1, p2, p3, p4 = unpack(item)
+            if event == "modem_message" then
+                Work.stage = "Receiving modem message"
+                local message = net.receive(p1, p2, p3, p4)
+                if message then
+                    Work.stage = "Message " .. message.type .. " from " .. tostring(message.clientId)
+                    server.handle(message, p3, item.received)
+                end
+            elseif event == "timer" and p1 == timer then
+                Work.stage = "Background tick"
+                server.tick(os.clock())
+                timer = os.startTimer(server.nextTickInterval())
+            elseif event == "peripheral" or event == "peripheral_detach" then
+                Work.stage = "Peripheral change"
+                net.peripheralChanged(p1)
+            elseif event == "command" then
+                Work.stage = "Command " .. p1
+                local lines, quit, action = server.command(p1)
+                if action == "clear" then console.clear() end
+                for _, output in ipairs(lines) do console.log(output) end
+                if quit then console.finish(); return end
+            end
+            if head > tail then pending, head, tail = {}, 1, 0 end
+            Work.check(16384)
+        end
+    end
+end)
+finish(ok, err)
 ]=],
     ["clients_io_client.lua"] = [=[-- Run from the computer root. Configs survive program updates.
 local storage = dofile("lib_storage.lua")
@@ -4745,7 +4770,7 @@ workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v35")
+print("SmartHome installer: bundled-v36")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")

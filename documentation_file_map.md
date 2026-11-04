@@ -235,3 +235,6 @@ Solar's saved schema-2 namespace gains bounded cumulative ledgers and a fine HV 
 
 
 V35 adds `lib_work.lua` (bounded cooperative work and protected calls), `tests_work.lua` (runtime/queue/checkpoint stress checks), and `documentation_update_v35.md` (v33/v34/v35 reinstall checklist and exact filenames). Runtime errors may create `diagnostics_os_error.txt` and its temporary write file in the computer root.
+
+
+`documentation_update_v36.md` records the startup recovery, exact v36 changed files and cumulative v33–v36 reinstall checklist. V36 changes the central `main_os.lua` and its bundled installer; existing app and remote-client program files are unchanged.
