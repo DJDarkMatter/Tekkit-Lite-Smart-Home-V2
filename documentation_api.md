@@ -2,7 +2,7 @@
 
 ## Single-file apps
 
-The installer contains no apps. A user app is a Lua file returning an app table, stored as `apps_NAME.lua` in the OS computer root. It executes only if `enabledApps[APP_NAME] = true` in `configs_os.txt`; restart the OS after changing this setting. The default is an empty table. The saved legacy `appRegistry` does not enable execution. Enabled app definitions are registered at OS boot. Ordinary apps initialize when first opened (or when saved views restore), run while any view exists, and stop after their last view closes. Apps with `backgroundService = true`, and apps without a render hook, start at boot and continue with zero views. Optional apps are `apps_coffee.lua`, `apps_switchboard.lua`, `apps_reactors.lua`, `apps_me_storage.lua`, `apps_me_monitor.lua`, `apps_system.lua` and `apps_clock.lua`.
+The installer contains no apps. A user app is a Lua file returning an app table, stored as `apps_NAME.lua` in the OS computer root. It executes only if `enabledApps[APP_NAME] = true` in `configs_os.txt`; restart the OS after changing this setting. The default is an empty table. The saved legacy `appRegistry` does not enable execution. Enabled app definitions are registered at OS boot. Ordinary apps initialize when first opened (or when saved views restore), run while any view exists, and stop after their last view closes. Apps with `backgroundService = true`, and apps without a render hook, start at boot and continue with zero views. Optional apps are `apps_coffee.lua`, `apps_switchboard.lua`, `apps_reactors.lua`, `apps_me_storage.lua`, `apps_me_monitor.lua` and `apps_clock.lua`. The [v39 release notes](documentation_update_v39.md) list the newer optional apps.
 
 Explicit installation uses the same installer: `inst app APP_NAME` downloads the root file `apps_APP_NAME.lua` from `DJDarkMatter/Tekkit-Lite-Smart-Home-V2` on GitHub (`main` branch). `inst app APP_NAME --ref BRANCH_OR_COMMIT` selects another ref. Apps therefore need no separate Pastebin upload. Optional alternatives remain `inst app APP_NAME PASTE_ID` or `inst app APP_NAME --file /path/to/app.lua`. The installer checks syntax, installs the file and enables that one app for the next OS start. It preserves existing settings, startup and saved app state, backing up replaced code/settings. It does not execute the app at install time. GitHub mode uses the CC 1.5 `http.get` API; role installation remains offline and app-free.
 
@@ -232,7 +232,7 @@ Built-in OS settings lives in `lib_settings.lua` and a private system-app regist
 
 ## Diagnostics and numeric world clocks (bundled-v24)
 
-`api.getClients()` also supplies reply `channel`, last-seen `age`, monitor `width`/`height`/`touchProtocol` and output `revision`/`ackedRevision` when applicable. These are observed runtime metadata, not persisted online records. `getDiagnostics` composes existing queries with enabled app lifecycle records and safe window geometry; it does not expose raw app business state or create watches. `apps_system.lua` is the read-only reference.
+`api.getClients()` also supplies reply `channel`, last-seen `age`, monitor `width`/`height`/`touchProtocol` and output `revision`/`ackedRevision` when applicable. These are observed runtime metadata, not persisted online records. `getDiagnostics` composes existing queries with enabled app lifecycle records and safe window geometry; it does not expose raw app business state or create watches. `lib_system.lua` is the built-in System Overview.
 
 `api.getSystem()` retains its existing fields and adds `worldTime` (numeric hours 0–24, exclusive of 24) and `worldDay` only after successful local clock calls. Legacy string sensor time remains display-only. Additional fields are `computerId`, `networkId`, `modemSide`, `channel`, optional `relayChannel`, `uptime`, `session`, `lastSaveAge`. `apps_clock.lua` is an optional background service using these numeric readings. The clock stores its own trigger cursor/last-fired markers as scheduling state and rebases after boot; saved observations never become a live system clock.
 
@@ -311,3 +311,25 @@ The storage writer produces ordinary Lua table text accepted by legacy `textutil
 A monitor announcement repaints only that monitor, while IO/sensor/relay announcements defer ordinary UI refresh to the normal tick. Touch handling, explicit forced repaint and periodic animation continue normally.
 
 Caught hook/worker errors and caught yielding-timeout errors record a bounded `diagnostics_os_error.txt` containing the message and last operation. `errorlog` reads it; startup announces an existing report. Reporting failure cannot replace the original error, ordinary Ctrl+T is not logged as a crash, and there is no automatic restart loop. A hard external shutdown/native abort can prevent a report. The reported user error was not captured, so this hardening is not a confirmed diagnosis of that exact incident.
+
+
+## v38 reset scopes and ME Monitor rates
+
+New logical output mappings record the creating app in the optional `owner` field. Console-created mappings belong to `@settings`. Existing built-in names and saved Level emitter references identify legacy routes, including imports from Solar farm. Legacy custom mappings with no known owner belong to OS settings. The built-in Settings window has private callbacks for enumerating reset targets and clearing saved data. Resets use the normal output checkpoint, including shared-wire reconciliation and OFF snapshots for released sides. A confirmed reset replaces the active state and clears older recovery copies for that checkpoint. Restarted services initialize with fresh data for their selected reset scope.
+
+Sensor reads expose `maxAge` so ME Monitor can use its sensor's valid polling interval. `Me.Rates.record` accepts an optional fifth argument for the largest accepted sample interval in seconds. Its default stays ten seconds for existing callers. ME Monitor keeps a bounded runtime history and saves only the per-view `showRates` preference.
+
+
+## Desktop and wiring services (v39)
+
+| API | Result |
+| --- | --- |
+| `api.clientName(id)` | Saved display name or the stable ID. Client lists expose it as `displayName`. |
+| `api.getScreensavers()` | Ordered design names from the installed Screensaver's `screensavers` metadata and a boolean indicating whether the app file exists. |
+| `api.getUsedIO()` | Physical input and output addresses with a direction and a list of owning app titles. Declare additional configured inputs with `app.ioRoutes(state)`, returning an array of `{clientId, side, color, direction}` entries. |
+| `api.getIOTrace(address, finish, seconds, width)` | A row of `0`, `1`, `p`, `?` or `\|` columns, and the latest state. `finish` is in the OS computer's `os.clock()` units. Each column represents a time bin. `\|` marks a transition within that bin. |
+| `api.captureWindowPreset(monitorId, allMonitors)` | Detached monitor slots containing saved geometry and app navigation state. |
+| `api.previewWindowPreset(slots, assignments)` | Plan per slot, including missing, minimized and visible windows. Assignments map source monitor IDs to targets or `false` to skip. |
+| `api.applyWindowPreset(slots, assignments)` | Saves the replacement layouts for the assigned monitors and starts restored views. |
+
+IO Scope uses a bounded per-side event history in memory. It can show changes reported by the bridge between OS ticks. The shared IO picker tests outputs with a temporary snapshot override and restores the current desired state without changing the selected app's route. The server checkpoints any newly managed side before the test so its next boot can clear an interrupted test.

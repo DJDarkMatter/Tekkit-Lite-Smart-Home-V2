@@ -1,6 +1,6 @@
 # Screensaver
 
-Install `inst app screensaver` on a **bundled-v33 or newer** OS and reboot. Existing v36 systems only need this app update; the installer remains bundled-v36. Open **Start → Screensaver** on the desired monitor. It always occupies that monitor's full screen, without a frame, taskbar or visible corner buttons. It never opens automatically, including after a reboot.
+Install `inst app screensaver` on the central computer and reboot. **OS settings → Screensavers** on bundled-v39 lists the installed designs in cycle order. Nyan Cat is number 9. Open **Start → Screensaver** on the desired monitor. It always occupies that monitor's full screen, without a frame, taskbar or visible corner buttons. It never opens automatically, including after a reboot.
 
 - Touch any cell in the **top-left 2×2 area** for the previous design.
 - Touch any cell in the **top-right 2×2 area** for the next design.
@@ -13,23 +13,28 @@ The screensaver adds no taskbar entry on other monitors. Other windows, app back
 
 ## Designs and credits
 
-| Design | Visual |
-| --- | --- |
-| Matrix streams | White heads and green tails in every other native column, falling at the original 5–20 cells/second |
-| Matrix wall | Dense digits/symbols with white falling sources, lime/green/gray fading trails and small gaps where old characters expire |
-| Plasma | Slowly flowing color interference |
-| Ripple fields | Moving circular wave sources |
-| Truchet flow | Repeating curved tile paths |
-| Silk waves | Interlaced colored ribbons |
-| Kaleidoscope | Rotating symmetric wave fields |
-| Life garden | Toroidal Conway-style cellular patterns, periodically reseeded |
-| Nyan Cat | Twelve original animation frames, cropped to the cat/rainbow, with wrapping stars |
-| Starflight | Stars approaching from a central vanishing point |
-| Northern lights | Flowing green, cyan and purple curtains |
-| Lava lamp | Smooth moving blobs merging into bright cores |
-| Neon tunnel | Rotating spokes and advancing rings |
-| Fireworks | Colored bursts with staggered lifetimes |
-| Spiral ribbons | Animated multicolored spiral bands |
+| # | Design | Visual |
+| --- | --- | --- |
+| 1 | Matrix Rain | White heads and green tails in alternating columns |
+| 2 | Matrix Wall | Dense symbols with lime, green and gray fading trails |
+| 3 | Plasma | Flowing color interference |
+| 4 | Ripple Pools | Moving circular waves |
+| 5 | Rainbow Tiles | Repeating curved tile paths |
+| 6 | Silk Waves | Interlaced ribbons |
+| 7 | Kaleidoscope | Rotating symmetric waves |
+| 8 | Life Garden | Reseeded cellular patterns |
+| 9 | Nyan Cat | Cat and rainbow animation with wrapping stars |
+| 10 | Starflight | Stars approaching from a central vanishing point |
+| 11 | Northern Lights | Green, cyan and purple curtains |
+| 12 | Lava Lamp | Moving blobs that merge into bright cores |
+| 13 | Neon Tunnel | Rotating spokes and advancing rings |
+| 14 | Fireworks | Colored bursts with staggered lifetimes |
+| 15 | Spiral Ribbons | Multicolored spiral bands |
+| 16 | Prism Tide | Bright ribbons bending across the monitor |
+| 17 | Candy Confetti | Falling colored diamonds over a purple field |
+| 18 | Sunset Surf | Warm sky, a moving sun and turquoise waves |
+| 19 | Pixel Quilt | Scrolling multicolor triangles with bright seams |
+| 20 | Orbit Parade | Alternating rings of colorful orbiting segments |
 
 Both `ConvertToScreenSaverLater` files in [DJDarkMatter/TekkitSwitchBoard](https://github.com/DJDarkMatter/TekkitSwitchBoard) are Matrix-style animations, so both are represented. Their standalone peripheral/IO/event logic is not reused. The second file credits **Felix Maxwell (2013), CC BY-SA 3.0**. This app's pattern renderers are new implementations inspired by those visuals and established mathematical patterns; they are not claimed to be a collection of independently human-authored assets. `apps_screensaver.lua` is distributed under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/) with those credits retained. The Nyan Cat design adapts the twelve animation frames from [K. Lange’s ComputerCraft port](https://github.com/klange/nyancat-cc/blob/main/nyancat.lua), copyright 2016–2022 K. Lange. Its full permissive copyright/permission/warranty notice is retained directly above the embedded frames. The original Nyan Cat animation is by prguitarman (Chris Torres), as credited by [the upstream terminal project](https://github.com/klange/nyancat). Only the cropped artwork is reused; monitor discovery, loops and palette changes are replaced by the OS renderer. The other added patterns are new implementations, not claimed to be third-party programs. No runtime downloads, custom palettes, sound or external files are required.
 

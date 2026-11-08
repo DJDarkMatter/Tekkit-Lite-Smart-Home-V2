@@ -6,6 +6,20 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
+## Updating to v39
+
+The central OS adds **System Overview**, **Client Names**, a numbered **Screensavers** list, **Backup & Restore**, **Delete Apps**, and the taskbar **Alert Inbox**. Switchboard adds Scenes. The optional new apps are IO Scope, Logic Sandbox, Notes and Window Presets.
+
+Upload the complete v39 root to GitHub and use **bundled-v39** on the central computer. Run `inst server`, reinstall `screensaver` and `switchboard` if installed, and use `inst app NAME` for the new apps you want. See [the v39 install commands and exact changed files](documentation_update_v39.md).
+
+## Updating to v38
+
+ME monitors now shows signed stock changes over five minutes and a net hourly rate. Use **Edit → Change rates** to toggle the readout for a view.
+
+**OS settings → Reset data** lists Entire OS, OS settings, then apps in alphabetical order. Individual resets clear the selected app's saved settings, windows and routes. OS settings resets desktop layouts, appearance and routes created by the OS. Entire OS clears both scopes and asks for confirmation twice.
+
+Upload the complete v38 package root to GitHub and use the new **bundled-v38** installer on the central computer. Quit to CraftOS and run `inst server`, `inst app me_monitor`, then `reboot`. See [the v38 update and exact changed files](documentation_update_v38.md).
+
 ## Updating to v37 — Screensaver
 
 The corner navigation areas are now **2×2 character cells**. Matrix streams uses the original 5–20-cell/second falling speeds, and Matrix wall follows the reference's eight falling-source steps per second with stable digits/symbols, white heads and lime/green/gray trails that expire into small gaps. Visible screensavers request a 0.1-second refresh. Monitor text scale is unchanged.
@@ -30,7 +44,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty-two runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v36`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v39`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -57,7 +71,7 @@ For direct file copying instead, preserve these paths:
 | Role | Required files |
 | --- | --- |
 | All roles | `lib_work.lua`, `lib_network.lua`, `lib_storage.lua` |
-| Central OS | Also `main_os.lua`, `lib_me.lua`, `lib_server.lua`, `lib_console.lua`, `lib_io_picker.lua`, `lib_desktop.lua`, `lib_settings.lua`, `lib_sensor_data.lua`, `lib_sensor_server.lua`, `lib_sensor_picker.lua` |
+| Central OS | Also `main_os.lua`, `lib_me.lua`, `lib_server.lua`, `lib_console.lua`, `lib_io_picker.lua`, `lib_desktop.lua`, `lib_settings.lua`, `lib_system.lua`, `lib_alert_inbox.lua`, `lib_io_history.lua`, `lib_sensor_data.lua`, `lib_sensor_server.lua`, `lib_sensor_picker.lua` |
 | IO client | Also `clients_io_client.lua`, `lib_io.lua` |
 | Monitor client | Also `clients_monitor_client.lua`, `lib_monitor.lua` |
 | Sensor client | Also `clients_sensor_client.lua`, `lib_sensor.lua`, `lib_sensor_data.lua` |

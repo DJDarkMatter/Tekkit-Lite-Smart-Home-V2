@@ -19,7 +19,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local t=setup("screensaver")
         for _,point in ipairs({{1,1},{2,1},{1,2},{2,2}}) do
             local previous=t.view().design
-            touch(t,"top",point[1],point[2]);equal(t.view().design,(previous+13)%15+1);assert(t.window())
+            touch(t,"top",point[1],point[2]);equal(t.view().design,(previous+#t.app.screensavers-2)%#t.app.screensavers+1);assert(t.window())
             touch(t,"top",t.top.width-point[1]+1,point[2]);equal(t.view().design,previous);assert(t.window())
         end
         local content=t.content();equal(#content.hits,2)
@@ -42,7 +42,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
     end
     function tests.screensaver_corners_cycle_both_directions_and_open_rotates_saved_design()
         local t=setup("screensaver"); equal(t.view().design,1)
-        touch(t,"top",1,1); equal(t.view().design,15)
+        touch(t,"top",1,1); equal(t.view().design,#t.app.screensavers)
         touch(t,"top",t.top.width,1); equal(t.view().design,1)
         touch(t,"top",t.top.width,1); equal(t.view().design,2)
         assert(t.api.closeWindow(t.id)); t.id=t.open(); equal(t.view().design,3)
@@ -80,7 +80,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
     end
     function tests.screensaver_all_patterns_animate_fit_tiny_screens_and_keep_large_frames_under_modem_limit()
         local t=setup("screensaver",true); assert(t.app.onOpen(t.state,t.api,t.context()))
-        for design=1,15 do
+        for design=1,#t.app.screensavers do
             t.view().design=design
             for _,size in ipairs({{2,2},{12,6},{64,26},{256,128}}) do
                 local w,h=size[1],size[2]; local content=t.content(nil,w,h); equal(#content,h)

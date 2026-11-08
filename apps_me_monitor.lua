@@ -1,8 +1,10 @@
 -- Optional AE1 item monitors. Saved views are independent of ME capacity apps.
 local app = {title="ME monitors",minWidth=12,minHeight=6,preferredWidth=50,preferredHeight=18}
+local Me = dofile("lib_me.lua")
 local appName,ready,elapsed="me_monitor",false,0
 local sources,pickers={},{}
 local MAX_VIEWS,MAX_AXIS=64,16
+local CHANGE_WINDOW = 300
 local function copy(value)
     if type(value)~="table" then return value end
     local result={}; for key,item in pairs(value) do result[key]=copy(item) end; return result
@@ -63,16 +65,17 @@ local function gridShape(count)
     return bestC,bestR
 end
 local function watch(board) return appName.."_view_"..board.id end
-local function catalog(reading)
+local function catalog(reading,api)
     local data=reading.data or {}
     if reading.status~="ok" then return nil,reading.error or reading.status end
     if data.Powered==false then return nil,"ME unpowered" end
-    if data.ItemsOmitted then return nil,"Waiting for item list" end
+    if data.ItemsOmitted or data.ItemsComplete==false then return nil,"Waiting for complete item list" end
     if type(data.Items)~="table" then return nil,"No AE item list" end
     if data.ItemsFormat and data.ItemsFormat~="ae_compact_v1" then return nil,"Unknown item format" end
     local compact=data.ItemsFormat=="ae_compact_v1"
     local result,seen={},0
     for _,row in pairs(data.Items) do
+        if api.cooperate then api.cooperate(64) end
         seen=seen+1
         if seen>8192 or type(row)~="table" then return nil,"Invalid item list" end
         local raw,name,damage,count
@@ -102,6 +105,51 @@ local function countFor(board,tile)
     if value.status~="ok" then return nil end
     local item=value.items[tile.item.key]
     return item and item.count or 0
+end
+local function recordChanges(cached,reading,enabled,api)
+    if not enabled or cached.status~="ok" or not Me.number(reading.time,0,Me.MAX)
+        or not integer(reading.sequence,0,Me.MAX) then
+        cached.sample,cached.history=nil,nil
+        return
+    end
+    local previous=cached.sample
+    if previous and previous.sequence==reading.sequence and previous.time==reading.time then return end
+    local seconds=previous and reading.time-previous.time
+    local maxInterval=reading.maxAge or 10
+    if Me.number(seconds,0.001,maxInterval) then
+        local changes={}
+        if previous.items~=cached.items then
+            for key,item in pairs(previous.items) do
+                local current=cached.items[key]
+                local delta=(current and current.count or 0)-item.count
+                if delta~=0 then changes[key]={delta=delta} end
+                if api.cooperate then api.cooperate(32) end
+            end
+            for key,item in pairs(cached.items) do
+                if not previous.items[key] and item.count~=0 then changes[key]={delta=item.count} end
+                if api.cooperate then api.cooperate(32) end
+            end
+        end
+        cached.history=cached.history or Me.Rates.new()
+        Me.Rates.record(cached.history,reading.time,seconds,changes,maxInterval)
+    else cached.history=nil end
+    cached.sample={time=reading.time,sequence=reading.sequence,items=cached.items}
+end
+local function changeFor(board,tile)
+    local current=source(board)
+    if not tile.item or current.status~="ok" or not current.history then return end
+    local delta,seconds=Me.Rates.sum(current.history,tile.item.key,current.sample.time,CHANGE_WINDOW)
+    if seconds>0 then return delta,delta/seconds*3600 end
+end
+local function signedAmount(delta)
+    return (delta and delta>0 and "+" or "")..Me.amount(delta)
+end
+local function changeLabel(board,tile,width)
+    local delta,rate=changeFor(board,tile)
+    local hourly=Me.rateText(rate,width)
+    if #hourly>width then return "Rate >" end
+    local combined="5m "..signedAmount(delta).."  "..hourly
+    return delta and #combined<=width and combined or hourly
 end
 local function notice(view,text,back)
     view.message,view.messageBack,view.screen=tostring(text),back or view.screen or "home","message"
@@ -133,6 +181,7 @@ function app.init(state,api,context)
         assert(type(board)=="table" and integer(board.id,1,2147483000) and not boards[board.id]
             and safeName(board.name) and #board.name<=24 and address(board.sensor)
             and (board.layout==nil or board.layout=="grid" or board.layout=="list")
+            and (board.showRates==nil or type(board.showRates)=="boolean")
             and integer(board.columns,1,MAX_AXIS) and integer(board.rows,1,board.layout=="list" and MAX_AXIS^2 or MAX_AXIS)
             and (board.layout~="list" or board.columns==1)
             and type(board.tiles)=="table" and #board.tiles==board.columns*board.rows,"Invalid saved monitor view")
@@ -153,28 +202,36 @@ function app.init(state,api,context)
 end
 function app.background(dt,state,api)
     if not ready then return end
-    local wanted={}
+    local wanted,measure={},{}
     for _,board in ipairs(state.boards) do
         api.watchSensor(watch(board),board.sensor,{profile="ae_items"})
-        wanted[sourceKey(board.sensor)]=board
+        local key=sourceKey(board.sensor)
+        wanted[key]=board
+        if board.showRates~=false then measure[key]=true end
     end
     elapsed=elapsed+(dt or 0)
     if elapsed<0.5 then return end
     elapsed=0
     local remove={}; for key in pairs(sources) do if not wanted[key] then remove[#remove+1]=key end end
     for _,key in ipairs(remove) do sources[key]=nil end
+    local boots=Me.boots(api)
     for key,board in pairs(wanted) do
-        local reading=api.getSensorReading(board.sensor)
-        local cached=sources[key] or {items={}}
+        local reading=api.getSensorReading(board.sensor,{profile="ae_items"})
+        local cached=sources[key]
+        local boot=boots[board.sensor.clientId]
+        if not cached or cached.boot~=boot or cached.card~=reading.card then
+            cached={items={},boot=boot,card=reading.card}
+        end
         sources[key]=cached
         cached.age=reading.age
         if reading.status~="ok" then cached.status,cached.error=reading.status,reading.error or reading.status
         elseif reading.data and reading.data.Powered==false then cached.status,cached.error="unpowered","ME unpowered"
         elseif cached.sequence~=reading.dataSequence or cached.status~="ok" then
-            local items,err=catalog(reading)
+            local items,err=catalog(reading,api)
             cached.status,cached.error=items and "ok" or "unsupported",err
             if items then cached.items,cached.sequence=items,reading.dataSequence end
         end
+        recordChanges(cached,reading,measure[key],api)
     end
 end
 function app.shutdown(state,api)
@@ -302,7 +359,7 @@ local function build(width,height,state,api,context)
             end
         end
     end
-    local function monitorTile(rect,title,quantity,action,value,status,bg)
+    local function monitorTile(rect,title,quantity,action,value,status,bg,change)
         bg=bg or 128
         local fg=api.ui.contrast(bg)
         -- The window frame already supplies its border; tiles fill their cells.
@@ -310,12 +367,15 @@ local function build(width,height,state,api,context)
         ui.style(x,y,w,h,fg,bg)
         local valueText=quantity or ""
         local quantityRows=math.min(h-1,math.max(1,math.ceil(#valueText/w)))
-        local nameRows=math.max(1,math.min(2,h-quantityRows))
+        local showChange=change and h>=quantityRows+2
+        local available=h-(showChange and 1 or 0)
+        local nameRows=math.max(1,math.min(2,available-quantityRows))
         for row=1,nameRows do text(x,y+row-1,title:sub((row-1)*w+1,row*w),w,true) end
-        local firstRow=y+math.max(nameRows,h-quantityRows)
+        local firstRow=y+math.max(nameRows,available-quantityRows)
         for row=1,quantityRows do
             text(x,firstRow+row-1,valueText:sub((row-1)*w+1,row*w),w,true)
         end
+        if showChange then text(x,y+h-1,change,w,true) end
         ui.hits[#ui.hits+1]={x1=rect.x,x2=rect.x+rect.w-1,y1=rect.y,y2=rect.y+rect.h-1,action=action,value=value}
     end
     if screen=="home" then
@@ -333,9 +393,10 @@ local function build(width,height,state,api,context)
         footer({{"Settings","settings"}})
     elseif screen=="board" or screen=="tiles" then
         local data=source(board)
+        local rates=screen=="board" and board.showRates~=false
         ui.heading(screen=="tiles" and "Choose a tile" or board.name,data.status=="ok" and accent or 2)
         if board.layout=="list" then
-            local rowH=width>=28 and 1 or 2
+            local rowH=width>=(rates and 48 or 28) and 1 or rates and 3 or 2
             local slots=math.max(1,math.floor((height-3)/rowH))
             local first=page("tiles",#board.tiles,slots,height-1)
             for i=1,slots do
@@ -347,9 +408,13 @@ local function build(width,height,state,api,context)
                     local title=cell.item and cell.item.name or "+ Item"
                     local quantity=cell.item and amount(countFor(board,cell),width) or "Select item"
                     if rowH==1 then
+                        if rates and cell.item then quantity=quantity.."  "..changeLabel(board,cell,width-#quantity-4) end
                         local n=math.min(#quantity,width-2)
                         text(1,y,title,math.max(1,width-n-1)); text(width-n+1,y,quantity,n)
-                    else ui.text(y,title); ui.text(y+1,quantity,true) end
+                    else
+                        ui.text(y,title); ui.text(y+1,quantity,true)
+                        if rates and cell.item then ui.text(y+2,changeLabel(board,cell,width),true) end
+                    end
                     ui.hits[#ui.hits+1]={x1=1,x2=width,y1=y,y2=y+rowH-1,action=screen=="tiles" and "chooseTile" or "tile",value=cell.id}
                 end
             end
@@ -357,7 +422,8 @@ local function build(width,height,state,api,context)
             grid(#board.tiles,board.columns,board.rows,"tiles",height-1,8,3,function(index,rect)
                 local cell=board.tiles[index]
                 monitorTile(rect,cell.item and cell.item.name or "+ Item",cell.item and amount(countFor(board,cell),rect.w) or "Select item",
-                    screen=="tiles" and "chooseTile" or "tile",cell.id,data.status,cell.displayColour)
+                    screen=="tiles" and "chooseTile" or "tile",cell.id,data.status,cell.displayColour,
+                    rates and cell.item and changeLabel(board,cell,rect.w))
             end)
         end
         if screen=="tiles" then footer({{"Back","edit"}}) else footer({{"Back","home"},{"Edit","edit"}}) end
@@ -398,9 +464,15 @@ local function build(width,height,state,api,context)
         local item=tile.item
         if not item then view.screen="picker"; return build(width,height,state,api,context) end
         local live=data.items[item.key]
-        local lines={item.name,"Count: "..amount(countFor(board,tile)),"Status: "..(data.error or data.status),
-            "Raw: "..item.raw,"Damage: "..decimal(item.damage),"Client: "..board.sensor.clientId,
-            "Side: "..board.sensor.side,"Target: "..board.sensor.target}
+        local lines={item.name,"Count: "..amount(countFor(board,tile))}
+        if board.showRates~=false then
+            local delta,rate=changeFor(board,tile)
+            lines[#lines+1]="5m net: "..signedAmount(delta)
+            lines[#lines+1]="Rate: "..Me.rateText(rate)
+        end
+        lines[#lines+1]="Status: "..(data.error or data.status)
+        for _,line in ipairs({"Raw: "..item.raw,"Damage: "..decimal(item.damage),"Client: "..board.sensor.clientId,
+            "Side: "..board.sensor.side,"Target: "..board.sensor.target}) do lines[#lines+1]=line end
         if live and live.variants>1 then lines[#lines+1]="Variants combined: "..live.variants.." (the card does not expose NBT)" end
         -- Details paginate above their own fixed action row.
         local wrapped={}
@@ -413,7 +485,9 @@ local function build(width,height,state,api,context)
         -- Reserve the colour control even when details span multiple pages.
         footer({{"Item","changeItem"},{"Clear","clearItem"},{"Back","board"}})
     elseif screen=="edit" then
-        menu("View settings",{{"Rename view","rename"},{"Edit items","tiles"},{"Layout / size","resize"},{"AE source","sensor"},
+        local ratesLabel=(width>=17 and "Change rates: " or "Rates: ")..(board.showRates==false and "Off" or "On")
+        menu("View settings",{{ratesLabel,"toggleRates"},
+            {"Rename view","rename"},{"Edit items","tiles"},{"Layout / size","resize"},{"AE source","sensor"},
             {"Source information","source"},{"Delete view","delete"}},"edit","board")
     elseif screen=="settings" then
         menu("Monitor settings",{{"UI color","accent"},{"Density: "..state.settings.density,"density"},{"About","about"}},"settings","home")
@@ -593,6 +667,7 @@ function app.handleTouch(x,y,width,height,state,api,context)
         elseif commit(state,api,view,function() tile.displayColour=not view.colourDraft.auto and view.colourDraft.value or nil end) then view.screen="item" end
     elseif action=="accent" then local ok,err=api.pickColour(context.windowId); if not ok then notice(view,err) end
     elseif action=="density" then commit(state,api,view,function() state.settings.density=state.settings.density=="roomy" and "compact" or "roomy" end)
+    elseif action=="toggleRates" then commit(state,api,view,function() board.showRates=board.showRates==false end)
     elseif action=="messageBack" then view.screen=view.messageBack or "home"
     else view.screen=action end
     return true

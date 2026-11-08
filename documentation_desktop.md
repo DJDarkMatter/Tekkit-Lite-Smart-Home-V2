@@ -6,7 +6,7 @@ Bundled-v33 updates the `server` role for direct 1x1 layout selection, red notif
 
 ## Desktop appearance and OS settings
 
-The background contains no branding text. `[+]` → **OS settings** opens the built-in Appearance window, including before any user apps are installed. It contains **Background**, **Window border** and **Taskbar** color controls. Choose one, then a swatch to save its color across every monitor. Window border colors the complete frame and title bar of every window, including OS settings; Close remains red. The optional [Screensaver](documentation_screensaver.md) app always fills its monitor and is opened manually from Start. Top-left selects the previous design; top-right selects the next. Any other touch closes it. It never restores at reboot and adds no other-monitor taskbar entry. Alarm popups retain priority. Start lists apps and OS settings alphabetically by displayed title. Appearance preferences are checkpointed centrally; they do not alter app timers, IO wiring or enabled-app choices.
+The background contains no branding text. `[+]` → **OS settings** opens the built-in Settings window, including before any user apps are installed. **Appearance** contains the **Background**, **Window border** and **Taskbar** color controls. Choose one, then a swatch to save its color across every monitor. Window border colors the complete frame and title bar of every window, including OS settings; Close remains red. The optional [Screensaver](documentation_screensaver.md) app always fills its monitor and is opened manually from Start. Top-left selects the previous design; top-right selects the next. Any other touch closes it. It never restores at reboot and adds no other-monitor taskbar entry. Alarm popups retain priority. Start lists apps and OS settings alphabetically by displayed title. Appearance preferences are checkpointed centrally; they do not alter app timers, IO wiring or enabled-app choices.
 
 Window borders and the taskbar default to gray. Text switches between white and black for contrast; the selected taskbar button and open launcher use an inverted highlight. A selected border color is honoured even if it matches the desktop. App accents remain independent: Coffee offers **Menu → Settings → UI color**, and future apps should use the same OS-owned palette. The taskbar remains exactly one row high, with its text and hit regions at their previous positions; no row padding or vertical shift is applied.
 
@@ -108,3 +108,10 @@ Every window title begins one character to the right of the outer left edge. The
 ## Alarm/timer popups (v25)
 
 App notifications use a red panel, white text and a white OK strip independently of app/window colors. They overlay a centred OK window on every monitor, above normal windows, menus and move/resize previews. Touches are modal and do not pass through to those surfaces. OK on one monitor acknowledges that occurrence for all monitors; the next queued occurrence, if any, then appears. Input revisions reject delayed taps from the old popup. Redstone dismissal closes it through the same saved Clock state transition. Popup rendering follows monitor size and does not modify saved desktop geometry, taskbar positions, global text scale or calibration.
+
+
+## Alert Inbox and presets (v39)
+
+Tap the clock to review recent alerts. On a taskbar without room for the clock, open **Start → Alert inbox**. The inbox overlays the desktop as a right sidebar and fills a small screen with a Back button. A screensaver covers the inbox until you exit it. New red popups remain modal above both.
+
+Install **Window Presets** with `inst app window_presets`. Capture one monitor or all online monitors. A preset remembers the open app views and relative positions. Preview and reassign slots before applying. Small monitors use minimum window sizes and can minimize windows that would otherwise overlap.

@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v36
+-- SmartHome OS installer: bundled-v39
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -121,13 +121,16 @@ function storage.load(path, validate)
     end
 end
 
-function storage.save(path, value)
+function storage.save(path, value, forgetPrevious)
+    -- An interrupted reset must never be recovered as an ordinary pending save.
+    local staged = path .. (forgetPrevious and ".reset" or ".tmp")
+    local movedPrevious = false
     local ok, err = Work.call(function()
         local contents = Work.serialize(value)
         -- fs.getDir was only added in CC 1.63; Tekkit Lite uses older CC.
         local dir = path:match("^(.*)/[^/]+$") or ""
         if dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
-        local file = assert(fs.open(path .. ".tmp", "w"), "Cannot write " .. path)
+        local file = assert(fs.open(staged, "w"), "Cannot write " .. path)
         file.write(contents)
         file.close()
         if fs.exists(path) then
@@ -139,14 +142,28 @@ function storage.save(path, value)
             if previous and previous == validatedContents[path] or readTable(path) then
                 if fs.exists(path .. ".bak") then fs.delete(path .. ".bak") end
                 fs.move(path, path .. ".bak")
+                movedPrevious = true
             else
                 -- A corrupt primary must not replace a good backup.
                 fs.delete(path)
             end
         end
-        fs.move(path .. ".tmp", path)
+        fs.move(staged, path)
         validatedContents[path] = contents
     end)
+    if forgetPrevious then
+        if not ok then
+            pcall(fs.delete, staged)
+            if movedPrevious and not fs.exists(path) then pcall(fs.move, path .. ".bak", path) end
+        else
+            local cleared, cleanupError = pcall(function()
+                for _, suffix in ipairs({".tmp", ".bak"}) do
+                    if fs.exists(path .. suffix) then fs.delete(path .. suffix) end
+                end
+            end)
+            if not cleared then err = "Reset saved. Recovery cleanup failed: " .. tostring(cleanupError) end
+        end
+    end
     return ok, err
 end
 
@@ -523,6 +540,23 @@ function Gui.typeKey(keyboard, key, limit)
     end
     return true
 end
+function Gui.editText(keyboard, action, value, limit)
+    if action == "key" then Gui.typeKey(keyboard, value, limit)
+    elseif action == "space" then Gui.typeKey(keyboard, " ", limit)
+    elseif action == "backspace" then keyboard.draft = keyboard.draft:sub(1, -2)
+    elseif action == "clearText" then keyboard.draft = ""
+    elseif action == "bank" then keyboard.bank, keyboard.page = (keyboard.bank + 1) % 3, 1
+    elseif action == "keyPage" then keyboard.page = keyboard.page % keyboard.pages + 1
+    else return false end
+    return true
+end
+
+function Gui.actionAt(hits, x, y)
+    for _, hit in ipairs(hits) do
+        if hit.enabled ~= false and Gui.hit(hit, x, y) then return hit.action, hit.value end
+    end
+end
+
 -- Keep every completed choice visible; shorten long IDs rather than losing
 -- the final side/target. Small windows keep their existing usable row count.
 function Gui.breadcrumb(parts,width,height)
@@ -635,6 +669,8 @@ function Gui.form(width,height,view,accent,background,panel)
         ui.button(y,text,action,x1,x2,enabled,bg or panel,nil,value)
     end
     function ui.footer(rows)
+        -- A screen can replace the default Back footer supplied by info().
+        for i=#ui.hits,1,-1 do if ui.hits[i].y==height then table.remove(ui.hits,i) end end
         for i,row in ipairs(rows) do ui.action(height,row[1],row[2],row[3],1+math.floor((i-1)*width/#rows),math.floor(i*width/#rows),row[4],row[5]) end
     end
     function ui.page(key,count,slots,y,draw)
@@ -680,10 +716,10 @@ function Gui.form(width,height,view,accent,background,panel)
         ui.footer({{"Set","setNumber"},{"Back",back}})
     end
     function ui.keyboard(k)
-        local bank=k.bank==2 and "1234567890-_/.:" or k.bank==1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
+        local bank=k.bank==2 and (k.symbols or "1234567890-_/.:") or k.bank==1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
         ui.heading(k.draft=="" and "Type here" or k.draft:sub(-width),accent)
         local cols,rows=math.max(4,math.min(10,math.floor(width/2))),math.max(1,math.min(3,height-4))
-        local slots=cols*rows; local pages=math.ceil(#bank/slots); k.page=math.max(1,math.min(k.page or 1,pages))
+        local slots=cols*rows; local pages=math.ceil(#bank/slots); k.page=math.max(1,math.min(k.page or 1,pages)); k.pages=pages
         for i=1,slots do local ch=bank:sub((k.page-1)*slots+i,(k.page-1)*slots+i); if ch~="" then
             local col,row=(i-1)%cols,math.floor((i-1)/cols)
             ui.action(2+row,ch,"key",ch,1+math.floor(col*width/cols),math.floor((col+1)*width/cols),true,accent)
@@ -934,8 +970,8 @@ local function trim(history,time)
     for _,key in ipairs(remove) do history.keys[key]=nil end
     return cost
 end
-function Rates.record(history,time,dt,changes)
-    if not number(dt,0.001,10) then return false end
+function Rates.record(history,time,dt,changes,maxInterval)
+    if not number(dt,0.001,maxInterval or 10) then return false end
     trim(history,time)
     local minute=math.floor(time/60)
     local bucket=history.buckets[#history.buckets]
@@ -988,36 +1024,519 @@ end
 Me.Rates=Rates
 return Me
 ]=],
-    ["lib_settings.lua"] = [=[-- Built-in OS settings window. This is system UI, not an installed user app.
-local Settings = {title = "OS settings", minWidth = 12, minHeight = 6, preferredWidth = 28, preferredHeight = 10}
-local function build(width, height, api)
-    local ui = api.ui.content(width, height)
-    local settings = api.getOSSettings()
-    ui.style(1, 1, width, height, 1, 32768)
-    ui.heading("Appearance", 128)
-    local items = {{label = "Background", action = "background", colour = settings.backgroundColour},
-        {label = width >= 13 and "Window border" or "Borders", action = "windowBorder", colour = settings.windowBorderColour},
-        {label = "Taskbar", action = "taskbar", colour = settings.taskbarColour}}
-    for index, item in ipairs(items) do
-        local label = width >= 24 and item.label .. ": " .. api.ui.colourName(item.colour) or item.label
-        ui.button(3 + (index - 1) * (height >= 9 and 2 or 1), label, item.action, nil, nil, true, item.colour)
+    ["lib_settings.lua"] = [=[-- Built-in settings. Destructive confirmations are kept in memory per window.
+local System = dofile("lib_system.lua")
+local Settings = {}
+
+function Settings.new(actions)
+    local app = {title = "OS settings", minWidth = 12, minHeight = 6, preferredWidth = 34, preferredHeight = 13}
+    local pending = {}
+
+    function app.init(state)
+        state.overview = type(state.overview) == "table" and state.overview or {}
+        System.init(state.overview)
     end
-    ui.text(height >= 9 and 9 or height, width >= 24 and "Applies to all monitors" or "All monitors", true)
-    return ui.lines, ui.hits
-end
-function Settings.render(width, height, state, api)
-    return (build(width, height, api))
-end
-function Settings.handleTouch(x, y, width, height, state, api, context)
-    local _, hits = build(width, height, api)
-    for _, hit in ipairs(hits) do
-        if api.ui.hit(hit, x, y) then
-            return api.pickColour(context.windowId, hit.action)
+
+    local function overviewContext(context)
+        local view = context.view
+        view.overview = view.overview or {}
+        return {windowId = context.windowId, monitorId = context.monitorId, view = view.overview}
+    end
+
+    local function build(w, h, state, api, context)
+        local view = context.view
+        if view.section == "overview" then
+            local lines = System.render(w, h, state.overview, api, overviewContext(context))
+            return lines, lines.hits
         end
+        local ui = api.ui.form(w, h, view, 2048)
+        local section = view.section or "home"
+        local draft = pending[context.windowId]
+        if draft then
+            local title = "Are you sure?"
+            if draft.mode == "reset" and draft.final then title = w >= 20 and "Are you really sure?" or "Really sure?"
+            elseif draft.mode == "delete" then title = "Delete app?"
+            elseif draft.mode == "restore" then title = "Restore data?"
+            elseif draft.mode == "backup" then title = "Replace backup?" end
+            ui.heading(draft.error and "Action failed" or title, 16384)
+            ui.put(1, 2, draft.label, w, true)
+            local message = draft.error or draft.detail
+            if message then ui.put(1, 3, message, w); ui.put(1, 4, message:sub(w + 1), w)
+            elseif draft.mode == "delete" then ui.put(1, 3, "Settings kept", w, true)
+            elseif draft.target == "@all" then ui.put(1, 3, "All app data", w, true); ui.put(1, 4, "OS + routes", w, true)
+            elseif draft.target == "@settings" then ui.put(1, 3, "OS data + layouts", w, true)
+            else ui.put(1, 3, "Data, routes", w, true); ui.put(1, 4, "and layouts", w, true) end
+            if draft.mode == "reset" and draft.target == "@all" and not draft.final then
+                ui.action(h - 1, "Continue", "confirmAgain", nil, nil, nil, true, 16384)
+                ui.action(h, "Cancel", "cancel")
+            else
+                local button = draft.mode == "reset" and (draft.final and "Erase all" or "Delete data")
+                    or draft.mode == "delete" and "Uninstall" or draft.mode == "backup" and "Replace" or "Restore"
+                ui.action(h - 1, "Cancel", "cancel")
+                ui.action(h, button, "commit", nil, nil, nil, true, 16384)
+            end
+        elseif section == "home" then
+            ui.menu("OS settings", {{"Appearance", "appearance"}, {"System overview", "overview"},
+                {"Client names", "names"}, {"Screensavers", "screensavers"}, {"App data", "data"}}, "settings", {{"Close", "close"}})
+        elseif section == "appearance" then
+            local settings = api.getOSSettings()
+            local function label(text, color) return w >= 24 and text .. " " .. api.ui.colourName(color) or text end
+            ui.menu("Appearance", {{label("Background", settings.backgroundColour), "background", nil, true, settings.backgroundColour},
+                {label(w >= 13 and "Window border" or "Borders", settings.windowBorderColour), "windowBorder", nil, true, settings.windowBorderColour},
+                {label("Taskbar", settings.taskbarColour), "taskbar", nil, true, settings.taskbarColour}}, "appearance")
+        elseif section == "screensavers" then
+            local names, installed = api.getScreensavers()
+            local rows = {}
+            for index, name in ipairs(names) do rows[#rows + 1] = index .. ". " .. name end
+            if #rows == 0 then rows[1] = installed and "Update or enable Screensaver" or "Install Screensaver to see designs" end
+            ui.info("Screensavers", rows, "screensavers", "home")
+        elseif section == "names" then
+            local rows = {}
+            for _, item in ipairs(api.getClientNameTargets()) do
+                rows[#rows + 1] = {(item.online and "+ " or "- ") .. item.displayName, "nameClient", item.id}
+            end
+            if #rows == 0 then rows[1] = {"No known clients", nil, nil, false} end
+            ui.menu("Client names", rows, "names")
+        elseif section == "nameClient" then
+            local id = view.nameId
+            ui.info("Client name", {api.clientName(id), "ID " .. id}, "nameClient", "names")
+            ui.footer({{"Back", "names"}, {"Rename", "editName"}, {"Reset", "clearName", nil, api.clientName(id) ~= id}})
+        elseif section == "nameKeyboard" then ui.keyboard(view.keyboard)
+        elseif section == "data" then
+            ui.menu(view.status or "App data", {{"Backup & restore", "backupMenu"}, {"Reset data", "resetData"},
+                {"Delete apps", "deleteApps"}}, "data")
+        elseif section == "backupMenu" then
+            ui.menu(view.status or "Backup & restore", {{"Create backup", "backupList"}, {"Restore backup", "restoreList"}},
+                "backupMenu", {{"Back", "data"}})
+        elseif section == "resetData" or section == "deleteApps" or section == "backupList" or section == "restoreList" then
+            local mode = ({resetData = "reset", deleteApps = "delete", backupList = "backup", restoreList = "restore"})[section]
+            local targets = mode == "delete" and actions.installed() or mode == "restore" and actions.backups() or actions.targets()
+            local rows = {}
+            for _, item in ipairs(targets) do rows[#rows + 1] = {item.label, "selectScope", {id = item.id, label = item.label, mode = mode}} end
+            if #rows == 0 then rows[1] = {mode == "delete" and "No installed apps" or "No backups yet", nil, nil, false} end
+            local title = ({reset = "Reset data", delete = "Delete apps", backup = "Create backup", restore = "Restore backup"})[mode]
+            local back = (mode == "backup" or mode == "restore") and "backupMenu" or "data"
+            ui.menu(view.status or title, rows, section, {{"Back", back}})
+        else ui.info("OS settings", {view.status or "Select an option"}, "status", view.back or "home") end
+        return ui.lines, ui.hits
     end
+
+    function app.render(w, h, state, api, context) return (build(w, h, state, api, context)) end
+
+    function app.handleTouch(x, y, w, h, state, api, context)
+        local id, view = context.windowId, context.view
+        if view.section == "overview" then
+            local ctx = overviewContext(context)
+            local result = System.handleTouch(x, y, w, h, state.overview, api, ctx)
+            if ctx.view.exit then ctx.view.exit, view.section = nil, "home" end
+            return result
+        end
+        local _, hits = build(w, h, state, api, context)
+        local action, value = api.ui.actionAt(hits, x, y)
+        if not action then return false end
+        if action == "page" then view.pages[value.key] = value.page
+        elseif action == "close" then return api.closeWindow(id)
+        elseif action == "background" or action == "windowBorder" or action == "taskbar" then return api.pickColour(id, action)
+        elseif action == "nameClient" then view.nameId, view.section = value, "nameClient"
+        elseif action == "editName" then
+            view.keyboard = {draft = api.clientName(view.nameId) ~= view.nameId and api.clientName(view.nameId) or "",
+                bank = 0, page = 1, back = "nameClient"}
+            view.section = "nameKeyboard"
+        elseif view.section == "nameKeyboard" and api.ui.editText(view.keyboard, action, value, 32) then return true
+        elseif action == "saveText" or action == "clearName" then
+            local ok, err = api.setClientName(view.nameId, action == "clearName" and "" or view.keyboard.draft)
+            view.section = ok and "nameClient" or "status"
+            view.status, view.back = err, "nameClient"
+        elseif action == "selectScope" then
+            local mode = value.mode
+            local info = (mode == "restore" or mode == "backup") and actions.backupInfo(value.id) or nil
+            if mode == "backup" and not info then
+                local ok, err = actions.backup(value.id)
+                view.status = ok and "Backup saved" or tostring(err)
+            else pending[id] = {target = value.id, label = value.label, mode = mode, detail = info} end
+        elseif action == "confirmAgain" then pending[id].final = true
+        elseif action == "cancel" then pending[id] = nil
+        elseif action == "commit" then
+            local draft = pending[id]
+            local ok, err = actions[draft.mode](draft.target)
+            if ok then
+                pending[id] = nil
+                view.status = err or ({reset = "Data reset", delete = "App deleted", restore = "Data restored", backup = "Backup saved"})[draft.mode]
+            else draft.error = tostring(err) end
+        else view.section, view.status = action, nil end
+        api.invalidateAppViews("@settings")
+        return true
+    end
+
+    function app.onClose(state, api, context) pending[context.windowId] = nil end
+    return app
+end
+
+return Settings
+]=],
+    ["lib_system.lua"] = [=[-- Read-only overview of the central computer and its live client registry.
+local app={}
+local function find(list,id) for _,item in ipairs(list or {}) do if item.id==id then return item end end end
+local function join(values) return #values>0 and table.concat(values,", ") or "None" end
+local function elapsed(seconds)
+    seconds=math.floor(seconds or 0)
+    return math.floor(seconds/3600).."h "..math.floor(seconds/60)%60 .."m "..seconds%60 .."s"
+end
+local function route(address,api)
+    return api.clientName(address.clientId).." / "..address.side.." / "..(address.color and api.ui.colourName(address.color) or "Digital")
+end
+function app.init(state)
+    if not ({all=true,io=true,monitor=true,sensor=true,relay=true})[state.filter] then state.filter="all" end
+end
+local function build(width,height,state,api,context)
+    local view=context.view; view.pages=view.pages or {}
+    local screen=view.screen or "home"
+    local d=api.getDiagnostics()
+    local ui,accent=api.ui.content(width,height),api.getAppColour("@settings")
+    ui.style(1,1,width,height,1,32768)
+    local function button(y,label,action,value,x1,x2,enabled,bg)
+        ui.button(y,label,action,x1,x2,enabled,bg or 128,nil,value)
+    end
+    local function footer(items)
+        for i,item in ipairs(items) do button(height,item[1],item[2],item[3],1+math.floor((i-1)*width/#items),math.floor(i*width/#items),item[4]~=false,i%2==0 and 256 or 128) end
+    end
+    local function page(key,count,slots)
+        local pages=math.max(1,math.ceil(count/slots))
+        local current=math.max(1,math.min(view.pages[key] or 1,pages)); view.pages[key]=current
+        if pages>1 then
+            local half=math.floor(width/2)
+            button(height-1,"< "..current.."/"..pages,"page",{key=key,page=current-1},1,half,current>1)
+            button(height-1,">","page",{key=key,page=current+1},half+1,width,current<pages)
+        end
+        return (current-1)*slots
+    end
+    local function menu(title,items,key,back)
+        ui.heading(title,accent)
+        local slots=#items<=height-2 and height-2 or height-3
+        local first=page(key,#items,slots)
+        for i=1,slots do local item=items[first+i]; if item then button(i+1,item[1],item[2],item[3],nil,nil,item[4],item[5]) end end
+        footer(back or {{"Back","home"}})
+    end
+    local function info(title,lines,key,back)
+        local wrapped={}
+        for _,line in ipairs(lines) do
+            line=tostring(line):gsub("[%c]"," ")
+            repeat
+                local cut=#line>width and line:sub(1,width):match("^.*()%s")
+                if cut and cut>1 then wrapped[#wrapped+1],line=line:sub(1,cut-1),line:sub(cut+1)
+                else wrapped[#wrapped+1],line=line:sub(1,width),line:sub(width+1) end
+            until line==""
+        end
+        ui.heading(title,accent)
+        local slots=#wrapped<=height-2 and height-2 or height-3
+        local first=page(key,#wrapped,slots)
+        for i=1,slots do ui.text(i+1,wrapped[first+i] or "") end
+        footer(back or {{"Back","home"}})
+    end
+    if screen=="home" then
+        local online,ports,targets,windows=0,0,0,#d.windows
+        for _,client in ipairs(d.clients) do if client.online then online=online+1 end end
+        for _,sensor in ipairs(d.sensors) do for _,port in ipairs(sensor.ports) do ports=ports+1; targets=targets+#(port.targets or {}) end end
+        menu("System / "..online.." online",{{"Central computer","central"},{"Clients: "..#d.clients,"clients"},
+            {"Sensors: "..ports.." / "..targets.." targets","sensors"},{"Outputs: "..#d.outputs,"outputs"},
+            {"Apps: "..#d.apps,"apps"},{"Windows: "..windows,"windows"},{"Uptime history","uptime"},
+            {"Relay map","relayMap"},{"Overview options","settings"}},"home",{{"Back","settingsHome"}})
+    elseif screen=="central" then
+        local s=d.system
+        info("Central computer",{"Computer: "..s.computerId,"Network: "..s.networkId,"Session: "..s.session,
+            "Wireless modem: "..(s.modemSide or "Detached"),"Server channel: "..tostring(s.channel),
+            "Relay channel: "..tostring(s.relayChannel or "Disabled"),"Uptime: "..elapsed(s.uptime),
+            "Last checkpoint: "..elapsed(s.lastSaveAge).." ago","World clock: "..s.gameTime,
+            "Clock source: "..s.clockSource,"World day: "..tostring(s.worldDay or "Unavailable"),
+            "Player indicator: "..(s.playerOnline and "Online" or "Offline"),
+            "Only announced devices are known. No distance or chunk-loaded status is invented."},"central")
+    elseif screen=="clients" or screen=="sensors" then
+        local items={}
+        for _,client in ipairs(d.clients) do
+            if (screen=="sensors" and client.type=="sensor") or screen=="clients" and (state.filter=="all" or state.filter==client.type) then
+                items[#items+1]={client.displayName.." / "..(client.online and "Online" or "Offline"),"client",client.id,true,client.online and 128 or 4096}
+            end
+        end
+        if #items==0 then items[1]={"No known clients","noop",nil,false} end
+        menu(screen=="sensors" and "Sensor clients" or "Clients / "..state.filter,items,screen,{{"Back","home"},{"Filter","filter"}})
+    elseif screen=="client" then
+        local client=find(d.clients,view.clientId)
+        if not client then info("Client",{"Waiting for client to announce"},"client",{{"Back",view.clientBack or "clients"}})
+        else
+            local lines={client.displayName,"ID: "..client.id,"Role: "..client.type,"Status: "..(client.online and "Online" or "Offline"),"Computer: "..client.computerId,
+                "Reply channel: "..tostring(client.channel),"Last seen: "..elapsed(client.age).." ago","Relay hops: "..client.hops,
+                "Route: "..(#client.via>0 and table.concat(client.via," > ") or "Direct")}
+            if client.uptime then lines[#lines+1]="Connected: "..elapsed(client.uptime) end
+            if client.type=="relay" then lines[#lines+1]="Forwarded packets: "..tostring(client.forwarded or 0) end
+            if client.type=="monitor" then
+                lines[#lines+1]="Size: "..client.width.." x "..client.height.." characters"
+                lines[#lines+1]="Revisioned touches: "..(client.touchProtocol and "Yes" or "No")
+                local count=0; for _,win in ipairs(d.windows) do if win.monitorId==client.id then count=count+1 end end
+                lines[#lines+1]="Saved windows: "..count
+            elseif client.type=="io" then
+                local io=find(d.io,client.id)
+                lines[#lines+1]="Usable sides: "..join(io and io.sides or {})
+                lines[#lines+1]="Output revision / ACK: "..tostring(client.revision).." / "..tostring(client.ackedRevision)
+                for _,side in ipairs(io and io.sides or {}) do
+                    local input=api.getInput(client.id,side)
+                    lines[#lines+1]=side..": "..(input and ("digital "..tostring(input.digital)..", mask "..tostring(input.value)) or "Unavailable")
+                end
+            elseif client.type=="sensor" then
+                local sensor=find(d.sensors,client.id)
+                if sensor then
+                    lines[#lines+1]="Protocol: "..tostring(sensor.sensorProtocol or "Legacy").." / boot "..tostring(sensor.bootId)
+                    if sensor.catalogError then lines[#lines+1]="Catalog: "..sensor.catalogError end
+                    for _,port in ipairs(sensor.ports) do
+                        lines[#lines+1]=port.side..": "..(port.error or port.status or "Unknown")
+                        lines[#lines+1]="Card: "..tostring(port.card or "None")
+                        lines[#lines+1]="Targets: "..#(port.targets or {})
+                    end
+                    for _,pending in ipairs(sensor.pending) do lines[#lines+1]=pending.side..": "..pending.received.."/"..pending.parts.." catalog parts" end
+                end
+            end
+            info("Client details",lines,"client:"..client.id,client.type=="sensor" and {{"Back",view.clientBack or "clients"},{"Targets","targets"}} or {{"Back",view.clientBack or "clients"}})
+        end
+    elseif screen=="targets" then
+        local sensor=find(d.sensors,view.clientId); local items={}
+        for _,port in ipairs(sensor and sensor.ports or {}) do for _,target in ipairs(port.targets or {}) do
+            items[#items+1]={port.side..": "..(target.label or target.name or target.type or target.key),"target",{side=port.side,key=target.key}}
+        end end
+        if #items==0 then items[1]={"No catalog targets","noop",nil,false} end
+        menu("Sensor targets",items,"targets:"..tostring(view.clientId),{{"Back","client"}})
+    elseif screen=="target" then
+        local lines={"Client: "..api.clientName(view.clientId),"Side: "..view.target.side,"Key: "..view.target.key}
+        local sensor=find(d.sensors,view.clientId); local profile
+        for _,port in ipairs(sensor and sensor.ports or {}) do if port.side==view.target.side then
+            lines[#lines+1]="Card: "..tostring(port.card)
+            if port.cardKind=="ae" then profile="ae_storage" end
+            for _,target in ipairs(port.targets or {}) do if target.key==view.target.key then
+                lines[#lines+1]="Name: "..tostring(target.label or target.name or "Unknown")
+                lines[#lines+1]="Type: "..tostring(target.type or "Unknown")
+                lines[#lines+1]="Raw: "..tostring(target.rawName or "Unavailable")
+                lines[#lines+1]="Kind: "..tostring(target.kind or "Unknown")
+                if target.position then lines[#lines+1]="Position: "..target.position.X..", "..target.position.Y..", "..target.position.Z end
+            end end
+        end end
+        local cached=api.getSensorReading({clientId=view.clientId,side=view.target.side,target=view.target.key},{profile=profile})
+        lines[#lines+1]="Cached sample: "..cached.status
+        if cached.error then lines[#lines+1]=cached.error end
+        if cached.age then lines[#lines+1]="Sample age: "..elapsed(cached.age) end
+        if cached.status=="ok" and type(cached.data)=="table" then
+            local keys={}; for key,value in pairs(cached.data) do if type(value)~="table" then keys[#keys+1]=key end end
+            table.sort(keys,function(a,b) return tostring(a)<tostring(b) end)
+            for i=1,math.min(#keys,48) do local key=keys[i]; lines[#lines+1]=tostring(key)..": "..tostring(cached.data[key]) end
+        end
+        lines[#lines+1]="Reads cached observations only; no new subscriptions or output changes."
+        info("Target",lines,"target",{{"Back","targets"}})
+    elseif screen=="outputs" then
+        local items={}; for _,output in ipairs(d.outputs) do items[#items+1]={output.name.." / "..(output.value and "ON" or "OFF"),"output",output.name} end
+        if #items==0 then items[1]={"No output routes","noop",nil,false} end
+        menu("Mapped outputs",items,"outputs")
+    elseif screen=="output" then
+        local lines={"Route was removed"}
+        for _,output in ipairs(d.outputs) do if output.name==view.output then lines={output.name,route(output,api),"Desired: "..(output.value and "ON" or "OFF"),
+            "Client: "..(output.online and "Online" or "Offline"),"Acknowledged: "..(output.confirmed and "Yes" or "No / pending"),"Shared routes control the same physical wire."} end end
+        info("Output details",lines,"output",{{"Back","outputs"}})
+    elseif screen=="apps" then
+        local lines={}
+        for _,item in ipairs(d.apps) do lines[#lines+1]=item.title.." ("..item.name.."): "..(item.running and "Running" or "Stopped")..(item.backgroundService and " / background" or "") end
+        if #lines==0 then lines={"No enabled user apps"} end
+        info("Enabled apps",lines,"apps")
+    elseif screen=="windows" then
+        local lines={}
+        for _,win in ipairs(d.windows) do
+            lines[#lines+1]="#"..win.id.." "..(win.title or win.appName)..(win.minimized and " / minimized" or "")
+            lines[#lines+1]=api.clientName(win.monitorId).." @ "..win.x..","..win.y.." "..win.width.."x"..win.height.." / "..(win.layout or "normal")
+        end
+        if #lines==0 then lines={"No saved windows"} end
+        info("Saved windows",lines,"windows")
+    elseif screen=="uptime" then
+        local lines={}
+        local events=api.getUptimeHistory()
+        for i=#events,1,-1 do
+            local item=events[i]
+            local label=item.kind=="os" and "OS" or api.clientName(item.id)
+            lines[#lines+1]=label.." / "..(item.kind=="os" and (item.online and "Started" or "Stopped") or item.online and "Online" or "Offline")
+            local date=item.day and ("Day "..item.day.." ") or ""
+            lines[#lines+1]=date..item.time..(item.seconds and " / "..elapsed(item.seconds) or "")
+        end
+        if #lines==0 then lines[1]="No history yet" end
+        info("Uptime history",lines,"uptime")
+    elseif screen=="relayMap" then
+        local items={}
+        for _,client in ipairs(d.clients) do
+            local route={}
+            for _,id in ipairs(client.via) do route[#route+1]=api.clientName(id) end
+            items[#items+1]={client.displayName.." / "..(#route>0 and #route.." hops" or "Direct"),"path",client.id}
+        end
+        if #items==0 then items[1]={"No connected clients",nil,nil,false} end
+        menu("Relay map",items,"map")
+    elseif screen=="path" then
+        local client=find(d.clients,view.clientId)
+        local lines={"OS "..d.system.computerId}
+        if client then
+            for i=#client.via,1,-1 do lines[#lines+1]=" > "..api.clientName(client.via[i]) end
+            lines[#lines+1]=" > "..client.displayName
+            lines[#lines+1]=client.online and "Online" or "Last observed route"
+            if client.type=="relay" then
+                lines[#lines+1]="Devices using this relay"
+                for _,device in ipairs(d.clients) do
+                    for _,hop in ipairs(device.via) do
+                        if hop==client.id then lines[#lines+1]=device.displayName; break end
+                    end
+                end
+            end
+        end
+        info("Observed path",lines,"path",{{"Back","relayMap"},{"Details","pathClient",nil,client~=nil}})
+    elseif screen=="settings" then
+        menu("Overview options",{{"Client filter: "..state.filter,"filter"},{"About","about"}},"settings")
+    elseif screen=="about" then
+        info("About CC system",{"Live registry, routes, card catalogs, IO confirmations, enabled apps and saved windows. Offline clients remain visible during this OS session; a restart waits for announcements. Sensors and machine readings are never restored as live. Sensor bindings and app settings are saved by their owning apps. Client paths are based on received packets."},"about",{{"Back","settings"}})
+    end
+    return ui.lines,ui.hits
+end
+function app.render(w,h,state,api,context) return (build(w,h,state,api,context)) end
+function app.handleTouch(x,y,w,h,state,api,context)
+    local _,hits=build(w,h,state,api,context)
+    local view=context.view
+    for _,hit in ipairs(hits) do if hit.enabled~=false and api.ui.hit(hit,x,y) then
+        local action,value=hit.action,hit.value
+        if action=="page" then view.pages[value.key]=value.page
+        elseif action=="client" and value then view.clientId,view.screen,view.clientBack=value,"client",view.screen or "clients"
+        elseif action=="path" then view.clientId,view.screen,view.pages.path=value,"path",1
+        elseif action=="pathClient" then view.screen,view.clientBack="client","path"
+        elseif action=="settingsHome" then view.exit=true
+        elseif action=="target" and value then view.target,view.screen=value,"target"
+        elseif action=="output" and value then view.output,view.screen=value,"output"
+        elseif action=="filter" then
+            local options={"all","io","monitor","sensor","relay"}; local old=state.filter
+            for i,item in ipairs(options) do if item==old then state.filter=options[i%#options+1]; break end end
+            local ok=api.save(); if not ok then state.filter=old end
+            view.pages.clients=nil
+        elseif action=="accent" then api.pickColour(context.windowId)
+        elseif action~="noop" and action~="refresh" then view.screen=action end
+        return true
+    end end
     return false
 end
-return Settings
+return app
+]=],
+    ["lib_alert_inbox.lua"] = [=[-- Monitor-local sidebar over the desktop. History is owned by the OS.
+local Inbox = {}
+
+function Inbox.render(monitor, entries, api)
+    local view = monitor.inbox
+    local small = monitor.width < 34 or monitor.height < 10
+    local width, height = small and monitor.width or math.min(38, math.floor(monitor.width * .48)),
+        small and monitor.height or monitor.height - 1
+    local x = monitor.width - width + 1
+    local ui = api.ui.form(width, height, view, 2048)
+    local selected
+    for _, item in ipairs(entries) do if item.sequence == view.selected then selected = item; break end end
+    if height < 5 or width < 8 then
+        ui.heading("Alerts", 2048)
+        ui.footer({{"Back", "close"}})
+    elseif selected then
+        local stamp = (selected.day and "Day " .. selected.day .. " " or "") .. selected.time
+        ui.info(selected.title, {stamp, selected.message, selected.open and "Active" or "Closed"}, "details", "list")
+    else
+        local rows = {}
+        for i = #entries, 1, -1 do
+            local item = entries[i]
+            rows[#rows + 1] = {(item.open and "* " or "") .. item.title .. " " .. item.time,
+                "details", item.sequence, true, item.open and 16384 or nil}
+        end
+        if #rows == 0 then rows[1] = {"No alerts yet", nil, nil, false} end
+        ui.menu("Alert inbox", rows, "alerts", {{"Back", "close"}})
+    end
+    return {x = x, width = width, height = height, lines = ui.lines, hits = ui.hits}
+end
+
+function Inbox.touch(monitor, model, api, x, y)
+    if x < model.x or y > model.height then return false end
+    local view = monitor.inbox
+    local action, value = api.ui.actionAt(model.hits, x - model.x + 1, y)
+    if action == "close" then monitor.inbox = nil
+    elseif action == "list" then view.selected = nil
+    elseif action == "details" then view.selected, view.pages.details = value, 1
+    elseif action == "page" then view.pages[value.key] = value.page end
+    return true
+end
+
+return Inbox
+]=],
+    ["lib_io_history.lua"] = [=[-- Bounded, shared history of IO side snapshots. A single event represents
+-- all 16 bundled wires and the digital wire on that side.
+local History = {}
+local CAPACITY, HORIZON = 192, 300
+local function stateAt(sample, color)
+    if not sample or sample.mask == nil then return "?" end
+    if color then
+        if math.floor((sample.pending or 0) / color) % 2 == 1 then return "p" end
+        return math.floor(sample.mask / color) % 2 == 1 and "1" or "0"
+    end
+    if sample.digitalPending then return "p" end
+    return sample.digital and "1" or "0"
+end
+
+function History.new()
+    local clients = {}
+    local history = {}
+    local function find(id, side, direction)
+        local client = clients[id]
+        return client and client[direction] and client[direction][side]
+    end
+    function history.record(id, side, direction, at, mask, digital, pending, digitalPending)
+        local trail = find(id, side, direction)
+        if not trail then
+            if mask == nil then return end
+            clients[id] = clients[id] or {input = {}, output = {}}
+            trail = {first = 1, last = 0}
+            clients[id][direction][side] = trail
+        end
+        local previous = trail[trail.last % CAPACITY]
+        if previous and previous.mask == mask and previous.digital == digital and previous.pending == pending
+            and previous.digitalPending == digitalPending then return end
+        trail.last = trail.last + 1
+        trail[trail.last % CAPACITY] = {at = previous and math.max(at, previous.at) or at, mask = mask,
+            digital = digital, pending = pending, digitalPending = digitalPending}
+        trail.first = math.max(trail.first, trail.last - CAPACITY + 1)
+        while trail.first < trail.last and trail[(trail.first + 1) % CAPACITY].at < at - HORIZON do
+            trail[trail.first % CAPACITY] = nil
+            trail.first = trail.first + 1
+        end
+    end
+    function history.offline(id, at)
+        for direction, sides in pairs(clients[id] or {}) do
+            for side in pairs(sides) do history.record(id, side, direction, at) end
+        end
+    end
+    function history.trace(address, finish, seconds, width)
+        local trail = find(address.clientId, address.side, address.direction)
+        if not trail then return string.rep("?", width), "?" end
+        local now = stateAt(trail[trail.last % CAPACITY], address.color)
+        local start = finish - seconds
+        local index, value = trail.first, "?"
+        while index <= trail.last and trail[index % CAPACITY].at <= start do
+            value = stateAt(trail[index % CAPACITY], address.color)
+            index = index + 1
+        end
+        local cells = {}
+        for x = 1, width do
+            local deadline = start + seconds * x / width
+            local changed = false
+            while index <= trail.last and trail[index % CAPACITY].at <= deadline do
+                local nextValue = stateAt(trail[index % CAPACITY], address.color)
+                changed = changed or nextValue ~= value
+                value, index = nextValue, index + 1
+            end
+            cells[x] = changed and "|" or value
+        end
+        return table.concat(cells), now
+    end
+    return history
+end
+return History
 ]=],
     ["lib_io_picker.lua"] = [=[-- Reusable, server-rendered IO selector. No peripheral or network calls here.
 local Picker = {}
@@ -1032,16 +1551,16 @@ function Picker.new(key, direction, selected)
     return {key = key, direction = direction, stage = 1, page = 1, chosen = chosen}
 end
 
-local function choices(dialog, clients)
+local function choices(dialog, clients, label)
     local list = {}
     if dialog.stage == 1 then
         local found = false
         for _, client in ipairs(clients) do
-            list[#list + 1] = {label = client.id .. (client.online and " +" or " -"), value = client.id}
+            list[#list + 1] = {label = label(client.id) .. (client.online and " +" or " -"), value = client.id}
             if client.id == dialog.chosen.clientId then found = true end
         end
         if dialog.chosen.clientId and not found then
-            list[#list + 1] = {label = dialog.chosen.clientId .. " -", value = dialog.chosen.clientId}
+            list[#list + 1] = {label = label(dialog.chosen.clientId) .. " -", value = dialog.chosen.clientId}
         end
     elseif dialog.stage == 2 then
         local available
@@ -1062,7 +1581,8 @@ local function colorName(value)
     return "Invalid color"
 end
 
-function Picker.render(dialog, width, height, clients)
+function Picker.render(dialog, width, height, clients, api, testing)
+    local label = api and api.clientName or function(id) return id end
     local lines, hits = {styles = {}}, {}
     local half = math.floor(width / 2)
     local function text(row, value) lines[row] = tostring(value):sub(1, width) end
@@ -1080,17 +1600,26 @@ function Picker.render(dialog, width, height, clients)
     for row = 1, height do lines[row] = string.rep(" ", width) end
     if dialog.stage == 4 then
         text(1, "Use this " .. dialog.direction .. "?")
-        text(2, dialog.chosen.clientId or "No IO client")
+        text(2, label(dialog.chosen.clientId) or "No IO client")
         text(3, "Side: " .. (dialog.chosen.side or "?"))
-        text(4, colorName(dialog.chosen.color))
+        local wire = colorName(dialog.chosen.color)
+        if dialog.direction == "input" and api then
+            local value = api.readInput(dialog.chosen)
+            local status = value == nil and "Unknown" or value and "ON" or "OFF"
+            local summary = wire .. " / " .. status
+            text(4, #summary <= width and summary or wire:sub(1, width - #status - 1) .. " " .. status)
+        else text(4, wire) end
         if dialog.error then text(4, dialog.error) end
-        button(height - 1, 1, width, "< Back", "back")
+        if dialog.direction == "output" and api then
+            button(height - 1, 1, half, "< Back", "back")
+            button(height - 1, half + 1, width, testing and "Wait" or "Test", "test", nil, not testing)
+        else button(height - 1, 1, width, "< Back", "back") end
         button(height, 1, half, "Use", "use")
         button(height, half + 1, width, "Cancel", "cancel")
     else
         local titles = {"Select IO", "Select side", "Select wire"}
-        local list = choices(dialog, clients)
-        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {dialog.chosen.clientId,dialog.chosen.side} or {dialog.chosen.clientId},width,height)
+        local list = choices(dialog, clients, label)
+        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {label(dialog.chosen.clientId),dialog.chosen.side} or {label(dialog.chosen.clientId)},width,height)
         local header = path and 2 or 1
         local slots = #list <= height-header-1 and height-header-1 or math.max(1,height-header-2)
         local pages = math.max(1, math.ceil(#list / slots))
@@ -1123,6 +1652,7 @@ function Picker.touch(dialog, x, y)
             if hit.enabled == false then return end
             dialog.error = nil
             if hit.action == "cancel" then return "cancel"
+            elseif hit.action == "test" then return "test", dialog.chosen
             elseif hit.action == "use" then return "selected", dialog.chosen
             elseif hit.action == "prev" then dialog.page = math.max(1, dialog.page - 1)
             elseif hit.action == "next" then dialog.page = math.min(hit.value, dialog.page + 1)
@@ -1413,7 +1943,7 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
     local function hit(x1, x2, action, id) hits[#hits + 1] = {x1 = x1, x2 = x2, action = action, id = id} end
     put(1, "[+]"); hit(1, math.min(3, width), "launcher")
     local clockWidth = (width >= 22 or (#windows == 0 and width >= 10)) and 6 or 0
-    if clockWidth > 0 then put(width - 4, clock) end
+    if clockWidth > 0 then put(width - 4, clock); hit(width - 4, width, "inbox") end
     local first, last = 5, width - clockWidth
     if last < first then return line, hits end
     local labels, needed = {}, 0
@@ -1494,8 +2024,17 @@ local Gui = dofile("lib_gui.lua")
 local Settings = dofile("lib_settings.lua")
 local SensorHub = dofile("lib_sensor_server.lua")
 local SensorPicker = dofile("lib_sensor_picker.lua")
+local IOHistory = dofile("lib_io_history.lua")
+local Inbox = dofile("lib_alert_inbox.lua")
 local systemColours = {background = {field = "backgroundColour", title = "Background"},
     windowBorder = {field = "windowBorderColour", title = "Window border"}, taskbar = {field = "taskbarColour", title = "Taskbar"}}
+local defaultAppearance = {backgroundColour = 2048, windowBorderColour = 128, taskbarColour = 128}
+local legacyOutputNames = {
+    {"^coffee_harvest$", "coffee"}, {"^switchboard_switch_%d+$", "switchboard"},
+    {"^reactors_switch_%d+$", "reactors"}, {"^clock_alarm_%d+$", "clock"},
+    {"^clock_timer_%d+$", "clock"}, {"^level_emitter_rule_%d+$", "level_emitter"},
+    {"^solar_farm_alarm_%d+$", "solar_farm"},
+}
 local sideSet = {top = true, bottom = true, left = true, right = true, front = true, back = true}
 local function integer(value, low, high)
     return type(value) == "number" and value == math.floor(value) and value >= low and value <= high
@@ -1596,7 +2135,7 @@ local function validApp(app)
     end
     if app.animationInterval~=nil and (type(app.animationInterval)~="number" or app.animationInterval~=app.animationInterval
         or app.animationInterval<0.1 or app.animationInterval>1) then return false end
-    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection", "handleNotification", "onOpen", "onClose"}) do
+    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection", "handleNotification", "onOpen", "onClose", "ioRoutes"}) do
         if app[key] ~= nil and type(app[key]) ~= "function" then return false end
     end
     return (not app.maxWidth or app.maxWidth >= (app.minWidth or 8))
@@ -1615,23 +2154,30 @@ function Server.new(net, storage, config, logger)
     local restoredWires = currentWires(state.outputMap, state.outputs)
     for name, mapping in pairs(state.outputMap) do state.outputs[name] = wireGroup(restoredWires, mapping).value end
     state.appearance = type(state.appearance) == "table" and state.appearance or {}
-    if not colour(state.appearance.backgroundColour) then state.appearance.backgroundColour = 2048 end
-    if not colour(state.appearance.windowBorderColour) then state.appearance.windowBorderColour = 128 end
-    if not colour(state.appearance.taskbarColour) then state.appearance.taskbarColour = 128 end
+    for field, value in pairs(defaultAppearance) do
+        if not colour(state.appearance[field]) then state.appearance[field] = value end
+    end
     if type(state.appearance.appColours) ~= "table" then state.appearance.appColours = {} end
     for name, value in pairs(state.appearance.appColours) do
         if type(name) ~= "string" or not colour(value) then state.appearance.appColours[name] = nil end
     end
+    for _, key in ipairs({"clientNames", "uptimeHistory", "alertHistory", "archivedRoutes"}) do
+        if type(state[key]) ~= "table" then state[key] = {} end
+    end
+    state.notificationSequence = tonumber(state.notificationSequence) or 0
     state.appStates["@settings"] = type(state.appStates["@settings"]) == "table" and state.appStates["@settings"] or {}
     local server = {state = state, monitors = {}, ioClients = {}, sensorClients = {}, relayClients = {}, apps = {},
-        systemApps = {["@settings"] = Settings}, gameTime = "?:??", playerOnline = false,
-        lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}, notifications = {}, notificationSequence = 0}
+        systemApps = {}, gameTime = "?:??", playerOnline = false,
+        lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}, notifications = {}}
     local clientGroups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients, relay = server.relayClients}
-    local api, errors = {}, {}
+    local api, errors, installedApps = {}, {}, {}
+    local history, ioTests = IOHistory.new(), {}
+    local callingApp
     server.api = api
     api.ui, api.log, api.sharedOutputs, api.sensorProfiles = Gui, log, true, true
     api.cooperate, api.protectedCall = Work.check, Work.call
     api.aeItemProfiles = true
+    function api.clientName(id) return type(state.clientNames[id]) == "string" and state.clientNames[id] or id end
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
         local monitor = server.monitors[id]
@@ -1655,6 +2201,23 @@ function Server.new(net, storage, config, logger)
             if legacyDesktop then win.y = math.max(1, (tonumber(win.y) or 3) - 2) end
         end
     end
+    -- The legacy diagnostics app now lives inside OS settings.
+    local legacyOverview = state.appStates.system
+    if type(legacyOverview) == "table" and not state.appStates["@settings"].overview then
+        state.appStates["@settings"].overview = legacyOverview
+    end
+    state.appStates.system, state.appRegistry.system = nil, nil
+    local legacyOverviewColor = state.appearance.appColours.system
+    if legacyOverviewColor and not state.appearance.appColours["@settings"] then
+        state.appearance.appColours["@settings"] = legacyOverviewColor
+    end
+    state.appearance.appColours.system = nil
+    for id, win in pairs(state.windows) do
+        if win.appName == "system" then
+            win.appName = "@settings"
+            server.views[id] = {section = "overview", overview = server.views[id]}
+        end
+    end
     state.desktopVersion = 2
     state.bootCounter = (tonumber(state.bootCounter) or 0) + 1
     server.session = tostring(net.id) .. ":" .. state.bootCounter
@@ -1663,25 +2226,35 @@ function Server.new(net, storage, config, logger)
     if source and source ~= config.saveFile then log("Recovered state from " .. source) end
     if not loaded and fs.exists(config.saveFile) then log("Unreadable OS state; starting with defaults") end
 
-    function server.save()
+    local function saveWindows(include)
+        local windows = {}
+        for id, win in pairs(state.windows) do
+            if not win.transientWindow and (not include or include(win)) then
+                windows[id] = copy(win)
+                windows[id].viewState = viewSnapshot(server.views[id])
+            end
+        end
+        return windows
+    end
+    function server.save(forgetPrevious)
         local previousStage = Work.stage
         Work.stage = "Saving OS state"
         local saved = {}
         for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides",
-            "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance"}) do saved[name] = state[name] end
-        saved.windows = {}
-        for id, win in pairs(state.windows) do
-            if not win.transientWindow then
-                saved.windows[id] = copy(win)
-                saved.windows[id].viewState = viewSnapshot(server.views[id])
-            end
+            "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance",
+            "clientNames", "uptimeHistory", "alertHistory", "archivedRoutes", "notificationSequence"}) do
+            saved[name] = state[name]
         end
-        local ok, err = storage.save(config.saveFile, saved)
-        if not ok then log("State save failed: " .. tostring(err)) else server.lastSave = os.clock() end
+        saved.windows = saveWindows()
+        local ok, err = storage.save(config.saveFile, saved, forgetPrevious)
+        if ok then
+            server.lastSave = os.clock()
+            if err then log(err) end
+        else log("State save failed: " .. tostring(err)) end
         Work.stage = previousStage
         return ok, err
     end
-    api.save = server.save
+    function api.save() return server.save() end
     api.fullscreenApps = true
     api.fullscreenCornerNavigation = true
     -- App-owned, synchronous upgrade transaction. The transform edits detached
@@ -1753,7 +2326,10 @@ function Server.new(net, storage, config, logger)
         if not app or not app[hook] then return true end
         local previousStage = Work.stage
         Work.stage = "App " .. name .. "." .. hook
+        local previousApp = callingApp
+        callingApp = name
         local ok, a, b = Work.call(app[hook], ...)
+        callingApp = previousApp
         if not ok then
             local key = name .. "." .. hook
             if errors[key] ~= a then
@@ -1767,6 +2343,20 @@ function Server.new(net, storage, config, logger)
     end
 
     local function isService(app) return app.backgroundService == true or app.render == nil end
+    local function loadApp(name)
+        local chunk, err = loadfile("apps_" .. name .. ".lua")
+        local ok, app = false, err
+        if chunk then ok, app = Work.call(chunk) end
+        if not ok or not validApp(app) then
+            server.apps[name] = nil
+            log("Cannot load app " .. name .. ": " .. tostring(app))
+            return false
+        end
+        server.apps[name], state.appRegistry[name] = app, true
+        if type(state.appStates[name]) ~= "table" then state.appStates[name] = {} end
+        log("Loaded app: " .. name)
+        return true
+    end
     local function hasViews(name)
         for _, win in pairs(state.windows) do if win.appName == name then return true end end
         return false
@@ -1817,6 +2407,20 @@ function Server.new(net, storage, config, logger)
         server.gameTime, server.clockSource = "?:??", "unavailable"
     end
     updateClock()
+    local function stamp()
+        return {time = server.gameTime, day = server.worldDay, session = server.session}
+    end
+    local function appendHistory(entries, item, limit)
+        entries[#entries + 1] = item
+        if #entries > limit then table.remove(entries, 1) end
+    end
+    local function logUptime(id, kind, online, at, since)
+        local item = stamp()
+        item.id, item.kind, item.online = id, kind, online
+        if since then item.seconds = math.max(0, at - since) end
+        appendHistory(state.uptimeHistory, item, 128)
+    end
+    function api.getUptimeHistory() return copy(state.uptimeHistory) end
 
     local function outputSnapshot(clientId)
         local snapshot = {}
@@ -1836,13 +2440,39 @@ function Server.new(net, storage, config, logger)
         return snapshot
     end
 
+    local function lineValue(values, color)
+        if not values then return false end
+        if color then return math.floor(values.bundled / color) % 2 == 1 end
+        return values.digital
+    end
+    local function putLine(values, color, value)
+        if not color then values.digital = value
+        elseif lineValue(values, color) ~= value then
+            values.bundled = values.bundled + (value and color or -color)
+        end
+    end
+    local function recordOutputs(id, client, now)
+        for side, values in pairs(client.outputSnapshot or {}) do
+            local required, pending = client.wireRevisions[side] or {}, 0
+            for bit = 0, 15 do
+                local color = 2 ^ bit
+                if (required[color] or client.revision) > client.ackedRevision then pending = pending + color end
+            end
+            history.record(id, side, "output", now, values.bundled, values.digital,
+                pending, (required.digital or client.revision) > client.ackedRevision)
+        end
+    end
+
     function server.syncIO(clientId, changed)
         local client = server.ioClients[clientId]
         if not client then return end
         if changed then client.revision = client.revision + 1 end
         if not client.online then return end
         local snapshot = {}
-        for side, values in pairs(outputSnapshot(clientId)) do
+        local wanted = outputSnapshot(clientId)
+        local test = ioTests[clientId]
+        if test and wanted[test.side] then putLine(wanted[test.side], test.color, test.value) end
+        for side, values in pairs(wanted) do
             if not client.capabilities[side] then
                 log("IO " .. clientId .. ": mapped side " .. side .. " is unavailable")
             else snapshot[side] = values end
@@ -1864,16 +2494,48 @@ function Server.new(net, storage, config, logger)
                     or required[color] == nil then required[color] = client.revision end
             end
         end
+        for side in pairs(client.outputSnapshot or {}) do
+            if not snapshot[side] then history.record(clientId, side, "output", os.clock()) end
+        end
         client.outputSnapshot = copy(snapshot)
+        recordOutputs(clientId, client, os.clock())
         net.toClient(client, {type = "ioCommand", command = "syncOutputs", clientId = clientId,
             serverSession = server.session, revision = client.revision, outputs = snapshot})
         client.lastSent = os.clock()
     end
 
+    local function testOutput(address)
+        local id, side, color = address.clientId, address.side, address.color
+        local client = server.ioClients[id]
+        if not client or not client.online or not client.capabilities[side] then return false, "Output unavailable" end
+        if ioTests[id] then return false, "Test in progress" end
+        local value = lineValue(outputSnapshot(id)[side], color)
+        local previous = state.managedSides[id]
+        if not previous or not previous[side] then
+            state.managedSides[id] = copy(previous or {})
+            state.managedSides[id][side] = true
+            -- Persist the cleared side before pulsing it so an OS reboot also
+            -- restores a test of a previously unused wire.
+            local ok, err = server.save()
+            if not ok then state.managedSides[id] = previous; return false, err end
+        end
+        ioTests[id] = {side = side, color = color, value = not value, untilTime = os.clock() + 4}
+        server.syncIO(id, true)
+        return true
+    end
+    function api.getIOTrace(address, finish, seconds, width)
+        if not integer(width, 1, 256) or not integer(seconds, 1, 300) or type(address) ~= "table"
+            or (address.direction ~= "input" and address.direction ~= "output")
+            or type(address.clientId) ~= "string" or not sideSet[address.side]
+            or (address.color ~= nil and not colour(address.color))
+            or type(finish) ~= "number" or finish ~= finish then return "", "?" end
+        return history.trace(address, finish, seconds, width)
+    end
+
     function api.getOutput(name) return state.outputs[name] == true end
     -- One checkpoint for a whole panel, reroute, removal or group action. App
     -- state changed by the caller is included in that same durable checkpoint.
-    function api.updateOutputs(changes)
+    local function checkpointOutputs(changes, forgetPrevious, owners)
         if type(changes) ~= "table" then return false, "Expected output changes" end
         local count = 0
         for index in pairs(changes) do
@@ -1891,8 +2553,13 @@ function Server.new(net, storage, config, logger)
             managed[mapping.clientId][mapping.side] = true
         end
         for _, change in ipairs(changes) do
-            if type(change) ~= "table" or type(change.name) ~= "string" or not change.name:match("^[%w_-]+$")
-                or seen[change.name] then return false, "Invalid or repeated output name" end
+            if type(change) ~= "table" or type(change.name) ~= "string" or seen[change.name] then
+                return false, "Invalid or repeated output name"
+            end
+            local legacy = forgetPrevious and (change.remove == true and mappings[change.name] or owners and owners[change.name])
+            if not change.name:match("^[%w_-]+$") and not legacy then
+                return false, "Invalid output name"
+            end
             if change.remove ~= nil and type(change.remove) ~= "boolean"
                 or change.clientId == nil and (change.side ~= nil or change.color ~= nil or change.initialValue ~= nil)
                 or change.initialValue ~= nil and type(change.initialValue) ~= "boolean"
@@ -1906,7 +2573,8 @@ function Server.new(net, storage, config, logger)
                 if change.clientId ~= nil then
                     if type(change.clientId) ~= "string" or change.clientId == "" or not sideSet[change.side]
                         or (change.color ~= nil and not colour(change.color)) then return false, "Invalid output mapping" end
-                    mapping = {clientId = change.clientId, side = change.side, color = change.color}
+                    mapping = {clientId = change.clientId, side = change.side, color = change.color,
+                        owner = owners and owners[change.name] or mapping and mapping.owner or callingApp or (not mapping and "@settings" or nil)}
                     local client = server.ioClients[mapping.clientId]
                     if client and client.online and not client.capabilities[mapping.side] then
                         return false, "That side is unavailable (possibly occupied by the modem)"
@@ -1950,14 +2618,22 @@ function Server.new(net, storage, config, logger)
         for id in pairs(affected) do before[id] = outputSnapshot(id) end
         local previousMap, previousValues, previousManaged = state.outputMap, state.outputs, state.managedSides
         state.outputMap, state.outputs, state.managedSides = mappings, values, managed
-        local ok, err = server.save()
+        local ok, err = server.save(forgetPrevious)
         if not ok then
             state.outputMap, state.outputs, state.managedSides = previousMap, previousValues, previousManaged
             return false, err
         end
-        for _, id in ipairs(sortedKeys(affected)) do server.syncIO(id, not sameSnapshot(before[id], outputSnapshot(id))) end
-        return true
+        for _, id in ipairs(sortedKeys(affected)) do
+            local snapshot = outputSnapshot(id)
+            local test = ioTests[id]
+            if test and lineValue(before[id][test.side], test.color) ~= lineValue(snapshot[test.side], test.color) then
+                ioTests[id] = nil
+                server.syncIO(id, true)
+            else server.syncIO(id, not sameSnapshot(before[id], snapshot)) end
+        end
+        return true, err
     end
+    function api.updateOutputs(changes) return checkpointOutputs(changes) end
     function api.mapOutput(name, clientId, side, color, initialValue)
         -- Binding another reference adopts an existing wire's state. An
         -- explicit rebind to the same address can still set its initial intent.
@@ -1983,13 +2659,15 @@ function Server.new(net, storage, config, logger)
             required = required and required[item.color or "digital"]
             item.confirmed = item.online and client.capabilities[item.side]
                 and required ~= nil and client.ackedRevision >= required or false
+            local test = ioTests[item.clientId]
+            if test and test.side == item.side and test.color == item.color then item.confirmed = false end
             result[#result + 1] = item
         end
         return result
     end
     function api.getInput(clientId, side)
         local client = server.ioClients[clientId]
-        if client and client.online then return copy(client.inputs[side]) end
+        if client and client.online and client.capabilities[side] then return copy(client.inputs[side]) end
     end
     function api.readInput(address)
         if type(address) ~= "table" or type(address.clientId) ~= "string" or not sideSet[address.side]
@@ -2003,7 +2681,7 @@ function Server.new(net, storage, config, logger)
         local result = {}
         for _, id in ipairs(sortedKeys(server.ioClients)) do
             local client = server.ioClients[id]
-            result[#result + 1] = {id = id, online = client.online, computerId = client.computerId,
+            result[#result + 1] = {id = id, displayName = api.clientName(id), online = client.online, computerId = client.computerId,
                 sides = sortedKeys(client.capabilities or {})}
         end
         return result
@@ -2038,7 +2716,17 @@ function Server.new(net, storage, config, logger)
         local client = server.sensorClients[clientId]
         if client and client.online then return copy(client.values[name]) end
     end
-    api.getSensorClients, api.watchSensor, api.unwatchSensor, api.getSensorReading = sensors.getClients, sensors.watch, sensors.unwatch, sensors.read
+    api.unwatchSensor, api.getSensorReading = sensors.unwatch, sensors.read
+    function api.getSensorClients()
+        local clients = sensors.getClients()
+        for _, client in ipairs(clients) do client.displayName = api.clientName(client.id) end
+        return clients
+    end
+    function api.watchSensor(key, address, options)
+        local ok, err = sensors.watch(key, address, options)
+        if ok then sensors.watches[key].owner = callingApp or "@settings" end
+        return ok, err
+    end
     function api.pickSensor(windowId, key, current, kind)
         local win = state.windows[windowId]
         local app = win and definition(win.appName)
@@ -2055,7 +2743,8 @@ function Server.new(net, storage, config, logger)
             for id, client in pairs(group) do
                 local via = {}
                 for _, hop in ipairs(client.route or {}) do via[#via + 1] = hop.id end
-                result[#result + 1] = {id = id, type = kind, online = client.online, computerId = client.computerId,
+                result[#result + 1] = {id = id, displayName = api.clientName(id), type = kind, online = client.online,
+                    computerId = client.computerId, uptime = client.online and math.max(0, os.clock() - (client.since or client.lastSeen)) or nil,
                     via = via, hops = #via, route = copy(client.route or {}), forwarded = client.forwarded,
                     channel = client.channel, age = math.max(0, os.clock() - client.lastSeen),
                     width = client.width, height = client.height, revision = client.revision,
@@ -2065,6 +2754,39 @@ function Server.new(net, storage, config, logger)
         table.sort(result, function(a, b) return a.id < b.id end)
         return result
     end
+    function api.getClientNameTargets()
+        local result, known = api.getClients(), {}
+        for _, client in ipairs(result) do known[client.id] = true end
+        local function include(id, kind)
+            if id and not known[id] then
+                known[id] = true
+                result[#result + 1] = {id = id, displayName = api.clientName(id), type = kind, online = false}
+            end
+        end
+        for _, item in ipairs(state.uptimeHistory) do if item.kind ~= "os" then include(item.id, item.kind) end end
+        for id in pairs(state.clientNames) do include(id) end
+        table.sort(result, function(a, b)
+            local aa, bb = a.displayName:lower(), b.displayName:lower()
+            return aa == bb and a.id < b.id or aa < bb
+        end)
+        return result
+    end
+    function api.setClientName(id, name)
+        if type(id) ~= "string" or #id > 96 or type(name) ~= "string" or #name > 32 or name:find("[%c]") then
+            return false, "Use a name up to 32 characters"
+        end
+        name = name:match("^%s*(.-)%s*$")
+        for other, label in pairs(state.clientNames) do
+            if other ~= id and name ~= "" and label:lower() == name:lower() then return false, "Name already in use" end
+        end
+        local old = state.clientNames[id]
+        state.clientNames[id] = name ~= "" and name or nil
+        local ok, err = server.save()
+        if not ok then state.clientNames[id] = old; return false, err end
+        for monitorId in pairs(server.monitors) do invalidateInput(monitorId) end
+        return true
+    end
+
     function api.getSystem() return {gameTime = server.gameTime, clockSource = server.clockSource,
         worldTime = server.worldTime, worldDay = server.worldDay, playerOnline = server.playerOnline,
         computerId = net.id, networkId = net.config.networkId, modemSide = net.side,
@@ -2116,9 +2838,27 @@ function Server.new(net, storage, config, logger)
             local before = old[index]
             changed = changed or not before or before.key ~= item.key or before.title ~= item.title or before.message ~= item.message
         end
+        local previous = {}
+        for _, record in ipairs(state.alertHistory) do
+            if record.appName == name and record.open then
+                if seen[record.key] then previous[record.key] = record
+                else record.open, changed = nil, true end
+            end
+        end
         if not changed then return true end
         for _, item in ipairs(staged) do
-            if not item.sequence then server.notificationSequence = server.notificationSequence+1; item.sequence = server.notificationSequence end
+            local record = previous[item.key]
+            if record then
+                item.sequence = record.sequence
+                record.title, record.message = item.title, item.message
+            elseif not item.sequence then
+                state.notificationSequence = state.notificationSequence + 1
+                item.sequence = state.notificationSequence
+                local entry = stamp()
+                entry.appName, entry.key, entry.title, entry.message = name, item.key, item.title, item.message
+                entry.sequence, entry.open = item.sequence, true
+                appendHistory(state.alertHistory, entry, 128)
+            end
         end
         server.notifications[name] = staged
         for id, monitor in pairs(server.monitors) do
@@ -2126,6 +2866,10 @@ function Server.new(net, storage, config, logger)
             invalidateInput(id)
         end
         return true
+    end
+    local function clearNotifications(name)
+        server.notifications[name] = nil
+        for _, entry in ipairs(state.alertHistory) do if entry.appName == name then entry.open = nil end end
     end
     local function firstNotification()
         local first
@@ -2272,23 +3016,607 @@ function Server.new(net, storage, config, logger)
         end
         return win.id
     end
+    local function releaseWindow(win, appState)
+        appCall(win.appName,"onClose",appState,api,viewContext(win))
+        server.views[win.id], server.dialogs[win.id] = nil, nil
+        local monitor = server.monitors[win.monitorId]
+        if monitor then
+            if monitor.layoutMenu and monitor.layoutMenu.windowId == win.id then monitor.layoutMenu = nil end
+            if monitor.placement and monitor.placement.windowId == win.id then monitor.placement = nil end
+        end
+        invalidateInput(win.monitorId)
+    end
     function api.closeWindow(id)
         local win = state.windows[id]
         if not win then return false, "Unknown window" end
         state.windows[id] = nil
         local ok, err = server.save()
         if not ok then state.windows[id] = win; return false, err end
-        appCall(win.appName,"onClose",state.appStates[win.appName],api,viewContext(win))
-        server.views[id], server.dialogs[id] = nil, nil
-        local monitor = server.monitors[win.monitorId]
-        if monitor then
-            if monitor.layoutMenu and monitor.layoutMenu.windowId == id then monitor.layoutMenu = nil end
-            if monitor.placement and monitor.placement.windowId == id then monitor.placement = nil end
-        end
+        releaseWindow(win, state.appStates[win.appName])
         stopApp(win.appName)
-        invalidateInput(win.monitorId)
         return true
     end
+
+    function api.captureWindowPreset(monitorId, allMonitors)
+        local slots = {}
+        for _, id in ipairs(sortedKeys(server.monitors)) do
+            local monitor = server.monitors[id]
+            if monitor.online and (allMonitors or id == monitorId) then
+                local slot = {id = id, width = monitor.width, height = monitor.height, windows = {}}
+                for _, win in ipairs(windowsFor(id)) do
+                    if not win.transientWindow and win.appName ~= "window_presets" and fit(win, monitor) then
+                        slot.windows[#slot.windows + 1] = {appName = win.appName, layout = win.layout,
+                            fullscreen = win.fullscreen, minimized = win.minimized, relative = Desktop.relative(win, monitor),
+                            restore = copy(win.restore), view = viewSnapshot(server.views[win.id])}
+                    end
+                end
+                slots[#slots + 1] = slot
+            end
+        end
+        return slots
+    end
+    local function presetPlan(slots, assignments)
+        local plan, destinations, valid = {}, {}, true
+        for _, slot in ipairs(slots) do
+            local id = assignments[slot.id]
+            if id == nil then id = slot.id end
+            local entry = {source = slot.id, target = id, windows = {}, items = {}, visible = 0, minimized = 0, skipped = 0}
+            plan[#plan + 1] = entry
+            local monitor = server.monitors[id]
+            if id ~= false and (not monitor or not monitor.online or destinations[id]) then
+                entry.error = monitor and monitor.online and "Already assigned" or "Monitor offline"
+                valid = false
+            elseif id ~= false then
+                destinations[id] = true
+                local placed = {}
+                local smaller = monitor.width < slot.width or monitor.height < slot.height
+                for i = #slot.windows, 1, -1 do
+                    local spec = slot.windows[i]
+                    local app = definition(spec.appName)
+                    local title = app and app.title or spec.appName
+                    local win = {appName = spec.appName, monitorId = id, layout = spec.layout,
+                        fullscreen = spec.fullscreen, minimized = spec.minimized, relative = copy(spec.relative), restore = copy(spec.restore)}
+                    local fits = app and not app.transientWindow and fit(win, monitor) and not win.tooSmall
+                    if app and not app.transientWindow and not fits then
+                        win.layout, win.fullscreen = "normal", nil
+                        fits = fit(win, monitor) and not win.tooSmall
+                    end
+                    if fits then
+                        if smaller and not win.minimized then
+                            for _, other in ipairs(placed) do
+                                if win.x < other.x + other.width and win.x + win.width > other.x
+                                    and win.y < other.y + other.height and win.y + win.height > other.y then
+                                    win.minimized = true
+                                    break
+                                end
+                            end
+                        end
+                        if not win.minimized then placed[#placed + 1] = win end
+                        entry.windows[#entry.windows + 1] = {win = win, view = viewSnapshot(spec.view)}
+                        local field = win.minimized and "minimized" or "visible"
+                        entry[field] = entry[field] + 1
+                        entry.items[#entry.items + 1] = title .. " / " .. (win.minimized and "Minimized" or win.width .. "x" .. win.height)
+                    else
+                        entry.skipped = entry.skipped + 1
+                        entry.items[#entry.items + 1] = title .. " / " .. (app and "Too small" or "Missing")
+                    end
+                end
+            end
+        end
+        return plan, destinations, valid and next(destinations) ~= nil
+    end
+    function api.previewWindowPreset(slots, assignments)
+        local plan, _, valid = presetPlan(slots, assignments or {})
+        for _, item in ipairs(plan) do item.windows = nil end
+        return plan, valid
+    end
+    function api.applyWindowPreset(slots, assignments)
+        local plan, destinations, valid = presetPlan(slots, assignments or {})
+        if not valid then return false, "Assign an online monitor to each slot" end
+        local previous, nextId = state.windows, state.nextWindowId
+        local windows, added, order = {}, {}, 0
+        for id, win in pairs(previous) do
+            if not destinations[win.monitorId] or win.transientWindow then
+                windows[id] = win
+                order = math.max(order, win.order)
+            end
+        end
+        for _, slot in ipairs(plan) do
+            for i = #slot.windows, 1, -1 do
+                local item, id = slot.windows[i], nextId
+                local win = item.win
+                order, nextId = order + 1, nextId + 1
+                win.id, win.order = id, order
+                windows[id], server.views[id] = win, item.view
+                added[#added + 1] = win
+            end
+        end
+        state.windows, state.nextWindowId = windows, nextId
+        local ok, err = server.save(true)
+        if not ok then
+            state.windows, state.nextWindowId = previous, nextId - #added
+            for _, win in ipairs(added) do server.views[win.id] = nil end
+            return false, err
+        end
+        for id, win in pairs(previous) do if not windows[id] then releaseWindow(win, state.appStates[win.appName]) end end
+        for _, name in ipairs(sortedKeys(server.running)) do stopApp(name) end
+        local failed = false
+        for _, win in ipairs(added) do
+            local started = startApp(win.appName)
+            if started then
+                local opened, accepted = appCall(win.appName, "onOpen", state.appStates[win.appName], api, viewContext(win))
+                failed = failed or not opened or accepted == false
+            else failed = true end
+        end
+        for id in pairs(destinations) do
+            local monitor = server.monitors[id]
+            monitor.launcher, monitor.layoutMenu, monitor.placement = nil, nil, nil
+            invalidateInput(id)
+        end
+        return true, failed and "Some windows failed to start" or err
+    end
+
+    local function savedOutputOwners()
+        local aliases, owners = {}, {}
+        local coffee = state.appStates.coffee
+        if type(coffee) == "table" and type(coffee.outputName) == "string" then aliases[coffee.outputName] = "coffee" end
+        local emitter = state.appStates.level_emitter
+        if type(emitter) == "table" and type(emitter.rules) == "table" then
+            for _, rule in ipairs(emitter.rules) do
+                if type(rule) == "table" and type(rule.outputName) == "string" then aliases[rule.outputName] = "level_emitter" end
+            end
+        end
+        for name, mapping in pairs(state.outputMap) do
+            local owner = type(mapping.owner) == "string" and mapping.owner or nil
+            -- Imported Solar farm rules keep their old logical output names.
+            if aliases[name] == "level_emitter" and owner == "solar_farm" then owner = "level_emitter" end
+            owner = owner or aliases[name]
+            if not owner then
+                for _, legacy in ipairs(legacyOutputNames) do
+                    if name:match(legacy[1]) then owner = legacy[2]; break end
+                end
+            end
+            owners[name] = owner or "@settings"
+            Work.check(32)
+        end
+        return owners
+    end
+
+    function api.getUsedIO()
+        local result, groups, owners = {}, {}, savedOutputOwners()
+        local function add(address, direction, owner)
+            if type(address) ~= "table" or type(address.clientId) ~= "string" or not sideSet[address.side]
+                or address.color ~= nil and not colour(address.color) then return end
+            local key = address.clientId .. "/" .. address.side .. "/" .. tostring(address.color or "digital") .. "/" .. direction
+            local entry = groups[key]
+            if not entry then
+                entry = {clientId = address.clientId, side = address.side, color = address.color, direction = direction, apps = {}}
+                result[#result + 1], groups[key] = entry, entry
+            end
+            local app = definition(owner)
+            local title = app and app.title or owner
+            for _, name in ipairs(entry.apps) do if name == title then return end end
+            entry.apps[#entry.apps + 1] = title
+        end
+        for name, address in pairs(state.outputMap) do
+            add(address, "output", owners[name])
+            Work.check(32)
+        end
+        -- Saved inputs remain visible even when the app has no open windows.
+        local coffee = state.appStates.coffee or {}
+        add(coffee.playerInput, "input", "coffee")
+        local clock = state.appStates.clock or {}
+        local emitter = state.appStates.level_emitter or {}
+        for _, item in ipairs(clock.alarms or {}) do add(item.dismissInput, "input", "clock") end
+        for _, item in ipairs(clock.timers or {}) do add(item.dismissInput, "input", "clock") end
+        for _, item in ipairs(emitter.rules or {}) do add(item.dismissInput, "input", "level_emitter") end
+        for _, name in ipairs(sortedKeys(server.apps)) do
+            local ok, routes = appCall(name, "ioRoutes", state.appStates[name])
+            if ok and type(routes) == "table" then
+                for _, address in ipairs(routes) do
+                    if type(address) == "table" and (address.direction == "input" or address.direction == "output") then
+                        add(address, address.direction, name)
+                    end
+                end
+            end
+        end
+        local order = {}
+        for _, wire in ipairs(result) do
+            table.sort(wire.apps)
+            order[wire] = api.clientName(wire.clientId):lower() .. "/" .. wire.clientId .. "/" .. wire.side
+                .. "/" .. wire.direction .. string.format("%05d", wire.color or 0)
+            Work.check(24)
+        end
+        table.sort(result, function(a, b) return order[a] < order[b] end)
+        return result
+    end
+
+    function api.getScreensavers()
+        local app = server.apps.screensaver
+        local result = {}
+        for index, title in ipairs(app and type(app.screensavers) == "table" and app.screensavers or {}) do
+            if type(title) ~= "string" or #title > 64 or index > 128 then break end
+            result[index] = title
+        end
+        return result, installedApps.screensaver == true
+    end
+
+    local function resetTargets()
+        local found = {}
+        local function add(name)
+            if type(name) == "string" and name:match("^[%w_-]+$") then found[name] = true end
+        end
+        for _, group in ipairs({installedApps, state.appRegistry, state.appStates, state.appearance.appColours, state.archivedRoutes}) do
+            for name in pairs(group) do add(name) end
+        end
+        for _, win in pairs(state.windows) do add(win.appName) end
+        for _, owner in pairs(savedOutputOwners()) do add(owner) end
+        local apps = {}
+        for name in pairs(found) do
+            local app = server.apps[name]
+            apps[#apps + 1] = {id = name, label = app and app.title or name}
+        end
+        table.sort(apps, function(a, b)
+            local left, right = a.label:lower(), b.label:lower()
+            if left == right then return a.id < b.id end
+            return left < right
+        end)
+        local targets = {{id = "@all", label = "Entire OS"}, {id = "@settings", label = "OS settings"}}
+        for _, app in ipairs(apps) do targets[#targets + 1] = app end
+        return targets
+    end
+
+    local function resetSavedData(target)
+        local label
+        for _, entry in ipairs(resetTargets()) do if entry.id == target then label = entry.label; break end end
+        if not label then return false, "Reset target is unavailable" end
+        local entire = target == "@all"
+        local resetDesktop = entire or target == "@settings"
+        local function ownsData(name) return entire or name == target end
+        local removals = {}
+        for name, owner in pairs(savedOutputOwners()) do
+            if ownsData(owner) then removals[#removals + 1] = {name = name, remove = true} end
+        end
+
+        -- Save the cleared data and the output removals in one checkpoint.
+        -- Running apps and monitor dialogs stay intact until it succeeds.
+        local previous = {windows = state.windows, appStates = state.appStates, appRegistry = state.appRegistry,
+            appearance = state.appearance, desktops = state.desktops, archivedRoutes = state.archivedRoutes,
+            clientNames = state.clientNames, uptimeHistory = state.uptimeHistory, alertHistory = state.alertHistory}
+        local windows, appStates, registry = {}, {}, copy(previous.appRegistry)
+        if not resetDesktop then
+            for id, win in pairs(previous.windows) do if win.appName ~= target then windows[id] = win end end
+        end
+        for name, data in pairs(previous.appStates) do if not ownsData(name) then appStates[name] = data end end
+        for name in pairs(server.apps) do if ownsData(name) then appStates[name] = {} end end
+        appStates["@settings"] = appStates["@settings"] or {}
+        for name in pairs(previous.appRegistry) do
+            if ownsData(name) and not installedApps[name] then registry[name] = nil end
+        end
+        local appearance = copy(resetDesktop and defaultAppearance or previous.appearance)
+        if resetDesktop then appearance.appColours = entire and {} or copy(previous.appearance.appColours) end
+        appearance.appColours[target] = nil
+        state.windows, state.appStates, state.appRegistry, state.appearance = windows, appStates, registry, appearance
+        state.archivedRoutes = {}
+        for name, routes in pairs(previous.archivedRoutes) do if not ownsData(name) then state.archivedRoutes[name] = routes end end
+        state.alertHistory = {}
+        if resetDesktop then state.desktops, state.clientNames, state.uptimeHistory = {}, {}, {}
+        else
+            for _, record in ipairs(previous.alertHistory) do
+                if record.appName ~= target then state.alertHistory[#state.alertHistory + 1] = record end
+            end
+        end
+        local ok, err = checkpointOutputs(removals, true)
+        if not ok then
+            for key, value in pairs(previous) do state[key] = value end
+            return false, err
+        end
+
+        for id, win in pairs(previous.windows) do
+            if not windows[id] then releaseWindow(win, previous.appStates[win.appName]) end
+        end
+        local stopped = {}
+        for _, name in ipairs(sortedKeys(server.running)) do
+            if ownsData(name) or resetDesktop and not isService(definition(name)) then
+                appCall(name, "shutdown", previous.appStates[name], api, {appName = name})
+                server.running[name], stopped[name] = nil, true
+            end
+        end
+        for _, key in ipairs(sortedKeys(sensors.watches)) do
+            local owner = sensors.watches[key].owner
+            if ownsData(owner) or stopped[owner] then sensors.unwatch(key) end
+        end
+        if entire then server.notifications = {}
+        else server.notifications[target] = nil end
+        for id, monitor in pairs(server.monitors) do
+            if resetDesktop then monitor.launcher, monitor.layoutMenu, monitor.placement, monitor.inbox = nil, nil, nil, nil end
+            invalidateInput(id)
+        end
+        local reloaded = {}
+        for _, name in ipairs(sortedKeys(server.apps)) do
+            if ownsData(name) and loadApp(name) then reloaded[#reloaded + 1] = name end
+        end
+        for _, name in ipairs(reloaded) do if isService(server.apps[name]) then startApp(name) end end
+        log("Reset saved data for " .. label)
+        return true, err
+    end
+    local function appPath(name) return "apps_" .. name .. ".lua" end
+    local function uninstallPath(name) return "uninstall_" .. name .. ".lua" end
+    local function appTitle(name)
+        local app = definition(name)
+        return app and app.title or name
+    end
+    local function installedTargets()
+        local result = {}
+        for name in pairs(installedApps) do result[#result + 1] = {id = name, label = appTitle(name)} end
+        table.sort(result, function(a, b)
+            local left, right = a.label:lower(), b.label:lower()
+            return left == right and a.id < b.id or left < right
+        end)
+        return result
+    end
+
+    local function stopForDataChange(name, oldState)
+        if server.running[name] then appCall(name, "shutdown", oldState, api, {appName = name}) end
+        server.running[name] = nil
+        for _, key in ipairs(sortedKeys(sensors.watches)) do
+            if sensors.watches[key].owner == name then sensors.unwatch(key) end
+        end
+        clearNotifications(name)
+    end
+
+    local function uninstallApp(name)
+        if not installedApps[name] or not fs.exists(appPath(name)) then return false, "App file is unavailable" end
+        local path, staged = appPath(name), uninstallPath(name)
+        -- Recoverable staging: a boot before the checkpoint restores the
+        -- executable. A boot after it completes the deletion.
+        local ok, err = pcall(fs.move, path, staged)
+        if not ok then return false, err end
+        local previousWindows, previousArchive = state.windows, state.archivedRoutes
+        local routes, removals, windows = {}, {}, {}
+        for logical, owner in pairs(savedOutputOwners()) do
+            if owner == name then
+                routes[logical] = copy(state.outputMap[logical])
+                removals[#removals + 1] = {name = logical, remove = true}
+            end
+        end
+        for id, win in pairs(previousWindows) do if win.appName ~= name then windows[id] = win end end
+        state.windows, state.archivedRoutes = windows, copy(previousArchive)
+        state.archivedRoutes[name] = routes
+        ok, err = checkpointOutputs(removals, true)
+        if not ok then
+            state.windows, state.archivedRoutes = previousWindows, previousArchive
+            local restored, why = pcall(fs.move, staged, path)
+            if not restored then log("App file recovery pending: " .. tostring(why)) end
+            return false, err
+        end
+        for id, win in pairs(previousWindows) do
+            if not windows[id] then releaseWindow(win, state.appStates[name]) end
+        end
+        stopForDataChange(name, state.appStates[name])
+        server.apps[name], installedApps[name] = nil, nil
+        for id in pairs(server.monitors) do invalidateInput(id) end
+        local removed, why = pcall(fs.delete, staged)
+        if not removed then
+            log("App stopped; staged file cleanup pending: " .. tostring(why))
+            return true, "Cleanup pending"
+        end
+        return true
+    end
+
+    local function restoreArchivedRoutes(name)
+        local routes = state.archivedRoutes[name]
+        if not routes then return true end
+        local changes, owners = {}, {}
+        for logical, route in pairs(routes) do
+            if state.outputMap[logical] then return false, "Route already in use: " .. logical end
+            changes[#changes + 1] = {name = logical, clientId = route.clientId, side = route.side,
+                color = route.color, initialValue = false}
+            owners[logical] = name
+        end
+        state.archivedRoutes[name] = nil
+        local ok, err = checkpointOutputs(changes, true, owners)
+        if not ok then state.archivedRoutes[name] = routes end
+        return ok, err
+    end
+
+    local function backupPath(target)
+        if target == "@all" then return "backup_os_all.txt" end
+        if target == "@settings" then return "backup_os_settings.txt" end
+        if type(target) == "string" and target:match("^[%w_-]+$") then return "backup_app_" .. target .. ".txt" end
+    end
+    local function backupBundle(target)
+        local path = backupPath(target)
+        if not path then return nil end
+        return storage.load(path, function(bundle)
+            return bundle.version == 1 and bundle.target == target and type(bundle.time) == "string"
+                and type(bundle.data) == "table" and validState(bundle.data)
+                and type(bundle.data.appStates) == "table" and type(bundle.data.outputMap) == "table"
+                and type(bundle.data.windows) == "table" and type(bundle.data.appearance) == "table"
+                and type(bundle.data.archivedRoutes) == "table" and type(bundle.data.alertHistory) == "table"
+        end)
+    end
+    local function backupInfo(target)
+        local bundle = backupBundle(target)
+        if not bundle then return nil end
+        local day = bundle.day and "Day " .. bundle.day .. " " or ""
+        return day .. bundle.time .. " / " .. #sortedKeys(bundle.data.windows) .. " windows"
+    end
+    local function listBackups()
+        local result, found = {}, {}
+        local function include(id)
+            if not found[id] and backupBundle(id) then
+                result[#result + 1] = {id = id, label = id == "@all" and "Entire OS" or id == "@settings" and "OS settings" or appTitle(id)}
+                found[id] = true
+            end
+        end
+        include("@all"); include("@settings")
+        for _, file in ipairs(fs.list("")) do
+            local base = file:gsub("%.bak$", ""):gsub("%.tmp$", "")
+            local name = base:match("^backup_app_([%w_-]+)%.txt$")
+            if name then include(name) end
+        end
+        table.sort(result, function(a, b)
+            local function key(item)
+                return item.id == "@all" and "0" or item.id == "@settings" and "1" or "2" .. item.label:lower()
+            end
+            local left, right = key(a), key(b)
+            return left == right and a.id < b.id or left < right
+        end)
+        return result
+    end
+
+    local function createBackup(target)
+        local path = backupPath(target)
+        if not path then return false, "Invalid backup scope" end
+        local all, desktop = target == "@all", target == "@all" or target == "@settings"
+        local data = {appStates = {}, outputMap = {}, archivedRoutes = {}, alertHistory = {},
+            appearance = desktop and copy(state.appearance) or {appColours = {}}}
+        if not all then
+            data.appearance.appColours = {}
+            if not desktop then data.appearance.appColours[target] = state.appearance.appColours[target] end
+        end
+        for name, value in pairs(state.appStates) do if all or name == target then data.appStates[name] = copy(value) end end
+        for logical, owner in pairs(savedOutputOwners()) do
+            if all or owner == target then
+                data.outputMap[logical] = copy(state.outputMap[logical])
+                data.outputMap[logical].owner = owner
+            end
+        end
+        for name, value in pairs(state.archivedRoutes) do if all or name == target then data.archivedRoutes[name] = copy(value) end end
+        for _, item in ipairs(state.alertHistory) do
+            if desktop or item.appName == target then data.alertHistory[#data.alertHistory + 1] = copy(item) end
+        end
+        data.windows = saveWindows(function(win) return desktop or win.appName == target end)
+        if desktop then
+            data.clientNames, data.desktops = copy(state.clientNames), copy(state.desktops)
+            data.uptimeHistory = copy(state.uptimeHistory)
+        end
+        local bundle = stamp()
+        bundle.target, bundle.version, bundle.data = target, 1, data
+        local ok, err = storage.save(path, bundle, true)
+        if ok then log("Backup saved to " .. path) end
+        return ok, err
+    end
+
+    local function restoreBackup(target)
+        local bundle = backupBundle(target)
+        if not bundle then return false, "Backup missing or unreadable" end
+        local data = bundle.data
+        local all, desktop = target == "@all", target == "@all" or target == "@settings"
+        local function owns(name) return all or name == target end
+        local previous = {}
+        for _, key in ipairs({"windows", "appStates", "appearance", "archivedRoutes", "desktops", "clientNames",
+            "uptimeHistory", "alertHistory", "notificationSequence", "nextWindowId"}) do previous[key] = state[key] end
+        local owners, changes, overrides = savedOutputOwners(), {}, {}
+        local archive, wantedRoutes = {}, {}
+        for name, routes in pairs(state.archivedRoutes) do if not owns(name) then archive[name] = copy(routes) end end
+        for name, routes in pairs(data.archivedRoutes) do if owns(name) then archive[name] = copy(routes) end end
+        for logical, route in pairs(data.outputMap) do
+            local owner = route.owner
+            if type(owner) ~= "string" or not owns(owner) then return false, "Invalid route owner" end
+            if owners[logical] and not owns(owners[logical]) then return false, "Route already in use: " .. logical end
+            if owner == "@settings" or server.apps[owner] then wantedRoutes[logical] = route
+            else
+                archive[owner] = archive[owner] or {}
+                archive[owner][logical] = copy(route)
+            end
+        end
+        for _, name in ipairs(sortedKeys(archive)) do
+            if owns(name) and server.apps[name] then
+                for logical, route in pairs(archive[name]) do
+                    if owners[logical] and not owns(owners[logical]) then return false, "Route already in use: " .. logical end
+                    wantedRoutes[logical] = copy(route)
+                    wantedRoutes[logical].owner = name
+                end
+                archive[name] = nil
+            end
+        end
+        for logical, owner in pairs(owners) do
+            if owns(owner) and not wantedRoutes[logical] then changes[#changes + 1] = {name = logical, remove = true} end
+        end
+        for logical, route in pairs(wantedRoutes) do
+            changes[#changes + 1] = {name = logical, clientId = route.clientId, side = route.side,
+                color = route.color, initialValue = false}
+            overrides[logical] = route.owner
+        end
+
+        local windows, viewStates, nextId, appStates = {}, {}, state.nextWindowId, {}
+        for id, win in pairs(state.windows) do
+            if not desktop and win.appName ~= target then windows[id] = win end
+        end
+        local missing = 0
+        for _, key in ipairs(sortedKeys(data.windows)) do
+            local old = data.windows[key]
+            if type(old) ~= "table" or type(old.appName) ~= "string" or type(old.monitorId) ~= "string" then return false, "Invalid saved window" end
+            if not old.transientWindow and (desktop or old.appName == target) then
+                if definition(old.appName) then
+                    local win = copy(old)
+                    viewStates[nextId] = viewSnapshot(win.viewState)
+                    win.viewState, win.id = nil, nextId
+                    windows[nextId], nextId = win, nextId + 1
+                else missing = missing + 1 end
+            end
+        end
+        for name, value in pairs(state.appStates) do if not owns(name) then appStates[name] = value end end
+        for name, value in pairs(data.appStates) do if owns(name) then appStates[name] = copy(value) end end
+        for name in pairs(server.apps) do appStates[name] = appStates[name] or {} end
+        appStates["@settings"] = appStates["@settings"] or {}
+        local appearance = desktop and copy(data.appearance) or copy(state.appearance)
+        if not all then
+            appearance.appColours = copy(state.appearance.appColours)
+            if not desktop then appearance.appColours[target] = (data.appearance.appColours or {})[target] end
+        end
+        appearance.appColours = appearance.appColours or {}
+        for key, value in pairs(defaultAppearance) do if not colour(appearance[key]) then appearance[key] = value end end
+        local alerts = {}
+        if not desktop then
+            for _, record in ipairs(state.alertHistory) do if record.appName ~= target then alerts[#alerts + 1] = record end end
+        end
+        local sequence = state.notificationSequence
+        for _, record in ipairs(data.alertHistory) do
+            if desktop or record.appName == target then
+                local entry = copy(record)
+                sequence = sequence + 1
+                entry.sequence, entry.open = sequence, nil
+                appendHistory(alerts, entry, 128)
+            end
+        end
+
+        state.windows, state.appStates, state.appearance, state.archivedRoutes = windows, appStates, appearance, archive
+        state.nextWindowId, state.alertHistory, state.notificationSequence = nextId, alerts, sequence
+        if desktop then
+            state.desktops, state.clientNames, state.uptimeHistory = data.desktops or {}, data.clientNames or {}, data.uptimeHistory or {}
+        end
+        for id, view in pairs(viewStates) do server.views[id] = view end
+        local ok, err = checkpointOutputs(changes, true, overrides)
+        if not ok then
+            for key, value in pairs(previous) do state[key] = value end
+            for id in pairs(viewStates) do server.views[id] = nil end
+            return false, err
+        end
+        for id, win in pairs(previous.windows) do if not windows[id] then releaseWindow(win, previous.appStates[win.appName]) end end
+        for _, name in ipairs(sortedKeys(server.running)) do
+            if owns(name) then stopForDataChange(name, previous.appStates[name])
+            else stopApp(name) end
+        end
+        for _, name in ipairs(sortedKeys(server.apps)) do
+            if owns(name) then loadApp(name) end
+            if server.apps[name] and (hasViews(name) or isService(server.apps[name])) then startApp(name) end
+        end
+        if hasViews("@settings") then startApp("@settings") end
+        for id, monitor in pairs(server.monitors) do
+            if desktop then monitor.launcher, monitor.layoutMenu, monitor.placement, monitor.inbox = nil, nil, nil, nil end
+            invalidateInput(id)
+        end
+        log("Restored backup " .. backupPath(target))
+        return true, missing > 0 and "Some apps need install" or err
+    end
+
+    server.systemApps["@settings"] = Settings.new({targets = resetTargets, reset = resetSavedData,
+        installed = installedTargets, delete = uninstallApp, backups = listBackups, backupInfo = backupInfo,
+        backup = createBackup, restore = restoreBackup})
+
     function api.placeWindow(id, x, y, width, height)
         local win = state.windows[id]
         if not win then return false, "Unknown window" end
@@ -2396,8 +3724,11 @@ function Server.new(net, storage, config, logger)
                         dialog.current = option and state.appearance[option.field] or api.getAppColour(win.appName)
                         content, dialog.hits = Gui.palette(body.width, body.height, dialog.current,
                             dialog.error or (option and option.title or "UI color"))
-                    elseif dialog.kind == "sensor" then content = SensorPicker.render(dialog, body.width, body.height, api.getSensorClients())
-                    else content = Picker.render(dialog, body.width, body.height, api.getIOClients()) end
+                    elseif dialog.kind == "sensor" then
+                        content = SensorPicker.render(dialog, body.width, body.height, api.getSensorClients(), api.clientName)
+                    else
+                        content = Picker.render(dialog, body.width, body.height, api.getIOClients(), api, ioTests[dialog.chosen.clientId])
+                    end
                 else
                     ok, content = appCall(win.appName, "render", body.width, body.height,
                         state.appStates[win.appName], api, viewContext(win))
@@ -2438,9 +3769,12 @@ function Server.new(net, storage, config, logger)
                         items[#items + 1] = {label = (server.apps[name].title or name) .. (server.running[name] and " *" or ""), value = name, enabled = true}
                     end
                 end
+                local hasClock = false
+                for _, hit in ipairs(monitor.taskbar) do if hit.action == "inbox" then hasClock = true; break end end
+                if not hasClock then items[#items + 1] = {label = "Alert inbox", value = "@inbox", enabled = true} end
                 table.sort(items,function(a,b)
-                    local left=(a.value=="@settings" and "OS settings" or definition(a.value).title or a.value):lower()
-                    local right=(b.value=="@settings" and "OS settings" or definition(b.value).title or b.value):lower()
+                    local left=((definition(a.value) or {}).title or a.label):lower()
+                    local right=((definition(b.value) or {}).title or b.label):lower()
                     return left==right and a.value<b.value or left<right
                 end)
                 if #items == 1 then
@@ -2515,6 +3849,15 @@ function Server.new(net, storage, config, logger)
                 placement.hits[#placement.hits + 1] = {x1 = x, x2 = monitor.width, y = 1, action = "place"}
             end
         end
+        monitor.inboxModel = nil
+        if not fullscreen and monitor.inbox then
+            local model = Inbox.render(monitor, state.alertHistory, api)
+            monitor.inboxModel = model
+            for y = 1, model.height do write(model.x, y, model.lines[y], model.width) end
+            for _, style in ipairs(model.lines.styles) do
+                surface.style(model.x + style.x - 1, style.y, style.width, style.height or 1, style.fg, style.bg)
+            end
+        end
         local notification = firstNotification()
         monitor.notification = notification and notificationModel(notification,monitor) or nil
         if notification then
@@ -2580,6 +3923,8 @@ function Server.new(net, storage, config, logger)
             else api.layoutWindow(fullscreen.id, "restore") end
             return -- The invisible exit cell never reaches the app underneath.
         end
+        if not fullscreen and monitor.inbox and monitor.inboxModel
+            and Inbox.touch(monitor, monitor.inboxModel, api, x, y) then return end
         local placement = not fullscreen and monitor.placement
         if placement then
             local win = state.windows[placement.windowId]
@@ -2637,6 +3982,9 @@ function Server.new(net, storage, config, logger)
                     monitor.layoutMenu = nil
                     if hit.action == "launcher" then
                         monitor.launcher = not monitor.launcher; monitor.menuPage = 1
+                    elseif hit.action == "inbox" then
+                        if monitor.inbox then monitor.inbox = nil else monitor.inbox = {} end
+                        monitor.launcher, monitor.placement = false, nil
                     elseif hit.action == "previous" or hit.action == "next" then
                         local saved = desktopState(id)
                         saved.scroll = (saved.scroll or 1) + (hit.action == "next" and 1 or -1)
@@ -2665,7 +4013,8 @@ function Server.new(net, storage, config, logger)
                         if monitor.launcher then
                             local existing
                             for _, win in ipairs(windowsFor(id)) do if win.appName == hit.item.value then existing = win end end
-                            if existing then focus(existing); server.save() else api.openApp(hit.item.value, id) end
+                            if hit.item.value == "@inbox" then monitor.inbox = {}
+                            elseif existing then focus(existing); server.save() else api.openApp(hit.item.value, id) end
                             monitor.launcher = false
                         else
                             local win = state.windows[model.windowId]
@@ -2727,6 +4076,9 @@ function Server.new(net, storage, config, logger)
                         elseif dialog.kind == "sensor" then action, address = SensorPicker.touch(dialog, contentX, contentY)
                         else action, address = Picker.touch(dialog, contentX, contentY) end
                         if action == "cancel" then server.dialogs[win.id] = nil
+                        elseif action == "test" then
+                            local ok, err = testOutput(address)
+                            if not ok then dialog.error = tostring(err) end
                         elseif action == "selected" then
                             local hook = dialog.kind == "sensor" and "handleSensorSelection" or "handleIOSelection"
                             local ok, accepted, err = appCall(win.appName, hook, dialog.key,
@@ -2807,11 +4159,17 @@ function Server.new(net, storage, config, logger)
             end
             if message.clientType == "sensor" then sensors.announce(client, message, reconnect) end
             net.toClient(client, {type = "welcome", clientId = id, nonce = message.nonce, serverSession = server.session})
-            if reconnect then log(message.clientType .. " connected: " .. id .. " (computer " .. message.sender .. ")") end
+            if reconnect then
+                client.since = now
+                logUptime(id, message.clientType, true, now)
+                log(message.clientType .. " connected: " .. id .. " (computer " .. message.sender .. ")")
+            end
             if message.clientType == "io" then
                 -- Routine announcements resend the same snapshot as a health
                 -- check. They do not revoke an acknowledgement already earned.
                 if ioReset then
+                    history.offline(id, now)
+                    ioTests[id] = nil
                     client.ackedRevision, client.outputSnapshot, client.wireRevisions = -1, nil, {}
                 end
                 server.syncIO(id, ioChanged)
@@ -2822,11 +4180,18 @@ function Server.new(net, storage, config, logger)
             if not client or not client.capabilities[message.side] or not integer(message.value, 0, 65535)
                 or type(message.digital) ~= "boolean" then return end
             client.inputs[message.side] = {value = message.value, digital = message.digital}
+            history.record(id, message.side, "input", now, message.value, message.digital)
             client.lastSeen = now
         elseif message.type == "ioAck" then
             local client = registered(server.ioClients, message, replyChannel)
             if client and message.revision == client.revision then
                 client.ackedRevision, client.lastSeen = message.revision, now
+                recordOutputs(id, client, now)
+                local test = ioTests[id]
+                if test and not test.acknowledged then
+                    test.acknowledged = true
+                    test.untilTime = math.min(test.untilTime, os.clock() + 1.5)
+                end
             end
         elseif message.type == "sensorCatalog" or message.type == "sensorSample" then
             local client = registered(server.sensorClients, message, replyChannel)
@@ -2868,22 +4233,26 @@ function Server.new(net, storage, config, logger)
     end
 
     function server.start()
+        logUptime(tostring(net.id), "os", true, os.clock())
         -- A persisted boot generation prevents stale output commands after an OS reboot.
         assert(server.save(), "Cannot checkpoint OS startup")
         for _, file in ipairs(fs.list("")) do
-            local name = file:match("^apps_([%w_-]+)%.lua$")
+            local name = file:match("^uninstall_([%w_-]+)%.lua$")
             if name and not fs.isDir(file) then
+                local ok, err
+                if state.archivedRoutes[name] or fs.exists(appPath(name)) then ok, err = pcall(fs.delete, file)
+                else ok, err = pcall(fs.move, file, appPath(name)) end
+                if not ok then log("App file recovery failed: " .. tostring(err)) end
+            end
+        end
+        for _, file in ipairs(fs.list("")) do
+            local name = file:match("^apps_([%w_-]+)%.lua$")
+            if name and name ~= "system" and not fs.isDir(file) then
+                installedApps[name] = true
                 -- Files and an old auto-populated registry are not consent to
                 -- run an app. Only explicitly enabled user apps may execute.
                 if config.enabledApps and config.enabledApps[name] == true then
-                    local chunk, err = loadfile(file)
-                    local ok, app = false, err
-                    if chunk then ok, app = Work.call(chunk) end
-                    if ok and validApp(app) then
-                        server.apps[name], state.appRegistry[name] = app, true
-                        if type(state.appStates[name]) ~= "table" then state.appStates[name] = {} end
-                        log("Loaded app: " .. name)
-                    else log("Cannot load app " .. name .. ": " .. tostring(app)) end
+                    loadApp(name)
                 end
             end
         end
@@ -2894,6 +4263,8 @@ function Server.new(net, storage, config, logger)
         end
         for _,id in ipairs(discard) do state.windows[id],server.views[id]=nil,nil end
         for _, name in ipairs(sortedKeys(server.apps)) do
+            local ok, err = restoreArchivedRoutes(name)
+            if not ok then log("Saved routes for " .. name .. ": " .. tostring(err)) end
             if isService(server.apps[name]) or hasViews(name) then startApp(name) end
         end
         for _, name in ipairs(sortedKeys(server.systemApps)) do if hasViews(name) then startApp(name) end end
@@ -2904,10 +4275,12 @@ function Server.new(net, storage, config, logger)
 
     function server.tick(now)
         net.ensureModem()
-        for _, group in pairs(clientGroups) do
+        for kind, group in pairs(clientGroups) do
             for id, client in pairs(group) do
                 if client.online and now - client.lastSeen >= config.clientTimeout then
                     client.online = false
+                    logUptime(id, kind, false, now, client.since)
+                    if kind == "io" then history.offline(id, now) end
                     log("Client offline: " .. id)
                     if client.values then
                         if client.values.playerOnline ~= nil then server.playerOnline = false end
@@ -2926,6 +4299,12 @@ function Server.new(net, storage, config, logger)
             end
         end
         sensors.tick(now)
+        for _, id in ipairs(sortedKeys(ioTests)) do
+            if now >= ioTests[id].untilTime then
+                ioTests[id] = nil
+                server.syncIO(id, true)
+            end
+        end
         for id, client in pairs(server.ioClients) do
             if client.online and client.ackedRevision ~= client.revision
                 and now - (client.lastSent or -math.huge) >= config.retryInterval then server.syncIO(id, false) end
@@ -3046,7 +4425,13 @@ function Server.new(net, storage, config, logger)
             server.refreshMonitors(false)
             return {ok and "Window updated" or tostring(err)}
         elseif cmd == "save" or cmd == "quit" then
+            local previous
+            if cmd == "quit" then
+                previous, state.uptimeHistory = state.uptimeHistory, copy(state.uptimeHistory)
+                logUptime(tostring(net.id), "os", false, os.clock(), 0)
+            end
             local ok, err = server.save()
+            if not ok and previous then state.uptimeHistory = previous end
             return {ok and "State saved" or tostring(err)}, cmd == "quit" and ok
         end
         return {"Unknown command; type help"}
@@ -3544,7 +4929,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v36: starting")
+console.log("SmartHome OS v39: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -4497,6 +5882,7 @@ function Hub.new(net, clients, session)
             result[field] = copy(field == "data" and options and options.profile == "ae_storage" and Data.aeSummary(value) or value)
         end
         result.age, result.target = math.max(0, os.clock() - (reading.dataTime or reading.time)), copy(found)
+        result.maxAge = client.sensorMaxAge
         if result.age > client.sensorMaxAge and result.status == "ok" then result.status, result.error = "stale", "Reading outdated" end
         result.reactor = Data.reactor(result.data)
         return result
@@ -4558,7 +5944,8 @@ local Picker = {}
 function Picker.new(key, current, kind)
     return {kind = "sensor", key = key, chosen = current or {}, filter = kind, stage = 1, page = 1}
 end
-function Picker.render(dialog, width, height, clients)
+function Picker.render(dialog, width, height, clients, clientName)
+    local label = clientName or function(id) return id end
     local list, chosen, selectedClient, selectedPort = {}, dialog.chosen
     local function compatible(port)
         if port.status ~= "ok" or not port.card then return false end
@@ -4569,7 +5956,7 @@ function Picker.render(dialog, width, height, clients)
         return false
     end
     if dialog.stage == 1 then
-        for _, client in ipairs(clients) do list[#list + 1] = {label = client.id .. (client.online and " +" or " -"), value = client.id} end
+        for _, client in ipairs(clients) do list[#list + 1] = {label = label(client.id) .. (client.online and " +" or " -"), value = client.id} end
     elseif dialog.stage == 2 then
         for _, client in ipairs(clients) do if client.id == chosen.clientId then
             selectedClient = client
@@ -4597,14 +5984,14 @@ function Picker.render(dialog, width, height, clients)
     ui.style(1, 1, width, height, 1, 32768)
     if dialog.stage == 4 then
         ui.heading("Use sensor?", 2048)
-        ui.text(2, chosen.clientId); ui.text(3, chosen.side .. " / " .. chosen.target)
+        ui.text(2, label(chosen.clientId)); ui.text(3, chosen.side .. " / " .. chosen.target)
         if height >= 7 then ui.text(4, chosen.targetType or "") end
         if dialog.error then ui.text(height - 2, dialog.error) end
         ui.button(height - 1, "Back", "back")
         ui.button(height, "Use", "use", 1, math.floor(width / 2), true, 32)
         ui.button(height, "Cancel", "cancel", math.floor(width / 2) + 1, width)
     else
-        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {chosen.clientId,chosen.side} or {chosen.clientId},width,height)
+        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {label(chosen.clientId),chosen.side} or {label(chosen.clientId)},width,height)
         local header = path and 2 or 1
         local slots = #list<=height-header-1 and height-header-1 or height-header-2
         local pages = math.max(1, math.ceil(#list / slots))
@@ -4770,7 +6157,7 @@ workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v36")
+print("SmartHome installer: bundled-v39")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
@@ -4785,6 +6172,7 @@ if role == "app" then
     assert(not source and not args[4]
         or (source == "--file" or source == "--ref") and args[4] and not args[5]
         or source and source:match("^%w+$") and not args[4], appUsage)
+    assert(name ~= "system", "System Overview is built into OS settings on bundled-v39")
     local github = source == nil or source == "--ref"
     local ref = source == "--ref" and args[4] or "main"
     assert(not github or ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)
@@ -4919,6 +6307,9 @@ else
         files[#files + 1] = "lib_me.lua"
         files[#files + 1] = "lib_console.lua"
         files[#files + 1] = "lib_settings.lua"
+        files[#files + 1] = "lib_system.lua"
+        files[#files + 1] = "lib_alert_inbox.lua"
+        files[#files + 1] = "lib_io_history.lua"
         files[#files + 1] = "lib_io_picker.lua"
         files[#files + 1] = "lib_desktop.lua"
         files[#files + 1] = "lib_server.lua"
@@ -4980,7 +6371,7 @@ if role ~= "app" then
             if migrated then
                 assert(settings.enabledApps == nil or type(settings.enabledApps) == "table", "Invalid enabledApps setting")
                 for name, enabled in pairs(settings.enabledApps or {}) do
-                    if enabled == true then
+                    if enabled == true and name ~= "system" then
                         assert(type(name) == "string" and name:match("^[%w_-]+$"), "Invalid enabled app name")
                         local path, oldPath = "apps_" .. name .. ".lua", "Apps/" .. name .. ".lua"
                         if not fs.exists(path) and fs.exists(oldPath) then

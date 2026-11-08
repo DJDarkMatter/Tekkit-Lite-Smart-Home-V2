@@ -164,6 +164,7 @@ function Hub.new(net, clients, session)
             result[field] = copy(field == "data" and options and options.profile == "ae_storage" and Data.aeSummary(value) or value)
         end
         result.age, result.target = math.max(0, os.clock() - (reading.dataTime or reading.time)), copy(found)
+        result.maxAge = client.sensorMaxAge
         if result.age > client.sensorMaxAge and result.status == "ok" then result.status, result.error = "stale", "Reading outdated" end
         result.reactor = Data.reactor(result.data)
         return result

@@ -3,9 +3,10 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     local Desktop = dofile("lib_desktop.lua")
     local file = assert(io.open("apps_coffee.lua", "r"))
     local coffee = file:read("*a"); file:close()
-    local function setup(withCoffee, width, height)
+    local function setup(withCoffee, width, height, enabledApps)
         local bus = newBus()
-        local central = bus.computer(10, "server", {apps = withCoffee and {["apps_coffee.lua"] = coffee} or {}}):start()
+        local apps = type(withCoffee) == "table" and withCoffee or withCoffee and {["apps_coffee.lua"] = coffee} or {}
+        local central = bus.computer(10, "server", {apps = apps, enabledApps = enabledApps}):start()
         local top, left = monitor(width or 64, height or 24), monitor(45, 18)
         local display = bus.computer(13, "monitor", {monitors = {top = top, left = left}}):start()
         local t = {bus = bus, central = central, display = display, top = top, left = left, api = central.server.api}
@@ -16,20 +17,21 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             local id = assert(t.api.openApp(name, "monitor_13:" .. (side or "top"), x, y, w, h))
             t.paint(); return id
         end
-        function t.click(id, action, value)
+        function t.hits(id)
             t.paint()
             local win = t.window(id)
             local dialog = t.central.server.dialogs[id]
-            local hits
-            if dialog then hits = dialog.hits
-            else
-                local app = t.central.server.systemApps[win.appName] or t.central.server.apps[win.appName]
-                local content = app.render(win.width - 2, win.height - 2, t.central.server.state.appStates[win.appName], t.api,
-                    {windowId = id, appName = win.appName, monitorId = win.monitorId, view = t.central.server.views[id]})
-                hits = content.hits
-            end
-            for _, hit in ipairs(hits or {}) do
-                if hit.action == action and (value == nil or hit.value == value) then
+            if dialog then return dialog.hits end
+            local app = t.central.server.systemApps[win.appName] or t.central.server.apps[win.appName]
+            local content = app.render(win.width - 2, win.height - 2, t.central.server.state.appStates[win.appName], t.api,
+                {windowId = id, appName = win.appName, monitorId = win.monitorId, view = t.central.server.views[id]})
+            return content.hits
+        end
+        function t.click(id, action, value)
+            local win = t.window(id)
+            for _, hit in ipairs(t.hits(id) or {}) do
+                if hit.action == action and hit.enabled ~= false
+                    and (value == nil or hit.value == value or type(value) == "function" and value(hit.value)) then
                     t.touch(win.monitorId:match(":([^:]+)$"), win.x + hit.x1, win.y + (hit.y1 or hit.y)); return
                 end
             end
@@ -85,7 +87,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local id
         for key, win in pairs(t.central.server.state.windows) do if win.appName == "@settings" then id = key end end
         assert(id)
-        t.click(id, "background")
+        t.click(id, "appearance"); t.click(id, "background")
         t.click(id, "colour", 128)
         equal(t.api.getOSSettings().backgroundColour, 128)
         equal(t.top.bg[20][60], 128); equal(t.left.bg[2][2], 128)
@@ -378,7 +380,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local state = t.central.server.state.appStates.coffee
         state.remainingTime = 1234
         local wiring = serialize(t.central.server.state.outputMap)
-        t.click(settings, "windowBorder"); t.click(settings, "colour", 16)
+        t.click(settings, "appearance"); t.click(settings, "windowBorder"); t.click(settings, "colour", 16)
         t.click(settings, "taskbar"); t.click(settings, "colour", 8192)
         local preferences = t.api.getOSSettings()
         equal(preferences.windowBorderColour, 16); equal(preferences.taskbarColour, 8192)
@@ -405,7 +407,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     function tests.appearance_system_colours_roll_back_failed_saves_and_default_old_or_invalid_preferences()
         local t = setup(true)
         local id = t.open("@settings")
-        t.click(id, "windowBorder")
+        t.click(id, "appearance"); t.click(id, "windowBorder")
         local before = t.central.disk.files["configs_os_state.txt"]
         t.central.disk.failWrite = true; t.click(id, "colour", 2)
         equal(t.api.getOSSettings().windowBorderColour, 128)
@@ -428,18 +430,219 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.central.server.state.appStates.coffee.remainingTime, 4321)
     end
 
-    function tests.appearance_all_three_os_colour_controls_fit_compact_settings_windows()
+    function tests.appearance_os_colours_and_reset_button_fit_compact_settings_windows()
         local t = setup(false)
         local app = t.central.server.systemApps["@settings"]
         for _, width in ipairs({12, 20, 28}) do for _, height in ipairs({6, 8, 10}) do
-            local lines = app.render(width, height, {}, t.api)
-            local actions = {}
-            for _, h in ipairs(lines.hits) do
-                assert(h.y >= 1 and h.y <= height); assert(not actions[h.y], "OS appearance controls overlap")
-                actions[h.y] = true
+            for _, section in ipairs({"home", "appearance", "data", "screensavers"}) do
+                local lines = app.render(width, height, {}, t.api, {windowId = 1, view = {section = section}})
+                local occupied = {}
+                for _, hit in ipairs(lines.hits) do
+                    assert(hit.y >= 1 and hit.y <= height and hit.x1 >= 1 and hit.x2 <= width)
+                    for x = hit.x1, hit.x2 do
+                        local key = hit.y .. ":" .. x
+                        assert(not occupied[key], "Settings controls overlap")
+                        occupied[key] = true
+                    end
+                end
             end
-            equal(#lines.hits, 3)
         end end
+    end
+
+    function tests.appearance_reset_list_pins_os_scopes_and_sorts_installed_and_saved_apps_on_small_monitors()
+        local t = setup({
+            ["apps_zebra.lua"] = 'return {title="Alpha"}',
+            ["apps_alpha.lua"] = 'return {title="Zulu"}',
+            ["apps_disabled.lua"] = 'error("Disabled app was executed")',
+        }, 15, 10, {zebra = true, alpha = true})
+        t.central.server.state.appStates.old_app = {setting = true}
+        local id = t.open("@settings")
+        t.click(id, "data"); t.click(id, "resetData")
+        local listed = {}
+        while true do
+            local current = t.central.server.views[id].pages.resetData
+            local nextPage
+            for _, hit in ipairs(t.hits(id)) do
+                if hit.action == "selectScope" then listed[#listed + 1] = hit.value.id end
+                if hit.action == "page" and hit.enabled ~= false and hit.value.page > current then nextPage = hit.value.page end
+            end
+            if not nextPage then break end
+            t.click(id, "page", function(value) return value.page == nextPage end)
+        end
+        equal(table.concat(listed, ","), "@all,@settings,zebra,disabled,old_app,alpha")
+        equal(t.central.server.apps.disabled, nil)
+    end
+
+    function tests.appearance_reset_app_clears_its_windows_data_and_routes_and_preserves_shared_output()
+        local panel = [[
+            local starts = 0
+            return {
+                title = "Wire panel",
+                init = function(state)
+                    starts = starts + 1
+                    state.starts = starts
+                end,
+                render = function(w, h, state, api)
+                    local ui = api.ui.content(w, h)
+                    ui.button(2, "Configure", "configure")
+                    return ui.lines
+                end,
+                handleTouch = function(x, y, w, h, state, api)
+                    state.configured = true
+                    assert(api.mapOutput("custom_shared", "io_11", "left", 1, true))
+                    assert(api.mapOutput("custom_exclusive", "io_11", "front", nil, true))
+                    assert(api.watchSensor("custom_watch", {clientId="sensor_14",side="top",target="test"}))
+                    return true
+                end,
+            }
+        ]]
+        local t = setup({["apps_wires.lua"] = panel, ["apps_coffee.lua"] = coffee})
+        local bridge = t.bus.computer(11, "io"):start()
+        local main, other = t.open("wires"), t.open("wires", "left")
+        assert(t.api.mapOutput("manual_shared", "io_11", "left", 1, true))
+        t.click(main, "configure")
+        local state = t.central.server.state
+        equal(state.outputMap.custom_shared.owner, "wires")
+        assert(t.api.setAppColour("wires", 32))
+        state.appStates.coffee.totalHarvests = 42
+        t.bus.advance(1)
+        equal(bridge.bundled.left, 1)
+        equal(bridge.digital.front, true)
+        local settings = t.open("@settings")
+        t.click(settings, "data"); t.click(settings, "resetData")
+        t.click(settings, "selectScope", function(item) return item.id == "wires" end)
+        assert(state.appStates.wires.configured)
+        t.click(settings, "commit")
+        t.bus.advance(1)
+        equal(t.window(main), nil); equal(t.window(other), nil)
+        equal(t.central.server.views[other], nil)
+        equal(next(state.appStates.wires), nil)
+        equal(state.appearance.appColours.wires, nil)
+        equal(state.outputMap.custom_shared, nil); equal(state.outputMap.custom_exclusive, nil)
+        equal(t.central.server.sensors.watches.custom_watch, nil)
+        equal(bridge.bundled.left, 1); equal(bridge.digital.front, false)
+        equal(state.appStates.coffee.totalHarvests, 42)
+        equal(t.api.getOutput("manual_shared"), true)
+        assert(t.window(settings))
+        t.open("wires", "left")
+        equal(state.appStates.wires.starts, 1, "Reset must reload the app's private runtime")
+        equal(state.appStates.wires.configured, nil)
+        local backup = unserialize(t.central.disk.files["configs_os_state.txt.bak"] or "") or {}
+        assert(not (backup.appStates and backup.appStates.wires and backup.appStates.wires.configured),
+            "Recovery must not restore deleted app data")
+    end
+
+    function tests.appearance_reset_respects_level_emitter_routes_imported_from_solar_farm()
+        local t = setup(false)
+        local state = t.central.server.state
+        state.appStates.solar_farm = {oldPreference = 7}
+        state.appStates.level_emitter = {rules = {{outputName = "solar_farm_alarm_1"}}}
+        assert(t.api.mapOutput("solar_farm_alarm_1", "io_11", "front", 1))
+        state.outputMap.solar_farm_alarm_1.owner = nil
+        local id = t.open("@settings")
+        t.click(id, "data"); t.click(id, "resetData")
+        t.click(id, "selectScope", function(item) return item.id == "solar_farm" end)
+        t.click(id, "commit")
+        equal(state.appStates.solar_farm, nil)
+        assert(state.outputMap.solar_farm_alarm_1)
+        t.click(id, "selectScope", function(item) return item.id == "level_emitter" end)
+        t.click(id, "commit")
+        equal(state.appStates.level_emitter, nil)
+        equal(state.outputMap.solar_farm_alarm_1, nil)
+    end
+
+    function tests.appearance_reset_os_settings_clears_desktop_and_os_routes_but_keeps_app_data_and_legacy_routes()
+        local t = setup(true)
+        t.open("coffee", "left")
+        local id = t.open("@settings")
+        local state = t.central.server.state
+        state.appStates.coffee.totalHarvests = 29
+        assert(t.api.setBackgroundColour(16))
+        assert(t.api.setAppColour("coffee", 32))
+        assert(t.api.mapOutput("coffee_harvest", "io_11", "front", nil))
+        state.outputMap.coffee_harvest.owner = nil -- A mapping saved by v37.
+        assert(t.api.mapOutput("manual", "io_11", "left", 1))
+        t.click(id, "data"); t.click(id, "resetData")
+        t.click(id, "selectScope", function(item) return item.id == "@settings" end)
+        t.click(id, "commit")
+        equal(next(state.windows), nil)
+        equal(state.outputMap.manual, nil)
+        assert(state.outputMap.coffee_harvest)
+        equal(t.api.getOSSettings().backgroundColour, 2048)
+        equal(t.api.getAppColour("coffee"), 32)
+        equal(state.appStates.coffee.totalHarvests, 29)
+        t.reboot()
+        equal(next(t.central.server.state.windows), nil)
+        equal(t.central.server.state.appStates.coffee.totalHarvests, 29)
+        assert(t.central.server.state.outputMap.coffee_harvest)
+    end
+
+    function tests.appearance_factory_reset_requires_two_confirmations_and_clears_offline_routes_on_reconnect()
+        local t = setup(true)
+        local bridge = t.bus.computer(11, "io"):start()
+        t.open("coffee", "left")
+        local id = t.open("@settings")
+        local state = t.central.server.state
+        state.appStates.coffee.totalHarvests = 77
+        state.appStates.old_app = {settings = "old data"}
+        assert(t.api.mapOutput("manual", "io_11", "front", nil, true))
+        t.bus.advance(1)
+        equal(bridge.digital.front, true)
+        bridge.active = false
+        t.click(id, "data"); t.click(id, "resetData")
+        t.click(id, "selectScope", function(item) return item.id == "@all" end)
+        t.click(id, "confirmAgain")
+        equal(state.appStates.coffee.totalHarvests, 77)
+        assert(state.outputMap.manual)
+        t.click(id, "cancel")
+        equal(state.appStates.coffee.totalHarvests, 77)
+        t.click(id, "selectScope", function(item) return item.id == "@all" end)
+        t.click(id, "confirmAgain")
+        t.reboot()
+        state = t.central.server.state
+        for _, hit in ipairs(t.hits(id)) do assert(hit.action ~= "commit", "A reboot must clear the pending confirmation") end
+        t.click(id, "selectScope", function(item) return item.id == "@all" end)
+        t.click(id, "confirmAgain")
+        t.click(id, "commit")
+        equal(next(state.windows), nil); equal(next(state.outputMap), nil)
+        equal(state.appStates.coffee.totalHarvests, 0)
+        equal(state.appStates.old_app, nil)
+        assert(state.managedSides.io_11.front, "The released output needs an OFF snapshot on reconnect")
+        local config = unserialize(bridge.disk.files["configs_io.txt"])
+        config.safeOff = false
+        bridge.disk.files["configs_io.txt"] = serialize(config)
+        bridge = t.bus.computer(11, "io", {disk = bridge.disk}):start()
+        t.bus.advance(3)
+        equal(bridge.digital.front, false)
+        t.central.disk.files["configs_os_state.txt"] = "corrupt primary"
+        t.reboot()
+        equal(next(t.central.server.state.outputMap), nil)
+        equal(t.central.server.state.appStates.old_app, nil)
+        equal(t.central.server.state.appStates.coffee.totalHarvests, 0)
+    end
+
+    function tests.appearance_failed_reset_install_keeps_old_data_even_after_restart()
+        local t = setup(true)
+        local id = t.open("@settings")
+        local state = t.central.server.state
+        state.appStates.coffee.totalHarvests = 73
+        assert(t.api.mapOutput("manual", "io_11", "front", nil, true))
+        t.click(id, "data"); t.click(id, "resetData")
+        t.click(id, "selectScope", function(item) return item.id == "@all" end)
+        t.click(id, "confirmAgain")
+        local move = t.central.env.fs.move
+        t.central.env.fs.move = function(from, to)
+            if from:sub(-6) == ".reset" then error("Simulated reset replacement failure") end
+            return move(from, to)
+        end
+        t.click(id, "commit")
+        equal(state.appStates.coffee.totalHarvests, 73)
+        assert(state.outputMap.manual); assert(t.window(id))
+        equal(t.central.disk.files["configs_os_state.txt.reset"], nil)
+        t.reboot()
+        equal(t.central.server.state.appStates.coffee.totalHarvests, 73)
+        assert(t.central.server.state.outputMap.manual)
+        assert(t.window(id))
     end
 
 

@@ -937,7 +937,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v36", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v39", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -1412,6 +1412,7 @@ assert(hostLoadfile("tests_console.lua"))()(tests, newBus, monitor, serialize, u
 assert(hostLoadfile("tests_clock.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_system.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_work.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
+assert(hostLoadfile("tests_v39.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 local names, failures = {}, {}
 local testFilter=rawget(_G,"SMART_HOME_TEST_FILTER") or os.getenv and os.getenv("SMART_HOME_TEST_FILTER")
 for name in pairs(tests) do if not testFilter or name:find(testFilter,1,true) then names[#names + 1] = name end end

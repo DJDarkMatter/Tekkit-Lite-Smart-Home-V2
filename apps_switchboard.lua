@@ -94,7 +94,7 @@ end
 
 function app.init(state, api, context)
     ready = false
-    assert(api.sharedOutputs and api.ui and api.ui.typeKey and api.ui.breadcrumb and api.pickIO and api.setAppColour, "Switchboard requires bundled-v33 OS; run inst server")
+    assert(api.sharedOutputs and api.ui and api.ui.typeKey and api.ui.actionAt and api.ui.breadcrumb and api.pickIO and api.setAppColour, "Switchboard requires bundled-v39 OS; run inst server")
     appName = context and context.appName or "switchboard"
     if state.version == nil then
         state.version, state.boards, state.nextBoardId, state.nextButtonId = 1, {}, 1, 1
@@ -128,6 +128,7 @@ function app.init(state, api, context)
     end
     assert(integer(state.nextBoardId, maxBoard + 1, 2147483001)
         and integer(state.nextButtonId, maxButton + 1, 2147483001), "Invalid saved switch IDs")
+    state.scenes, state.nextSceneId = state.scenes or {}, state.nextSceneId or 1
     ready = true
 end
 
@@ -265,11 +266,12 @@ local function build(width, height, state, api, context)
             end)
             button(height - 1, "+ Add view", "add", nil, nil, nil, #state.boards < MAX_VIEWS, accent)
         end
-        footer("Settings", "settings")
+        button(height, "Scenes", "scenes", nil, 1, math.floor(width / 2))
+        button(height, "Settings", "settings", nil, math.floor(width / 2) + 1, width)
     elseif screen == "sources" then
         local items = {{label = "+ Empty view", action = "empty"}}
         for _, client in ipairs(api.getIOClients()) do
-            items[#items + 1] = {label = (client.online and "+ " or "- ") .. client.id, action = "client", value = client.id}
+            items[#items + 1] = {label = (client.online and "+ " or "- ") .. (client.displayName or client.id), action = "client", value = client.id}
         end
         menu("New view", items, "sources", "home")
     elseif screen == "sides" then
@@ -277,11 +279,11 @@ local function build(width, height, state, api, context)
         for _, client in ipairs(api.getIOClients()) do if client.id == view.newClient then available = client.sides; break end end
         local items = {}
         for _, side in ipairs(available) do items[#items + 1] = {label = side, action = "side", value = side} end
-        menu("Select side", items, "sides", "sources", {view.newClient})
+        menu("Select side", items, "sides", "sources", {(api.clientName or tostring)(view.newClient)})
         if #items == 0 then ui.text(3, "No free sides", true) end
     elseif screen == "create" then
         ui.heading("16 switches", accent)
-        ui.text(2, view.newClient or "Choose client", true)
+        ui.text(2, view.newClient and (api.clientName or tostring)(view.newClient) or "Choose client", true)
         ui.text(3, "Side: " .. (view.newSide or "?"), true)
         if height >= 7 then ui.text(4, "New wires start OFF", true) end
         button(height - 1, "Create", "create", nil, nil, nil, true, accent)
@@ -311,7 +313,7 @@ local function build(width, height, state, api, context)
         local switch = buttonById(board, view.buttonId)
         ui.heading(fit(switch.name, width), accent)
         local route = switch.route
-        ui.text(2, route and route.clientId or "Not connected", true)
+        ui.text(2, route and (api.clientName or tostring)(route.clientId) or "Not connected", true)
         if height >= 8 then ui.text(3, route and (route.side .. " / " .. (route.color and api.ui.colourName(route.color) or "Digital")) or "Choose Routing", true) end
         if height >= 10 and route then
             local wire = wireFor(switch, outputs(api))
@@ -494,7 +496,99 @@ local function build(width, height, state, api, context)
     return ui.lines, ui.hits
 end
 
+local function sceneById(state, id)
+    for i, scene in ipairs(state.scenes) do if scene.id == id then return scene, i end end
+end
+
+local function sceneUI(w, h, state, api, view)
+    view.sceneView = view.sceneView or {}
+    local ui = api.ui.form(w, h, view.sceneView, api.getAppColour(appName))
+    local screen, scene = view.screen, sceneById(state, view.sceneId)
+    if screen == "sceneBoards" then
+        local rows = {{"All views", "capture", 0}}
+        for _, board in ipairs(state.boards) do rows[#rows + 1] = {board.name, "capture", board.id} end
+        ui.menu("Capture scene", rows, "sources", {{"Back", "scenes"}})
+    elseif screen == "sceneName" and view.sceneKeyboard then ui.keyboard(view.sceneKeyboard)
+    elseif screen == "sceneDelete" and scene then
+        ui.info("Delete scene?", {scene.name}, "delete", "sceneEdit")
+        ui.footer({{"Cancel", "sceneEdit"}, {"Delete", "delete", nil, true, 16384}})
+    elseif screen == "sceneEdit" and scene then
+        ui.menu(scene.name, {{#scene.entries .. " saved switches", nil, nil, false},
+            {"Rename", "rename"}, {"Delete", "sceneDelete"}}, "edit", {{"Back", "sceneListEdit"}})
+    else
+        local rows = {}
+        for _, item in ipairs(state.scenes) do rows[#rows + 1] = {item.name,
+            screen == "sceneListEdit" and "edit" or "apply", item.id} end
+        rows[#rows + 1] = {"+ New scene", "sceneBoards", nil, #state.scenes < 24 and #state.boards > 0}
+        local footer = screen == "sceneListEdit" and {{"Back", "scenes"}} or {{"Back", "home"}, {"Edit", "sceneListEdit"}}
+        ui.menu(view.sceneStatus or "Scenes", rows, "scenes", footer)
+    end
+    return ui
+end
+
+local function sceneTouch(x, y, w, h, state, api, view)
+    local action, value = api.ui.actionAt(sceneUI(w, h, state, api, view).hits, x, y)
+    if not action then return false end
+    local scene, index = sceneById(state, view.sceneId)
+    local keyboard = view.sceneKeyboard
+    if action == "page" then view.sceneView.pages[value.key] = value.page
+    elseif action == "capture" or action == "rename" then
+        view.captureBoard = action == "capture" and value or nil
+        view.sceneKeyboard = {draft = action == "rename" and scene.name or "Scene " .. state.nextSceneId,
+            bank = 0, page = 1, back = view.screen}
+        view.screen = "sceneName"
+    elseif view.screen == "sceneName" and api.ui.editText(keyboard, action, value, 32) then return true
+    elseif action == "saveText" then
+        local label = keyboard.draft:match("^%s*(.-)%s*$")
+        if label == "" then return true end
+        if view.captureBoard ~= nil then
+            if #state.scenes >= 24 then view.screen = "scenes"; return true end
+            local entries, all = {}, outputs(api)
+            for _, board in ipairs(state.boards) do
+                if view.captureBoard == 0 or view.captureBoard == board.id then
+                    for _, switch in ipairs(board.buttons) do
+                        local wire = wireFor(switch, all)
+                        if wire then entries[#entries + 1] = {id = switch.id, route = copy(switch.route), value = wire.value} end
+                    end
+                end
+            end
+            if #entries == 0 or #entries > 256 then
+                view.sceneStatus = #entries == 0 and "No routed switches" or "Choose up to 256"
+                view.screen = "scenes"
+                return true
+            end
+            if commit(state, api, view, function()
+                state.scenes[#state.scenes + 1] = {id = state.nextSceneId, name = label, entries = entries}
+                state.nextSceneId = state.nextSceneId + 1
+            end) then view.screen, view.sceneStatus = "scenes", nil end
+        elseif scene then
+            if commit(state, api, view, function() scene.name = label end) then view.screen = "sceneEdit" end
+        else view.screen = "scenes" end
+    elseif action == "edit" then view.sceneId, view.screen = value, "sceneEdit"
+    elseif action == "delete" and scene then
+        if commit(state, api, view, function() table.remove(state.scenes, index) end) then view.screen = "scenes" end
+    elseif action == "apply" then
+        local selected = sceneById(state, value)
+        if not selected then return true end
+        local all, changes = outputs(api), {}
+        for _, entry in ipairs(selected.entries) do
+            local logical = appName .. "_switch_" .. entry.id
+            if sameRoute(entry.route, all[logical]) then changes[#changes + 1] = {name = logical, value = entry.value} end
+        end
+        if #changes > 0 then
+            local ok, err = api.updateOutputs(changes)
+            if not ok then notify(view, tostring(err), "scenes")
+            else view.sceneStatus = #changes == #selected.entries and "Scene applied" or "Applied valid routes" end
+        else view.sceneStatus = "No matching routes" end
+    else view.screen, view.sceneStatus = action, nil end
+    api.invalidateAppViews(appName)
+    return true
+end
+
 function app.render(width, height, state, api, context)
+    if ready and (context.view.screen or ""):match("^scene") then
+        return sceneUI(width, height, state, api, context.view).lines
+    end
     if not ready then return {"Switchboard blocked", "Check OS log"} end
     return (build(width, height, state, api, context))
 end
@@ -503,7 +597,7 @@ local function createBoard(state, api, view, columns, rows, clientId, side)
     if #state.boards >= MAX_VIEWS then notify(view, "Maximum 64 views"); return end
     local created
     local ok = commit(state, api, view, function()
-        created = {id = state.nextBoardId, name = clientId and (clientId .. " " .. side):sub(1, 32) or "View " .. state.nextBoardId,
+        created = {id = state.nextBoardId, name = clientId and ((api.clientName or tostring)(clientId) .. " " .. side):sub(1, 32) or "View " .. state.nextBoardId,
             columns = columns, rows = rows, buttons = {}}
         state.nextBoardId = state.nextBoardId + 1
         for index = 1, columns * rows do
@@ -563,6 +657,9 @@ end
 
 function app.handleTouch(x, y, width, height, state, api, context)
     if not ready then return false end
+    if (context.view.screen or ""):match("^scene") then
+        return sceneTouch(x, y, width, height, state, api, context.view)
+    end
     local _, hits = build(width, height, state, api, context)
     local action, value
     for _, hit in ipairs(hits) do

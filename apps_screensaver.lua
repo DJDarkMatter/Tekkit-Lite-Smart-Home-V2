@@ -5,12 +5,17 @@
 -- These renderers are new implementations; no IO or standalone loops are used.
 -- https://creativecommons.org/licenses/by-sa/3.0/
 local app={title="Screensaver",minWidth=2,minHeight=2,fullscreenOnly=true,transientWindow=true,hideTaskbar=true,handlesFullscreenCorner=true,animationInterval=0.1}
-local titles={"Matrix streams","Matrix wall","Plasma","Ripple fields","Truchet flow","Silk waves","Kaleidoscope","Life garden",
-    "Nyan Cat","Starflight","Northern lights","Lava lamp","Neon tunnel","Fireworks","Spiral ribbons"}
+local titles={"Matrix Rain","Matrix Wall","Plasma","Ripple Pools","Rainbow Tiles","Silk Waves","Kaleidoscope","Life Garden",
+    "Nyan Cat","Starflight","Northern Lights","Lava Lamp","Neon Tunnel","Fireworks","Spiral Ribbons",
+    "Prism Tide","Candy Confetti","Sunset Surf","Pixel Quilt","Orbit Parade"}
+app.screensavers=titles
 local name="screensaver"
 local runtime={}
 local pi=math.pi
 local palette={2048,1024,4,64,2,16,32,512,8}
+local prism={16384,2,16,32,512,8,2048,1024,4,64}
+local sunset={2048,1024,4,16384,2,16,1}
+local surf={2048,512,8,512}
 local letters="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ:;<>+-*/={}[]"
 local wallGlyphs=[=[1234567890!@#$%^&*()_-+=~,<>./?:{}[]\"']=]..string.char(96)
 -- nyancat.lua
@@ -290,6 +295,44 @@ local function pattern(design,x,y,cols,rows,t,seed,cells)
         local radius=math.sqrt(X*X+Y*Y); local angle=math.atan2(Y,X)
         local wave=math.sin(angle*4-radius*13+t*1.1)
         return " ",1,wave>-.1 and color(angle/pi*.25+radius*.3+t*.03) or 32768
+    elseif design==16 then
+        local band=X*1.7+Y*.7+math.sin(Y*5+t*.8)*.36+math.sin(X*3-t*.9)*.25-t*.31
+        local stripe=band*#prism
+        return " ",1,stripe%1<.1 and 1 or prism[math.floor(stripe)%#prism+1]
+    elseif design==17 then
+        local u,v=(x-1)/4,(y-1)/3-t*1.15
+        local col,row=math.floor(u),math.floor(v)
+        local salt=hash(col,row,seed)
+        local dx,dy=u%1-(.22+salt%5*.13),v%1-(.2+math.floor(salt/5)%5*.15)
+        local shade=prism[salt%#prism+1]
+        if math.abs(dx)+math.abs(dy)<.39 then return " ",1,shade end
+        return salt%7==0 and "." or " ",shade,1024
+    elseif design==18 then
+        local horizon=.06+math.sin(X*7+t*1.9)*.055
+        if Y<horizon then
+            local sunX=math.sin(t*.24)*.67
+            local sun=(X-sunX)^2+(Y+.19)^2<.19^2
+            return " ",1,sun and 16 or sunset[math.max(1,math.min(#sunset,math.floor((Y+.82)*9)+1))]
+        end
+        local wave=(Y*11+math.sin(X*8+t*1.35)*.55-t*1.7)%#surf
+        return " ",1,wave%1<.14 and 1 or surf[math.floor(wave)+1]
+    elseif design==19 then
+        local u,v=(x-1)/5+t*.28,(y-1)/3+t*.19
+        local col,row=math.floor(u),math.floor(v)
+        local turn=(col+row)%2==0 and u%1 or 1-u%1
+        local seam=turn-v%1
+        local index=(col*3+row*7+math.floor(t*.55))%#prism
+        return " ",1,math.abs(seam)<.12 and 1 or prism[(index+(seam<0 and 4 or 0))%#prism+1]
+    elseif design==20 then
+        local radius=math.sqrt(X*X+Y*Y)
+        local orbit=radius*5+t*.21
+        local ring=math.floor(orbit)
+        local angle=math.atan2(Y,X)/pi*3+t*(ring%2==0 and .72 or -.72)+ring*.33
+        if math.abs(orbit%1-.5)<.24 then
+            local index=(ring*3+math.floor(angle))%#prism+1
+            return " ",1,angle%1<.19 and 1 or prism[index]
+        end
+        return " ",1,ring%2==0 and 2048 or 1024
     elseif design==3 then
         v=(math.sin(X*7+t*.55)+math.sin(Y*9-t*.4)+math.sin((X+Y)*5+t*.3)+math.sin(math.sqrt(X*X+Y*Y)*10-t*.8))/8+.5
     elseif design==4 then

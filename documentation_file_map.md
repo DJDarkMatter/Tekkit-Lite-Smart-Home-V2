@@ -241,3 +241,8 @@ V35 adds `lib_work.lua` (bounded cooperative work and protected calls), `tests_w
 
 
 `documentation_update_v37.md` records the Screensaver-only update, including 2×2 navigation, reference Matrix motion/trails and exact changed filenames. V37 retains every v36 core/installer/client source unchanged; the full package's installer still says bundled-v36.
+
+
+## Version 39
+
+`apps_system.lua` became `lib_system.lua`, a built-in Settings page. `lib_alert_inbox.lua` and `lib_io_history.lua` are also central OS files. The optional apps `apps_io_scope.lua`, `apps_logic_sandbox.lua`, `apps_notes.lua` and `apps_window_presets.lua` stay at the root. See [version 39](documentation_update_v39.md) for install commands and the exact file list.

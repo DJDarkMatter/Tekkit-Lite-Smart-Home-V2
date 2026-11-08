@@ -14,6 +14,23 @@ function Gui.typeKey(keyboard, key, limit)
     end
     return true
 end
+function Gui.editText(keyboard, action, value, limit)
+    if action == "key" then Gui.typeKey(keyboard, value, limit)
+    elseif action == "space" then Gui.typeKey(keyboard, " ", limit)
+    elseif action == "backspace" then keyboard.draft = keyboard.draft:sub(1, -2)
+    elseif action == "clearText" then keyboard.draft = ""
+    elseif action == "bank" then keyboard.bank, keyboard.page = (keyboard.bank + 1) % 3, 1
+    elseif action == "keyPage" then keyboard.page = keyboard.page % keyboard.pages + 1
+    else return false end
+    return true
+end
+
+function Gui.actionAt(hits, x, y)
+    for _, hit in ipairs(hits) do
+        if hit.enabled ~= false and Gui.hit(hit, x, y) then return hit.action, hit.value end
+    end
+end
+
 -- Keep every completed choice visible; shorten long IDs rather than losing
 -- the final side/target. Small windows keep their existing usable row count.
 function Gui.breadcrumb(parts,width,height)
@@ -126,6 +143,8 @@ function Gui.form(width,height,view,accent,background,panel)
         ui.button(y,text,action,x1,x2,enabled,bg or panel,nil,value)
     end
     function ui.footer(rows)
+        -- A screen can replace the default Back footer supplied by info().
+        for i=#ui.hits,1,-1 do if ui.hits[i].y==height then table.remove(ui.hits,i) end end
         for i,row in ipairs(rows) do ui.action(height,row[1],row[2],row[3],1+math.floor((i-1)*width/#rows),math.floor(i*width/#rows),row[4],row[5]) end
     end
     function ui.page(key,count,slots,y,draw)
@@ -171,10 +190,10 @@ function Gui.form(width,height,view,accent,background,panel)
         ui.footer({{"Set","setNumber"},{"Back",back}})
     end
     function ui.keyboard(k)
-        local bank=k.bank==2 and "1234567890-_/.:" or k.bank==1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
+        local bank=k.bank==2 and (k.symbols or "1234567890-_/.:") or k.bank==1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
         ui.heading(k.draft=="" and "Type here" or k.draft:sub(-width),accent)
         local cols,rows=math.max(4,math.min(10,math.floor(width/2))),math.max(1,math.min(3,height-4))
-        local slots=cols*rows; local pages=math.ceil(#bank/slots); k.page=math.max(1,math.min(k.page or 1,pages))
+        local slots=cols*rows; local pages=math.ceil(#bank/slots); k.page=math.max(1,math.min(k.page or 1,pages)); k.pages=pages
         for i=1,slots do local ch=bank:sub((k.page-1)*slots+i,(k.page-1)*slots+i); if ch~="" then
             local col,row=(i-1)%cols,math.floor((i-1)/cols)
             ui.action(2+row,ch,"key",ch,1+math.floor(col*width/cols),math.floor((col+1)*width/cols),true,accent)

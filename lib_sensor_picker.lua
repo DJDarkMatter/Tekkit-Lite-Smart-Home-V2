@@ -4,7 +4,8 @@ local Picker = {}
 function Picker.new(key, current, kind)
     return {kind = "sensor", key = key, chosen = current or {}, filter = kind, stage = 1, page = 1}
 end
-function Picker.render(dialog, width, height, clients)
+function Picker.render(dialog, width, height, clients, clientName)
+    local label = clientName or function(id) return id end
     local list, chosen, selectedClient, selectedPort = {}, dialog.chosen
     local function compatible(port)
         if port.status ~= "ok" or not port.card then return false end
@@ -15,7 +16,7 @@ function Picker.render(dialog, width, height, clients)
         return false
     end
     if dialog.stage == 1 then
-        for _, client in ipairs(clients) do list[#list + 1] = {label = client.id .. (client.online and " +" or " -"), value = client.id} end
+        for _, client in ipairs(clients) do list[#list + 1] = {label = label(client.id) .. (client.online and " +" or " -"), value = client.id} end
     elseif dialog.stage == 2 then
         for _, client in ipairs(clients) do if client.id == chosen.clientId then
             selectedClient = client
@@ -43,14 +44,14 @@ function Picker.render(dialog, width, height, clients)
     ui.style(1, 1, width, height, 1, 32768)
     if dialog.stage == 4 then
         ui.heading("Use sensor?", 2048)
-        ui.text(2, chosen.clientId); ui.text(3, chosen.side .. " / " .. chosen.target)
+        ui.text(2, label(chosen.clientId)); ui.text(3, chosen.side .. " / " .. chosen.target)
         if height >= 7 then ui.text(4, chosen.targetType or "") end
         if dialog.error then ui.text(height - 2, dialog.error) end
         ui.button(height - 1, "Back", "back")
         ui.button(height, "Use", "use", 1, math.floor(width / 2), true, 32)
         ui.button(height, "Cancel", "cancel", math.floor(width / 2) + 1, width)
     else
-        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {chosen.clientId,chosen.side} or {chosen.clientId},width,height)
+        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {label(chosen.clientId),chosen.side} or {label(chosen.clientId)},width,height)
         local header = path and 2 or 1
         local slots = #list<=height-header-1 and height-header-1 or height-header-2
         local pages = math.max(1, math.ceil(#list / slots))

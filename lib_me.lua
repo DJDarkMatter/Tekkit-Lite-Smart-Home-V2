@@ -150,8 +150,8 @@ local function trim(history,time)
     for _,key in ipairs(remove) do history.keys[key]=nil end
     return cost
 end
-function Rates.record(history,time,dt,changes)
-    if not number(dt,0.001,10) then return false end
+function Rates.record(history,time,dt,changes,maxInterval)
+    if not number(dt,0.001,maxInterval or 10) then return false end
     trim(history,time)
     local minute=math.floor(time/60)
     local bucket=history.buckets[#history.buckets]

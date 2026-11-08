@@ -309,7 +309,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(#t.state.boards, 0)
         equal(t.central.server.running.switchboard, true)
         local hits = t.content(t.id).hits
-        equal(#hits, 2, "Empty selection has one Add and one Settings action")
+        equal(#hits, 3, "Empty selection has Add, Scenes and Settings actions")
         local before = t.central.server.ioClients.io_11.revision
         local board = t.preset(t.id)
         equal(t.view(t.id).screen, "home")

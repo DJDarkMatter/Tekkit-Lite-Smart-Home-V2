@@ -1,20 +1,19 @@
-# ME item monitors (AE1, v24)
+# ME item monitors (AE1)
 
 `apps_me_monitor.lua` is the second independent ME app. It displays live amounts for selected items in saved grids or lists, similar to clusters of AE storage monitors. It does not move items, craft, toggle redstone or depend on the capacity app's configuration.
 
-## Install v24
+## Install v38
 
-Upload the complete v24 package's flat root files to GitHub, replace the one installer paste with the supplied bundled-v24 `install.lua`, download a fresh `inst` on the central OS, quit the OS and run:
+Upload the complete v38 package to GitHub and download the bundled-v38 installer on the central computer. Quit to CraftOS and run:
 
 ```text
 cd /
 inst server
-inst app me_storage
 inst app me_monitor
 reboot
 ```
 
-This preserves startup, settings and saved views. v24 does not change any clients. AE sensor computers need v22 or newer for compact catalogs; when upgrading one older than v22, run `inst sensor --startup` and reboot it. Apps remain explicit GitHub downloads and are never bundled or enabled by a core role installation.
+AE sensor computers need v22 or newer for compact catalogs. To upgrade a sensor older than v22, run `inst sensor --startup` on that sensor computer and reboot it.
 
 ## Create a view
 
@@ -44,6 +43,10 @@ Bindings use the card's **raw item name and DamageValue**, not row positions or 
 ## Viewing and editing tiles
 
 Each tile shows its selected item name and amount. Names can wrap over two lines on roomy tiles; very long quantities wrap as plain digits when needed. Small windows page through a subset of the saved grid. Growing or resizing a window does not alter the grid or bindings. A complete live catalog in which an item is absent means **0**; unpowered/offline/waiting/stale/invalid data shows **--**, not zero. The heading also changes color when the source is unavailable.
+
+**Change rates** are on by default. A roomy tile or list row shows the signed five-minute net change and hourly rate alongside its count. Tight tiles give priority to the count and fit the hourly rate where space allows. Open a tile for both figures. The rate divides net change by the observed time and scales it to an hour. Removing stock counts as a negative change. The first complete snapshot establishes the baseline, then the readout uses successive complete samples. Unavailable data displays `--/h` and a new sensor session starts a fresh baseline.
+
+Use **Edit → Change rates** to switch the readout off for that view. The toggle is saved per view. The observation history is kept in memory while ME monitors runs.
 
 Touch a configured tile for its full name, count, status, raw identity, damage and source. **Item** changes its selection, **Clear** unassigns it, and **Color** edits the tile/row appearance, and **Back** returns to the board. The palette has Apply, Auto and Back with a preview on larger windows. Auto restores the default grid fill or alternating list rows. Cosmetic changes preserve the real item identity and source. **Edit → Edit items** makes each tile open its picker directly for assigning several tiles. Repeating the same item in multiple tiles/views is allowed.
 

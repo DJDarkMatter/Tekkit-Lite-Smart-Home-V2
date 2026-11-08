@@ -11,16 +11,16 @@ function Picker.new(key, direction, selected)
     return {key = key, direction = direction, stage = 1, page = 1, chosen = chosen}
 end
 
-local function choices(dialog, clients)
+local function choices(dialog, clients, label)
     local list = {}
     if dialog.stage == 1 then
         local found = false
         for _, client in ipairs(clients) do
-            list[#list + 1] = {label = client.id .. (client.online and " +" or " -"), value = client.id}
+            list[#list + 1] = {label = label(client.id) .. (client.online and " +" or " -"), value = client.id}
             if client.id == dialog.chosen.clientId then found = true end
         end
         if dialog.chosen.clientId and not found then
-            list[#list + 1] = {label = dialog.chosen.clientId .. " -", value = dialog.chosen.clientId}
+            list[#list + 1] = {label = label(dialog.chosen.clientId) .. " -", value = dialog.chosen.clientId}
         end
     elseif dialog.stage == 2 then
         local available
@@ -41,7 +41,8 @@ local function colorName(value)
     return "Invalid color"
 end
 
-function Picker.render(dialog, width, height, clients)
+function Picker.render(dialog, width, height, clients, api, testing)
+    local label = api and api.clientName or function(id) return id end
     local lines, hits = {styles = {}}, {}
     local half = math.floor(width / 2)
     local function text(row, value) lines[row] = tostring(value):sub(1, width) end
@@ -59,17 +60,26 @@ function Picker.render(dialog, width, height, clients)
     for row = 1, height do lines[row] = string.rep(" ", width) end
     if dialog.stage == 4 then
         text(1, "Use this " .. dialog.direction .. "?")
-        text(2, dialog.chosen.clientId or "No IO client")
+        text(2, label(dialog.chosen.clientId) or "No IO client")
         text(3, "Side: " .. (dialog.chosen.side or "?"))
-        text(4, colorName(dialog.chosen.color))
+        local wire = colorName(dialog.chosen.color)
+        if dialog.direction == "input" and api then
+            local value = api.readInput(dialog.chosen)
+            local status = value == nil and "Unknown" or value and "ON" or "OFF"
+            local summary = wire .. " / " .. status
+            text(4, #summary <= width and summary or wire:sub(1, width - #status - 1) .. " " .. status)
+        else text(4, wire) end
         if dialog.error then text(4, dialog.error) end
-        button(height - 1, 1, width, "< Back", "back")
+        if dialog.direction == "output" and api then
+            button(height - 1, 1, half, "< Back", "back")
+            button(height - 1, half + 1, width, testing and "Wait" or "Test", "test", nil, not testing)
+        else button(height - 1, 1, width, "< Back", "back") end
         button(height, 1, half, "Use", "use")
         button(height, half + 1, width, "Cancel", "cancel")
     else
         local titles = {"Select IO", "Select side", "Select wire"}
-        local list = choices(dialog, clients)
-        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {dialog.chosen.clientId,dialog.chosen.side} or {dialog.chosen.clientId},width,height)
+        local list = choices(dialog, clients, label)
+        local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {label(dialog.chosen.clientId),dialog.chosen.side} or {label(dialog.chosen.clientId)},width,height)
         local header = path and 2 or 1
         local slots = #list <= height-header-1 and height-header-1 or math.max(1,height-header-2)
         local pages = math.max(1, math.ceil(#list / slots))
@@ -102,6 +112,7 @@ function Picker.touch(dialog, x, y)
             if hit.enabled == false then return end
             dialog.error = nil
             if hit.action == "cancel" then return "cancel"
+            elseif hit.action == "test" then return "test", dialog.chosen
             elseif hit.action == "use" then return "selected", dialog.chosen
             elseif hit.action == "prev" then dialog.page = math.max(1, dialog.page - 1)
             elseif hit.action == "next" then dialog.page = math.min(hit.value, dialog.page + 1)

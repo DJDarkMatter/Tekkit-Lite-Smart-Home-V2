@@ -269,7 +269,7 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
     local function hit(x1, x2, action, id) hits[#hits + 1] = {x1 = x1, x2 = x2, action = action, id = id} end
     put(1, "[+]"); hit(1, math.min(3, width), "launcher")
     local clockWidth = (width >= 22 or (#windows == 0 and width >= 10)) and 6 or 0
-    if clockWidth > 0 then put(width - 4, clock) end
+    if clockWidth > 0 then put(width - 4, clock); hit(width - 4, width, "inbox") end
     local first, last = 5, width - clockWidth
     if last < first then return line, hits end
     local labels, needed = {}, 0

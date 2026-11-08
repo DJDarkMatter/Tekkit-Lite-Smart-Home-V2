@@ -89,3 +89,8 @@ Tests use simulated ComputerCraft Lua 5.1 with real app/OS/client entry points. 
 ## Confirmation behavior (v34 core update)
 
 Toggling one switch marks only that physical IO client/side/color (or Digital) pending. Other switches keep their known status, including other colors on the same bundled cable. Copies sharing that exact route show pending together. A client restart/reconnect can still make all of its controls pending while restoration is acknowledged. This is provided by the central `lib_server.lua` update; this app file and the remote IO client are unchanged from v33. Full desired snapshots remain for recovery, but unchanged hardware values are not rewritten.
+
+
+## Scenes (v39)
+
+Open **Scenes** at the bottom of the view selector. **+ New scene** captures the current state of routed switches in one view or all views, and asks for a name. Tap the saved scene to apply it. **Edit** opens rename and delete controls. Each scene checks the saved physical route against the current switch before applying it, so a rerouted switch does not receive a command intended for its old wire.

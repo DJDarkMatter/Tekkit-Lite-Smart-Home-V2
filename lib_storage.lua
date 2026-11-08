@@ -20,13 +20,16 @@ function storage.load(path, validate)
     end
 end
 
-function storage.save(path, value)
+function storage.save(path, value, forgetPrevious)
+    -- An interrupted reset must never be recovered as an ordinary pending save.
+    local staged = path .. (forgetPrevious and ".reset" or ".tmp")
+    local movedPrevious = false
     local ok, err = Work.call(function()
         local contents = Work.serialize(value)
         -- fs.getDir was only added in CC 1.63; Tekkit Lite uses older CC.
         local dir = path:match("^(.*)/[^/]+$") or ""
         if dir ~= "" and not fs.exists(dir) then fs.makeDir(dir) end
-        local file = assert(fs.open(path .. ".tmp", "w"), "Cannot write " .. path)
+        local file = assert(fs.open(staged, "w"), "Cannot write " .. path)
         file.write(contents)
         file.close()
         if fs.exists(path) then
@@ -38,14 +41,28 @@ function storage.save(path, value)
             if previous and previous == validatedContents[path] or readTable(path) then
                 if fs.exists(path .. ".bak") then fs.delete(path .. ".bak") end
                 fs.move(path, path .. ".bak")
+                movedPrevious = true
             else
                 -- A corrupt primary must not replace a good backup.
                 fs.delete(path)
             end
         end
-        fs.move(path .. ".tmp", path)
+        fs.move(staged, path)
         validatedContents[path] = contents
     end)
+    if forgetPrevious then
+        if not ok then
+            pcall(fs.delete, staged)
+            if movedPrevious and not fs.exists(path) then pcall(fs.move, path .. ".bak", path) end
+        else
+            local cleared, cleanupError = pcall(function()
+                for _, suffix in ipairs({".tmp", ".bak"}) do
+                    if fs.exists(path .. suffix) then fs.delete(path .. suffix) end
+                end
+            end)
+            if not cleared then err = "Reset saved. Recovery cleanup failed: " .. tostring(cleanupError) end
+        end
+    end
     return ok, err
 end
 
