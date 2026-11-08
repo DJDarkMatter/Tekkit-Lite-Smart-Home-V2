@@ -4,9 +4,13 @@ Bundled-v16 adds `inst relay --startup`. A relay computer needs one wireless mod
 
 Chains may contain as many relays as the installation needs: OS → relay → relay → … → device. There is **no fixed software hop-count limit**. Every radio hop must remain within the server's wireless range, in the same dimension, with all participating chunks loaded. Chunk loading across a tall vertical area does not extend modem range. The user observed a practical vertical range of about **30 blocks** on this server; use roughly **20–25 blocks per hop** for margin. The 120-block gap therefore needs a chain, rather than assuming the stock range.
 
+## CraftOS watchdog update
+
+Bundled-v40 skips unnecessary background Rednet modem checks for unrelated channels on CraftOS 1.5. On a relay it also separates packet decoding from forwarding, yields during encoding, and buffers events across those pauses. Update each computer using the role commands in the [v40 release notes](documentation_update_v40.md). Read `diagnostics_relay_error.txt` in CraftOS for a caught relay error.
+
 ## Install or upgrade
 
-Upload this package's root files to the V2 repository and replace the one installer paste with bundled-v22 `install.lua`. Download a fresh `inst` on each computer being updated. Quit its running program to CraftOS first. Existing v16 relays need no update for v17's sensor-catalog fix; update the OS and affected sensor roles instead.
+Upload this package's root files to the V2 repository and replace the one installer paste with the current bundled `install.lua`. Download a fresh `inst` on each computer being updated. Quit its running program to CraftOS first. Existing v16 relays need no update for v17's sensor-catalog fix; update the OS and affected sensor roles instead.
 
 On the central OS:
 
@@ -24,7 +28,7 @@ inst relay --startup
 reboot
 ```
 
-Update each endpoint that should use relays by reinstalling its existing role: `inst sensor --startup`, `inst io --startup` or `inst monitor --startup`, followed by `reboot`. Directly connected older clients still work, but old network libraries cannot use the new relay transport. Apps need no update or reinstall. The role installer includes all twenty core sources, extracts only the selected role's dependencies, contains no apps and needs no HTTP for extraction.
+Update each endpoint that should use relays by reinstalling its existing role: `inst sensor --startup`, `inst io --startup` or `inst monitor --startup`, followed by `reboot`. Directly connected older clients still work, but old network libraries cannot use the new relay transport. Apps need no update or reinstall. The role installer includes all 25 core sources, extracts only the selected role's dependencies, contains no apps and needs no HTTP for extraction.
 
 Use matching `networkId` and `channel` settings in `configs_network.txt` on the OS, relays and endpoints. Optional `serverId` pins the OS ID and is enforced when forwarding as well as receiving. `relayEnabled` defaults to true; explicitly setting it false makes an endpoint direct-only. Relay computers require it enabled. The modem side and listening/reply channel are detected normally; the separate relay channel is automatic.
 

@@ -373,4 +373,149 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(reading.status, "ok"); equal(reading.reactor.heat, 48036)
         assert(table.concat(central.server.command("sensors sensor_20020"), "\n"):find("targets=62 reactors=1", 1, true))
     end
+
+    function tests.relay_legacy_rednet_skips_unrelated_channels_on_every_role()
+        local entries = {server = "main_os.lua", relay = "clients_relay_client.lua",
+            io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua"}
+        for role, entry in pairs(entries) do
+            local bus = newBus()
+            local comp = bus.computer(20, role)
+            local nativeOS, nativeDofile = comp.env.os, comp.env.dofile
+            nativeOS.version = function() return "CraftOS 1.5 (IDT-Fixed)" end
+            nativeOS.pullEventRaw = function(filter) return coroutine.yield(filter) end
+            local received = {}
+            -- Model the legacy order: a modem probe runs even for channels
+            -- which Rednet will subsequently reject.
+            local rom = setmetatable({
+                probe = function(channel)
+                    if channel ~= comp.id and channel ~= 65535 then
+                        error("rednet:44: Too long without yielding", 0)
+                    end
+                end,
+                received = received,
+            }, {__index = comp.env})
+            local api = assert(loadstring([[
+                CHANNEL_BROADCAST = 65535
+                function run()
+                    while true do
+                        local event, side, channel, reply, payload = os.pullEventRaw("modem_message")
+                        if event == "modem_message" then
+                            probe(channel)
+                            if channel == os.getComputerID() or channel == CHANNEL_BROADCAST then
+                                received[#received + 1] = payload
+                            end
+                        end
+                    end
+                end
+            ]], "@rednet-fixture"))
+            setfenv(api, rom); api()
+            comp.env.rednet = {run = rom.run, CHANNEL_BROADCAST = rom.CHANNEL_BROADCAST}
+            comp.env.dofile = function(path)
+                if path == entry then
+                    return comp.env.parallel.waitForAny(function() nativeDofile(path) end, rom.run)
+                end
+                return nativeDofile(path)
+            end
+            comp:start()
+            local privateOS = rawget(rom, "os")
+            assert(privateOS and privateOS ~= nativeOS, role .. " did not install Rednet filter")
+            equal(comp.env.os, nativeOS)
+            for _, channel in ipairs({65533, 45231, 1020}) do
+                bus.queue(comp, {"modem_message", comp.modemSide, channel, 1014, "raw traffic", 12})
+            end
+            bus.queue(comp, {"modem_message", comp.modemSide, comp.id, 1014, "direct Rednet", 12})
+            bus.queue(comp, {"modem_message", comp.modemSide, 65535, 1014, "broadcast Rednet", 12})
+            bus.pump()
+            assert(comp.active)
+            equal(table.concat(received, ","), "direct Rednet,broadcast Rednet")
+            comp.env.dofile("lib_network.lua").new({networkId = "home", channel = 45231}, role == "server")
+            equal(rawget(rom, "os"), privateOS, "Reopening the network must not stack filters")
+        end
+    end
+
+    local function stressPacket(sequence, payload)
+        return serialize({protocol = "SmartHomeOS/1", networkId = "home", sender = 14,
+            type = "stress_packet", payload = payload,
+            _transport = {version = 1, boot = 1, sequence = sequence, channel = 45231, serverChannel = 45231, path = {}}})
+    end
+
+    function tests.relay_large_packet_burst_decodes_once_and_survives_lost_wake_events()
+        local bus = newBus()
+        local relay = bus.computer(20, "relay"):start()
+        local decode, encode = relay.env.textutils.unserialize, relay.env.textutils.serialize
+        local queue, dropped, parses = relay.env.os.queueEvent, 0, {}
+        relay.env.os.queueEvent = function(name, ...)
+            if name == "smarthome_relay_yield" then dropped = dropped + 1; return end
+            return queue(name, ...)
+        end
+        relay.env.textutils.unserialize = function(raw)
+            if #raw > 32768 then parses[raw] = (parses[raw] or 0) + 1 end
+            return decode(raw)
+        end
+        relay.env.textutils.serialize = function(value)
+            assert(value.type ~= "stress_packet", "Relay re-encoded a large packet in the native codec")
+            return encode(value)
+        end
+        local payload, count, sent = string.rep("x", 58000), 8, {}
+        local before = relay.env.__smarthomeWork.yields
+        for i = 1, count do
+            sent[i] = stressPacket(i, payload)
+            bus.queue(relay, {"modem_message", relay.modemSide, 65533, 1014, sent[i], 12})
+        end
+        bus.advance(.3)
+        equal(relay.client.forwarded, count)
+        assert(dropped > 0 and relay.env.__smarthomeWork.yields >= before + count * 2)
+        for i = 1, count do equal(parses[sent[i]], 1, "Duplicate packet decode") end
+        local forwarded = 0
+        for _, packet in ipairs(bus.wire) do
+            if packet.message.type == "stress_packet" then
+                forwarded = forwarded + 1
+                equal(packet.message.payload, payload)
+                equal(packet.message._transport.path[1].computerId, 20)
+                equal(packet.reply, 1014)
+            end
+        end
+        equal(forwarded, count)
+        assert(relay.active)
+    end
+
+    function tests.relay_watchdog_in_decoder_is_saved_and_forwarding_continues()
+        local bus = newBus()
+        local relay = bus.computer(20, "relay"):start()
+        local failed = stressPacket(1, "watchdog fixture")
+        local decode = relay.env.textutils.unserialize
+        relay.env.textutils.unserialize = function(raw)
+            if raw == failed then error("Too long without yielding (simulated decode)", 0) end
+            return decode(raw)
+        end
+        bus.queue(relay, {"modem_message", relay.modemSide, 65533, 1014, failed, 12})
+        bus.queue(relay, {"modem_message", relay.modemSide, 65533, 1014, stressPacket(2, "next packet"), 12})
+        bus.advance(.3)
+        assert(relay.active)
+        equal(relay.client.forwarded, 1)
+        local report = assert(relay.disk.files["diagnostics_relay_error.txt"])
+        assert(report:find("Decoding relay packet", 1, true))
+        assert(report:find("Too long without yielding", 1, true))
+        equal(relay.disk.files["diagnostics_os_error.txt"], nil)
+        bus.queue(relay, {"terminate"})
+        local ok, err = pcall(bus.pump)
+        equal(ok, false); assert(tostring(err):find("Terminated", 1, true))
+        equal(relay.disk.files["diagnostics_relay_error.txt"], report)
+        local restarted = bus.computer(20, "relay", {disk = relay.disk}):start()
+        assert(table.concat(restarted.log, "\n"):find("Saved relay error: diagnostics_relay_error.txt", 1, true))
+    end
+
+    function tests.relay_duplicate_cache_keeps_refreshed_keys_until_their_own_slot_is_evicted()
+        local comp = newBus().computer(20, "relay")
+        local remember = comp.env.dofile("lib_network.lua").newCache(3, 60)
+        assert(remember("first", 0))
+        assert(remember("second", 0))
+        equal(remember("first", 59), false)
+        assert(remember("first", 60))
+        assert(remember("third", 61))
+        equal(remember("first", 61), false)
+        assert(remember("fourth", 62))
+        assert(remember("fifth", 63))
+        assert(remember("first", 63))
+    end
 end

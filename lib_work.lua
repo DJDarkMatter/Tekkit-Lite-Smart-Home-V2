@@ -3,7 +3,7 @@
 local existing = rawget(_G, "__smarthomeWork")
 if existing then return existing end
 local Work = {stage = "Starting OS", yields = 0}
-local parents, owner, pause, budget, spent = {}, nil, nil, 16384, 0
+local parents, owner, pause, budget, spent, diagnostics = {}, nil, nil, 16384, 0, nil
 local function pack(...) return {n = select("#", ...), ...} end
 local function active()
     local thread = coroutine.running()
@@ -13,6 +13,9 @@ local function active()
     end
     return false
 end
+function Work.isWatchdog(err)
+    return tostring(err):lower():find("too long without yielding", 1, true) ~= nil
+end
 function Work.protect(fn, ...)
     local thread = coroutine.create(fn)
     parents[thread] = coroutine.running()
@@ -21,7 +24,7 @@ function Work.protect(fn, ...)
         local result = pack(coroutine.resume(thread, unpack(args, 1, args.n)))
         if not result[1] or coroutine.status(thread) == "dead" then
             parents[thread] = nil
-            if not result[1] and tostring(result[2]):lower():find("too long without yielding", 1, true) then
+            if not result[1] and Work.isWatchdog(result[2]) then
                 Work.report(Work.stage, result[2])
             end
             return unpack(result, 1, result.n)
@@ -33,10 +36,11 @@ function Work.call(fn, ...)
     if active() then return Work.protect(fn, ...) end
     return pcall(fn, ...)
 end
-function Work.enable(callback, limit)
+function Work.enable(callback, limit, reportOptions)
     owner, pause, budget, spent = coroutine.running(), callback, limit or 16384, 0
+    diagnostics = reportOptions
 end
-function Work.disable() owner, pause, spent, parents = nil, nil, 0, {} end
+function Work.disable() owner, pause, spent, parents, diagnostics = nil, nil, 0, {}, nil end
 function Work.check(cost)
     if not pause or not active() then return end
     spent = spent + (cost or 1)
@@ -73,19 +77,20 @@ function Work.serialize(value)
     write(value)
     return table.concat(parts)
 end
-function Work.report(stage, err)
-    local message = "SmartHome OS error\nStage: " .. tostring(stage or Work.stage)
+function Work.report(stage, err, reportOptions)
+    local options = reportOptions or diagnostics
+    local path = options and options.path or "diagnostics_os_error.txt"
+    local message = (options and options.title or "SmartHome OS error") .. "\nStage: " .. tostring(stage or Work.stage)
         .. "\nError: " .. tostring(err) .. "\n"
     message = message:sub(1, 16384)
-    if Work.lastReport == message then return true end
+    if Work.lastReportPath == path and Work.lastReport == message then return true end
     local ok = pcall(function()
-        local path = "diagnostics_os_error.txt"
         local file = assert(fs.open(path .. ".tmp", "w"), "Cannot write OS error report")
         file.write(message); file.close()
         if fs.exists(path) then fs.delete(path) end
         fs.move(path .. ".tmp", path)
     end)
-    if ok then Work.lastReport = message end
+    if ok then Work.lastReport, Work.lastReportPath = message, path end
     return ok
 end
 rawset(_G, "__smarthomeWork", Work)

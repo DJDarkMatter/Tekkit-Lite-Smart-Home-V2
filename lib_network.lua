@@ -15,26 +15,26 @@ local function replyFor(id, serverChannel)
     return channel == serverChannel and 41001 or channel
 end
 
-local function validPath(path)
+local function validPath(path, sender)
     if type(path) ~= "table" then return false end
-    local seen, count = {}, 0
+    local seen, count, length = {}, 0, #path
     for index, hop in pairs(path) do
         count = count + 1
-        if not integer(index, 1, #path) or type(hop) ~= "table"
+        if not integer(index, 1, length) or type(hop) ~= "table"
             or not integer(hop.computerId, 0, 2147483647)
             or type(hop.id) ~= "string" or #hop.id < 1 or #hop.id > 64
-            or seen[hop.computerId] then return false end
+            or hop.computerId == sender or seen[hop.computerId] then return false end
         seen[hop.computerId] = true
+        Work.check(24)
     end
-    return count == #path
+    return count == length
 end
 
 local function transportValid(packet, reply, config)
     local t = packet._transport
     if type(t) ~= "table" or t.version ~= 1 or t.serverChannel ~= config.channel
         or not integer(t.boot, 1, 2147483647) or not integer(t.sequence, 1, 2147483647)
-        or not integer(t.channel, 1, 65532) or not validPath(t.path) then return false end
-    for _, hop in ipairs(t.path) do if hop.computerId == packet.sender then return false end end
+        or not integer(t.channel, 1, 65532) or not validPath(t.path, packet.sender) then return false end
     if t.channel == config.channel then
         return reply == replyFor(packet.sender, config.channel)
             and (config.serverId == nil or packet.recipient == nil or packet.recipient == config.serverId)
@@ -48,30 +48,48 @@ local function packetKey(packet)
     return tostring(packet.sender) .. ":" .. t.boot .. ":" .. t.sequence
 end
 
--- A bounded FIFO suppresses copies, not retries: every new send has a new ID.
+-- A fixed ring suppresses copies in constant time, even after a quiet period
+-- when many old entries expire at once. Actual retries have fresh packet IDs.
 function Network.newCache(limit, lifetime)
-    local entries, queue, head, tail = {}, {}, 1, 0
+    local entries, slots, nextSlot = {}, {}, 1
     return function(key, now)
-        while head <= tail and now - queue[head].at >= lifetime do
-            local entry = queue[head]
-            if entries[entry.key] == entry then entries[entry.key] = nil end
-            queue[head], head = nil, head + 1
-        end
-        if entries[key] then return false end
-        if tail - head + 1 >= limit then
-            local entry = queue[head]
-            if entries[entry.key] == entry then entries[entry.key] = nil end
-            queue[head], head = nil, head + 1
-        end
+        local known = entries[key]
+        if known and now - known.at < lifetime then return false end
+        local previous = slots[nextSlot]
+        if previous and entries[previous.key] == previous then entries[previous.key] = nil end
         local entry = {key = key, at = now}
-        tail, queue[tail + 1], entries[key] = tail + 1, entry, entry
-        if head > limit then
-            local compact = {}
-            for i = head, tail do compact[#compact + 1] = queue[i] end
-            queue, head, tail = compact, 1, #compact
-        end
+        slots[nextSlot], entries[key] = entry, entry
+        nextSlot = nextSlot % limit + 1
         return true
     end
+end
+
+-- CraftOS 1.5 probes the modem before checking whether a packet can be
+-- Rednet traffic. Filter the two eligible channels in its private API
+-- environment, before the expensive lookup. Every SmartHome role uses this.
+local function filterLegacyRednet(id)
+    local version = type(os.version) == "function" and os.version()
+    if type(version) ~= "string" or version:match("^%a+OS (%d+%.%d+)") ~= "1.5" then return false end
+    if type(rednet) ~= "table" or type(rednet.run) ~= "function" or type(getfenv) ~= "function" then return false end
+    local ok, env = pcall(getfenv, rednet.run)
+    if not ok or type(env) ~= "table" or env == _G or rawget(env, "run") ~= rednet.run then return false end
+    local original = env.os
+    if type(original) ~= "table" or type(original.pullEventRaw) ~= "function"
+        or rawget(env, "__smarthomeRednetOS") == original or rednet.CHANNEL_BROADCAST ~= 65535 then return false end
+
+    local privateOS = setmetatable({}, {__index = original})
+    function privateOS.pullEventRaw(filter)
+        if filter ~= "modem_message" then return original.pullEventRaw(filter) end
+        while true do
+            local event, side, channel, reply, payload, distance = original.pullEventRaw(filter)
+            if event ~= "modem_message" or channel == id or channel == 65535 then
+                return event, side, channel, reply, payload, distance
+            end
+        end
+    end
+    rawset(env, "os", privateOS)
+    rawset(env, "__smarthomeRednetOS", privateOS)
+    return true
 end
 
 function Network.new(config, isServer, logger)
@@ -89,6 +107,7 @@ function Network.new(config, isServer, logger)
     boot.bootCounter = boot.bootCounter + 1
     assert(storage.save(path, boot), "Cannot checkpoint network startup")
     local net = {id = os.getComputerID(), config = config, isServer = isServer}
+    if filterLegacyRednet(net.id) then log("CraftOS 1.5 Rednet channel filter active") end
     -- Destination IDs still disambiguate computers if reply channels collide.
     net.replyChannel = replyFor(net.id, config.channel)
     net.listenChannel = isServer and config.channel or net.replyChannel
@@ -153,26 +172,31 @@ function Network.new(config, isServer, logger)
         return net.send(client.channel, client.computerId, message)
     end
 
-    local function decode(side, channel, replyChannel, raw)
-        if side ~= net.side then return nil end
+    local function decode(side, channel, replyChannel, raw, relay)
+        local relayed = channel == relayChannel
+        if side ~= net.side or (relayed and config.relayEnabled == false)
+            or (not relayed and channel ~= net.listenChannel) then return nil end
         if not integer(replyChannel, 1, 65532) or type(raw) ~= "string"
             or #raw > 65536 then return nil end
+        if relay then Work.stage = "Decoding relay packet (" .. #raw .. " bytes)" end
+        Work.check(#raw)
         local ok, packet = pcall(textutils.unserialize, raw)
-        if not ok or type(packet) ~= "table" or packet.protocol ~= protocol
+        if not ok then
+            if (relay or isServer) and Work.isWatchdog(packet) then
+                Work.report(Work.stage, packet)
+                Work.check(16384)
+            end
+            return nil
+        end
+        if type(packet) ~= "table" or packet.protocol ~= protocol
             or packet.networkId ~= config.networkId
             or not integer(packet.sender, 0, 2147483647)
             or packet.sender == net.id or type(packet.type) ~= "string"
             or packet.recipient ~= nil and not integer(packet.recipient, 0, 2147483647) then return nil end
         if packet._transport ~= nil and not transportValid(packet, replyChannel, config) then return nil end
-        if channel == relayChannel then
-            if config.relayEnabled == false or packet._transport == nil then return nil end
-        elseif channel ~= net.listenChannel then return nil end
+        if relayed and packet._transport == nil then return nil end
+        Work.check(#raw)
         return packet
-    end
-
-    function net.readRelay(side, channel, replyChannel, raw)
-        if channel ~= relayChannel then return nil end
-        return decode(side, channel, replyChannel, raw)
     end
 
     function net.forward(packet, replyChannel, id)
@@ -182,15 +206,19 @@ function Network.new(config, isServer, logger)
         for _, hop in ipairs(t.path) do if hop.computerId == net.id then return false end end
         t.path[#t.path + 1] = {id = id, computerId = net.id}
         packet._route = nil
-        local raw = textutils.serialize(packet)
+        Work.stage = "Encoding relay packet from computer " .. packet.sender
+        local encoded, raw = Work.call(Work.serialize, packet)
+        if not encoded then
+            if Work.isWatchdog(raw) then Work.check(16384) end
+            return false
+        end
         if #raw > 65536 then return false end
         local ok = pcall(net.modem.transmit, relayChannel, replyChannel, raw)
         if not ok then net.modem, net.side = nil, nil end
         return ok
     end
 
-    function net.receive(side, channel, replyChannel, raw)
-        local packet = decode(side, channel, replyChannel, raw)
+    local function accept(packet, replyChannel)
         if not packet then return nil end
         local t = packet._transport
         if t and t.channel ~= net.listenChannel then return nil end
@@ -206,8 +234,18 @@ function Network.new(config, isServer, logger)
         packet._route = {}
         for _, hop in ipairs(t and t.path or {}) do
             packet._route[#packet._route + 1] = {id = hop.id, computerId = hop.computerId}
+            Work.check(24)
         end
         return packet
+    end
+
+    function net.receive(side, channel, replyChannel, raw)
+        return accept(decode(side, channel, replyChannel, raw), replyChannel)
+    end
+
+    function net.receiveForRelay(side, channel, replyChannel, raw)
+        local packet = decode(side, channel, replyChannel, raw, true)
+        return accept(packet, replyChannel), channel == relayChannel and packet or nil
     end
 
     return net

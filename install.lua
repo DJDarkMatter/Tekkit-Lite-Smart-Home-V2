@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v39
+-- SmartHome OS installer: bundled-v40
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -11,7 +11,7 @@ local sources = {
 local existing = rawget(_G, "__smarthomeWork")
 if existing then return existing end
 local Work = {stage = "Starting OS", yields = 0}
-local parents, owner, pause, budget, spent = {}, nil, nil, 16384, 0
+local parents, owner, pause, budget, spent, diagnostics = {}, nil, nil, 16384, 0, nil
 local function pack(...) return {n = select("#", ...), ...} end
 local function active()
     local thread = coroutine.running()
@@ -21,6 +21,9 @@ local function active()
     end
     return false
 end
+function Work.isWatchdog(err)
+    return tostring(err):lower():find("too long without yielding", 1, true) ~= nil
+end
 function Work.protect(fn, ...)
     local thread = coroutine.create(fn)
     parents[thread] = coroutine.running()
@@ -29,7 +32,7 @@ function Work.protect(fn, ...)
         local result = pack(coroutine.resume(thread, unpack(args, 1, args.n)))
         if not result[1] or coroutine.status(thread) == "dead" then
             parents[thread] = nil
-            if not result[1] and tostring(result[2]):lower():find("too long without yielding", 1, true) then
+            if not result[1] and Work.isWatchdog(result[2]) then
                 Work.report(Work.stage, result[2])
             end
             return unpack(result, 1, result.n)
@@ -41,10 +44,11 @@ function Work.call(fn, ...)
     if active() then return Work.protect(fn, ...) end
     return pcall(fn, ...)
 end
-function Work.enable(callback, limit)
+function Work.enable(callback, limit, reportOptions)
     owner, pause, budget, spent = coroutine.running(), callback, limit or 16384, 0
+    diagnostics = reportOptions
 end
-function Work.disable() owner, pause, spent, parents = nil, nil, 0, {} end
+function Work.disable() owner, pause, spent, parents, diagnostics = nil, nil, 0, {}, nil end
 function Work.check(cost)
     if not pause or not active() then return end
     spent = spent + (cost or 1)
@@ -81,19 +85,20 @@ function Work.serialize(value)
     write(value)
     return table.concat(parts)
 end
-function Work.report(stage, err)
-    local message = "SmartHome OS error\nStage: " .. tostring(stage or Work.stage)
+function Work.report(stage, err, reportOptions)
+    local options = reportOptions or diagnostics
+    local path = options and options.path or "diagnostics_os_error.txt"
+    local message = (options and options.title or "SmartHome OS error") .. "\nStage: " .. tostring(stage or Work.stage)
         .. "\nError: " .. tostring(err) .. "\n"
     message = message:sub(1, 16384)
-    if Work.lastReport == message then return true end
+    if Work.lastReportPath == path and Work.lastReport == message then return true end
     local ok = pcall(function()
-        local path = "diagnostics_os_error.txt"
         local file = assert(fs.open(path .. ".tmp", "w"), "Cannot write OS error report")
         file.write(message); file.close()
         if fs.exists(path) then fs.delete(path) end
         fs.move(path .. ".tmp", path)
     end)
-    if ok then Work.lastReport = message end
+    if ok then Work.lastReport, Work.lastReportPath = message, path end
     return ok
 end
 rawset(_G, "__smarthomeWork", Work)
@@ -202,26 +207,26 @@ local function replyFor(id, serverChannel)
     return channel == serverChannel and 41001 or channel
 end
 
-local function validPath(path)
+local function validPath(path, sender)
     if type(path) ~= "table" then return false end
-    local seen, count = {}, 0
+    local seen, count, length = {}, 0, #path
     for index, hop in pairs(path) do
         count = count + 1
-        if not integer(index, 1, #path) or type(hop) ~= "table"
+        if not integer(index, 1, length) or type(hop) ~= "table"
             or not integer(hop.computerId, 0, 2147483647)
             or type(hop.id) ~= "string" or #hop.id < 1 or #hop.id > 64
-            or seen[hop.computerId] then return false end
+            or hop.computerId == sender or seen[hop.computerId] then return false end
         seen[hop.computerId] = true
+        Work.check(24)
     end
-    return count == #path
+    return count == length
 end
 
 local function transportValid(packet, reply, config)
     local t = packet._transport
     if type(t) ~= "table" or t.version ~= 1 or t.serverChannel ~= config.channel
         or not integer(t.boot, 1, 2147483647) or not integer(t.sequence, 1, 2147483647)
-        or not integer(t.channel, 1, 65532) or not validPath(t.path) then return false end
-    for _, hop in ipairs(t.path) do if hop.computerId == packet.sender then return false end end
+        or not integer(t.channel, 1, 65532) or not validPath(t.path, packet.sender) then return false end
     if t.channel == config.channel then
         return reply == replyFor(packet.sender, config.channel)
             and (config.serverId == nil or packet.recipient == nil or packet.recipient == config.serverId)
@@ -235,30 +240,48 @@ local function packetKey(packet)
     return tostring(packet.sender) .. ":" .. t.boot .. ":" .. t.sequence
 end
 
--- A bounded FIFO suppresses copies, not retries: every new send has a new ID.
+-- A fixed ring suppresses copies in constant time, even after a quiet period
+-- when many old entries expire at once. Actual retries have fresh packet IDs.
 function Network.newCache(limit, lifetime)
-    local entries, queue, head, tail = {}, {}, 1, 0
+    local entries, slots, nextSlot = {}, {}, 1
     return function(key, now)
-        while head <= tail and now - queue[head].at >= lifetime do
-            local entry = queue[head]
-            if entries[entry.key] == entry then entries[entry.key] = nil end
-            queue[head], head = nil, head + 1
-        end
-        if entries[key] then return false end
-        if tail - head + 1 >= limit then
-            local entry = queue[head]
-            if entries[entry.key] == entry then entries[entry.key] = nil end
-            queue[head], head = nil, head + 1
-        end
+        local known = entries[key]
+        if known and now - known.at < lifetime then return false end
+        local previous = slots[nextSlot]
+        if previous and entries[previous.key] == previous then entries[previous.key] = nil end
         local entry = {key = key, at = now}
-        tail, queue[tail + 1], entries[key] = tail + 1, entry, entry
-        if head > limit then
-            local compact = {}
-            for i = head, tail do compact[#compact + 1] = queue[i] end
-            queue, head, tail = compact, 1, #compact
-        end
+        slots[nextSlot], entries[key] = entry, entry
+        nextSlot = nextSlot % limit + 1
         return true
     end
+end
+
+-- CraftOS 1.5 probes the modem before checking whether a packet can be
+-- Rednet traffic. Filter the two eligible channels in its private API
+-- environment, before the expensive lookup. Every SmartHome role uses this.
+local function filterLegacyRednet(id)
+    local version = type(os.version) == "function" and os.version()
+    if type(version) ~= "string" or version:match("^%a+OS (%d+%.%d+)") ~= "1.5" then return false end
+    if type(rednet) ~= "table" or type(rednet.run) ~= "function" or type(getfenv) ~= "function" then return false end
+    local ok, env = pcall(getfenv, rednet.run)
+    if not ok or type(env) ~= "table" or env == _G or rawget(env, "run") ~= rednet.run then return false end
+    local original = env.os
+    if type(original) ~= "table" or type(original.pullEventRaw) ~= "function"
+        or rawget(env, "__smarthomeRednetOS") == original or rednet.CHANNEL_BROADCAST ~= 65535 then return false end
+
+    local privateOS = setmetatable({}, {__index = original})
+    function privateOS.pullEventRaw(filter)
+        if filter ~= "modem_message" then return original.pullEventRaw(filter) end
+        while true do
+            local event, side, channel, reply, payload, distance = original.pullEventRaw(filter)
+            if event ~= "modem_message" or channel == id or channel == 65535 then
+                return event, side, channel, reply, payload, distance
+            end
+        end
+    end
+    rawset(env, "os", privateOS)
+    rawset(env, "__smarthomeRednetOS", privateOS)
+    return true
 end
 
 function Network.new(config, isServer, logger)
@@ -276,6 +299,7 @@ function Network.new(config, isServer, logger)
     boot.bootCounter = boot.bootCounter + 1
     assert(storage.save(path, boot), "Cannot checkpoint network startup")
     local net = {id = os.getComputerID(), config = config, isServer = isServer}
+    if filterLegacyRednet(net.id) then log("CraftOS 1.5 Rednet channel filter active") end
     -- Destination IDs still disambiguate computers if reply channels collide.
     net.replyChannel = replyFor(net.id, config.channel)
     net.listenChannel = isServer and config.channel or net.replyChannel
@@ -340,26 +364,31 @@ function Network.new(config, isServer, logger)
         return net.send(client.channel, client.computerId, message)
     end
 
-    local function decode(side, channel, replyChannel, raw)
-        if side ~= net.side then return nil end
+    local function decode(side, channel, replyChannel, raw, relay)
+        local relayed = channel == relayChannel
+        if side ~= net.side or (relayed and config.relayEnabled == false)
+            or (not relayed and channel ~= net.listenChannel) then return nil end
         if not integer(replyChannel, 1, 65532) or type(raw) ~= "string"
             or #raw > 65536 then return nil end
+        if relay then Work.stage = "Decoding relay packet (" .. #raw .. " bytes)" end
+        Work.check(#raw)
         local ok, packet = pcall(textutils.unserialize, raw)
-        if not ok or type(packet) ~= "table" or packet.protocol ~= protocol
+        if not ok then
+            if (relay or isServer) and Work.isWatchdog(packet) then
+                Work.report(Work.stage, packet)
+                Work.check(16384)
+            end
+            return nil
+        end
+        if type(packet) ~= "table" or packet.protocol ~= protocol
             or packet.networkId ~= config.networkId
             or not integer(packet.sender, 0, 2147483647)
             or packet.sender == net.id or type(packet.type) ~= "string"
             or packet.recipient ~= nil and not integer(packet.recipient, 0, 2147483647) then return nil end
         if packet._transport ~= nil and not transportValid(packet, replyChannel, config) then return nil end
-        if channel == relayChannel then
-            if config.relayEnabled == false or packet._transport == nil then return nil end
-        elseif channel ~= net.listenChannel then return nil end
+        if relayed and packet._transport == nil then return nil end
+        Work.check(#raw)
         return packet
-    end
-
-    function net.readRelay(side, channel, replyChannel, raw)
-        if channel ~= relayChannel then return nil end
-        return decode(side, channel, replyChannel, raw)
     end
 
     function net.forward(packet, replyChannel, id)
@@ -369,15 +398,19 @@ function Network.new(config, isServer, logger)
         for _, hop in ipairs(t.path) do if hop.computerId == net.id then return false end end
         t.path[#t.path + 1] = {id = id, computerId = net.id}
         packet._route = nil
-        local raw = textutils.serialize(packet)
+        Work.stage = "Encoding relay packet from computer " .. packet.sender
+        local encoded, raw = Work.call(Work.serialize, packet)
+        if not encoded then
+            if Work.isWatchdog(raw) then Work.check(16384) end
+            return false
+        end
         if #raw > 65536 then return false end
         local ok = pcall(net.modem.transmit, relayChannel, replyChannel, raw)
         if not ok then net.modem, net.side = nil, nil end
         return ok
     end
 
-    function net.receive(side, channel, replyChannel, raw)
-        local packet = decode(side, channel, replyChannel, raw)
+    local function accept(packet, replyChannel)
         if not packet then return nil end
         local t = packet._transport
         if t and t.channel ~= net.listenChannel then return nil end
@@ -393,8 +426,18 @@ function Network.new(config, isServer, logger)
         packet._route = {}
         for _, hop in ipairs(t and t.path or {}) do
             packet._route[#packet._route + 1] = {id = hop.id, computerId = hop.computerId}
+            Work.check(24)
         end
         return packet
+    end
+
+    function net.receive(side, channel, replyChannel, raw)
+        return accept(decode(side, channel, replyChannel, raw), replyChannel)
+    end
+
+    function net.receiveForRelay(side, channel, replyChannel, raw)
+        local packet = decode(side, channel, replyChannel, raw, true)
+        return accept(packet, replyChannel), channel == relayChannel and packet or nil
     end
 
     return net
@@ -4929,7 +4972,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v39: starting")
+console.log("SmartHome OS v40: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -6096,7 +6139,7 @@ function Relay.new(net, config)
     local remember = Network.newCache(4096, 60)
 
     function client.handleModem(side, channel, replyChannel, raw, now)
-        local message = net.receive(side, channel, replyChannel, raw)
+        local message, packet = net.receiveForRelay(side, channel, replyChannel, raw)
         if message and message.type == "welcome" and message.clientId == config.clientId
             and message.nonce == client.nonce and type(message.serverSession) == "string"
             and (not client.connected or message.sender == client.serverId) then
@@ -6104,7 +6147,6 @@ function Relay.new(net, config)
             client.connected, client.serverId, client.serverSession, client.lastServer = true, message.sender, message.serverSession, now
             if changed then print("Connected to OS computer " .. client.serverId) end
         end
-        local packet = net.readRelay(side, channel, replyChannel, raw)
         if not packet or packet.recipient == net.id then return end
         for _, hop in ipairs(packet._transport.path) do if hop.computerId == net.id then return end end
         if not remember(Network.packetKey(packet), now) then return end
@@ -6128,27 +6170,101 @@ end
 return Relay
 ]=],
     ["clients_relay_client.lua"] = [=[-- A single wireless modem bridges all updated SmartHome roles in both directions.
-local storage = dofile("lib_storage.lua")
-local Network = dofile("lib_network.lua")
-local Relay = dofile("lib_relay.lua")
-local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
-local config = storage.config("configs_relay.txt", {clientId = "relay_" .. os.getComputerID(), announceInterval = 5, timeout = 15})
-assert(type(config.clientId) == "string" and #config.clientId > 0 and #config.clientId <= 64, "Invalid relay client ID")
-assert(type(config.announceInterval) == "number" and config.announceInterval >= 0.5 and config.announceInterval <= 60,
-    "Invalid relay announce interval")
-assert(type(config.timeout) == "number" and config.timeout > config.announceInterval, "Invalid relay timeout")
-local net = Network.new(networkConfig, false)
-local client = Relay.new(net, config)
-print("Relay client: " .. config.clientId .. " (computer " .. net.id .. ")")
-print("Relay channel " .. net.relayChannel .. "; automatic multi-hop forwarding")
-client.tick(os.clock())
-local timer = os.startTimer(0.1)
-while true do
-    local event, p1, p2, p3, p4 = os.pullEvent()
-    if event == "modem_message" then client.handleModem(p1, p2, p3, p4, os.clock())
-    elseif event == "timer" and p1 == timer then client.tick(os.clock()); timer = os.startTimer(0.1)
-    elseif event == "peripheral" or event == "peripheral_detach" then net.peripheralChanged(p1) end
+local Work = dofile("lib_work.lua")
+Work.disable()
+local report = {path = "diagnostics_relay_error.txt", title = "SmartHome relay v40, computer " .. os.getComputerID()}
+local net, client
+
+local function finish(ok, err)
+    Work.disable()
+    if ok then return end
+    local message = tostring(err)
+    if message ~= "Terminated" and not message:match(":%s*Terminated$") then
+        print("Relay stopped during: " .. Work.stage)
+        if Work.report(Work.stage, err, report) then print("Error report: " .. report.path) end
+    end
+    error(err, 0)
 end
+
+Work.stage = "Starting relay"
+local ok, err = pcall(function()
+    local storage = dofile("lib_storage.lua")
+    local Network = dofile("lib_network.lua")
+    local Relay = dofile("lib_relay.lua")
+    local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
+    local config = storage.config("configs_relay.txt", {clientId = "relay_" .. os.getComputerID(), announceInterval = 5, timeout = 15})
+    assert(type(config.clientId) == "string" and #config.clientId > 0 and #config.clientId <= 64, "Invalid relay client ID")
+    assert(type(config.announceInterval) == "number" and config.announceInterval >= 0.5 and config.announceInterval <= 60,
+        "Invalid relay announce interval")
+    assert(type(config.timeout) == "number" and config.timeout > config.announceInterval, "Invalid relay timeout")
+    net = Network.new(networkConfig, false)
+    client = Relay.new(net, config)
+    print("Relay client v40: " .. config.clientId .. " (computer " .. net.id .. ")")
+    print("Relay channel " .. net.relayChannel .. "; automatic multi-hop forwarding")
+    if fs.exists(report.path) then print("Saved relay error: " .. report.path) end
+end)
+if not ok then finish(ok, err) end
+
+local pending, head, tail, bytes = {}, 1, 0, 0
+local timer, wakeTimer
+local overflow = false
+local function collect(item)
+    local event = item[1]
+    if event == "timer" and item[2] == wakeTimer then wakeTimer = nil; return end
+    if event == "modem_message" then
+        local raw = item[5]
+        if (item[3] ~= net.relayChannel and item[3] ~= net.listenChannel)
+            or type(raw) ~= "string" or #raw > 65536 then return end
+        if tail - head + 1 >= 256 or bytes + #raw > 1048576 then
+            if not overflow then print("Relay receive queue full; dropping excess packets"); overflow = true end
+            return
+        end
+        bytes = bytes + #raw
+    elseif event ~= "peripheral" and event ~= "peripheral_detach" and (event ~= "timer" or item[2] ~= timer) then return end
+    tail = tail + 1
+    pending[tail] = item
+end
+
+local function cooperate()
+    -- Any delivered event ends the CPU slice. A native timer wakes the worker
+    -- when the CraftOS queue drops the software event and traffic goes quiet.
+    if not wakeTimer then wakeTimer = os.startTimer(0) end
+    os.queueEvent("smarthome_relay_yield")
+    collect({os.pullEvent()})
+end
+
+ok, err = Work.protect(function()
+    Work.enable(cooperate, 8192, report)
+    client.tick(os.clock())
+    timer = os.startTimer(0.1)
+    while true do
+        local item
+        if head <= tail then
+            item = pending[head]
+            pending[head], head = nil, head + 1
+            if item[1] == "modem_message" then bytes = bytes - #item[5] end
+        else
+            pending, head, tail, overflow = {}, 1, 0, false
+            Work.stage = "Waiting for relay events"
+            item = {os.pullEvent()}
+        end
+        local event, p1, p2, p3, p4 = unpack(item)
+        if event == "modem_message" then
+            Work.stage = "Handling relay modem message"
+            client.handleModem(p1, p2, p3, p4, os.clock())
+        elseif event == "timer" and p1 == wakeTimer then wakeTimer = nil
+        elseif event == "timer" and p1 == timer then
+            Work.stage = "Announcing relay"
+            client.tick(os.clock())
+            timer = os.startTimer(0.1)
+        elseif event == "peripheral" or event == "peripheral_detach" then
+            Work.stage = "Relay peripheral change"
+            net.peripheralChanged(p1)
+        end
+        if head <= tail then Work.check(128) end
+    end
+end)
+finish(ok, err)
 ]=],
 }
 local workChunk = assert(loadstring(sources["lib_work.lua"], "lib_work.lua"))
@@ -6157,7 +6273,7 @@ workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v39")
+print("SmartHome installer: bundled-v40")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
@@ -6172,7 +6288,7 @@ if role == "app" then
     assert(not source and not args[4]
         or (source == "--file" or source == "--ref") and args[4] and not args[5]
         or source and source:match("^%w+$") and not args[4], appUsage)
-    assert(name ~= "system", "System Overview is built into OS settings on bundled-v39")
+    assert(name ~= "system", "System Overview is built into OS settings on bundled-v40")
     local github = source == nil or source == "--ref"
     local ref = source == "--ref" and args[4] or "main"
     assert(not github or ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)

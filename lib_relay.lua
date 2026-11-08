@@ -8,7 +8,7 @@ function Relay.new(net, config)
     local remember = Network.newCache(4096, 60)
 
     function client.handleModem(side, channel, replyChannel, raw, now)
-        local message = net.receive(side, channel, replyChannel, raw)
+        local message, packet = net.receiveForRelay(side, channel, replyChannel, raw)
         if message and message.type == "welcome" and message.clientId == config.clientId
             and message.nonce == client.nonce and type(message.serverSession) == "string"
             and (not client.connected or message.sender == client.serverId) then
@@ -16,7 +16,6 @@ function Relay.new(net, config)
             client.connected, client.serverId, client.serverSession, client.lastServer = true, message.sender, message.serverSession, now
             if changed then print("Connected to OS computer " .. client.serverId) end
         end
-        local packet = net.readRelay(side, channel, replyChannel, raw)
         if not packet or packet.recipient == net.id then return end
         for _, hop in ipairs(packet._transport.path) do if hop.computerId == net.id then return end end
         if not remember(Network.packetKey(packet), now) then return end
