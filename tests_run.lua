@@ -18,8 +18,15 @@ local function serialize(value, seen)
     -- rejecting repeated references as well as actual ancestor cycles.
     assert(not seen[value], "Cannot serialize table with recursive entries")
     seen[value] = true
-    local parts = {}
-    for key, item in pairs(value) do parts[#parts + 1] = "[" .. serialize(key, seen) .. "]=" .. serialize(item, seen) end
+    local parts, keys = {}, {}
+    for key in pairs(value) do keys[#keys + 1] = key end
+    -- State comparisons must not depend on LuaJ's table traversal order.
+    table.sort(keys, function(a, b)
+        return type(a) .. ":" .. tostring(a) < type(b) .. ":" .. tostring(b)
+    end)
+    for _, key in ipairs(keys) do
+        parts[#parts + 1] = "[" .. serialize(key, seen) .. "]=" .. serialize(value[key], seen)
+    end
     return "{" .. table.concat(parts, ",") .. "}"
 end
 local function unserialize(value)
@@ -937,7 +944,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v41", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v43", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()

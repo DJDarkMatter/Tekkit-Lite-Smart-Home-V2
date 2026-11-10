@@ -5,6 +5,17 @@ local function integer(value, high)
     return type(value) == "number" and value == math.floor(value)
         and value >= 0 and value <= high
 end
+local function line(values, color)
+    if color then return math.floor(values.bundled / color) % 2 == 1 end
+    return values.digital
+end
+local function withLine(values, color, on)
+    local result = {bundled = values.bundled, digital = values.digital}
+    if color then
+        if line(values, color) ~= on then result.bundled = values.bundled + (on and color or -color) end
+    else result.digital = on end
+    return result
+end
 
 function IO.new(net, config)
     assert(type(config.clientId) == "string" and #config.clientId > 0, "Invalid IO clientId")
@@ -17,7 +28,8 @@ function IO.new(net, config)
     for _, side in ipairs(config.sides) do assert(validSides[side], "Invalid IO side: " .. tostring(side)) end
     local client = {connected = false, nonce = 0, lastRevision = -1, appliedRevision = -1, lastAnnounce = -math.huge,
         lastInputs = -math.huge, lastServer = 0, inputs = {}}
-    local outputs, targets, pendingRevision = {}, {}, nil
+    local outputs, targets, pulses, pendingRevision = {}, {}, {}, nil
+    local pulseMinHundredths = math.ceil(outputInterval * 100 - 0.000001)
 
     local function allowed(side)
         if side == net.side then return false end
@@ -35,22 +47,36 @@ function IO.new(net, config)
 
     local function acknowledge()
         if client.connected and client.appliedRevision >= 0 then
+            local status
+            for side, pulse in pairs(pulses) do
+                if pulse.deadline then
+                    status = status or {}
+                    status[side] = {id = pulse.id, done = pulse.done == true}
+                end
+            end
             net.send(net.config.channel, client.serverId, {type = "ioAck", clientId = config.clientId,
-                serverSession = client.serverSession, revision = client.appliedRevision})
+                serverSession = client.serverSession, revision = client.appliedRevision, buttonPulses = status})
         end
     end
 
     local function flushOutputs(now)
-        local complete = true
+        local complete, pulseChanged = true, false
         for _, side in ipairs(sides) do
             local wanted = targets[side]
             if wanted and allowed(side) then
                 local actual = outputState(side, now)
+                local pulse = pulses[side]
+                local releasing = pulse and pulse.deadline and now + 0.000001 >= pulse.deadline
+                if pulse and not releasing then wanted = withLine(wanted, pulse.color, true) end
                 if now + 0.000001 >= actual.nextWrite then
                     local kind
                     -- IDT-Fix shares one cooldown between bundled and digital
                     -- writes on each side. Prefer clearing an old signal first.
-                    if actual.bundled ~= wanted.bundled and wanted.bundled == 0 then kind = "bundled"
+                    if releasing and line(actual, pulse.color) then kind = pulse.color and "bundled" or "digital"
+                    elseif pulse and pulse.deadline and not releasing and now + outputInterval > pulse.deadline + 0.000001 then
+                        -- Leave the last write slot free for the timed falling edge.
+                        kind = nil
+                    elseif actual.bundled ~= wanted.bundled and wanted.bundled == 0 then kind = "bundled"
                     elseif actual.digital ~= wanted.digital and not wanted.digital then kind = "digital"
                     elseif actual.bundled ~= wanted.bundled then kind = "bundled"
                     elseif actual.digital ~= wanted.digital then kind = "digital" end
@@ -60,23 +86,49 @@ function IO.new(net, config)
                         actual[kind], actual.nextWrite = wanted[kind], now + outputInterval
                     end
                 end
+                if pulse and not pulse.deadline and line(actual, pulse.color) then
+                    pulse.deadline, pulseChanged = now + math.ceil(pulse.hundredths / 5) / 20, true
+                elseif releasing and not pulse.done and not line(actual, pulse.color) then
+                    pulse.done, pulseChanged = true, true
+                end
                 if actual.bundled ~= wanted.bundled or actual.digital ~= wanted.digital then complete = false end
             elseif wanted then
-                targets[side] = nil
+                targets[side], pulses[side] = nil, nil
             end
         end
         if complete then
             client.clearing = false
             if client.connected and pendingRevision ~= nil then
                 client.appliedRevision, pendingRevision = pendingRevision, nil
-                acknowledge()
+                pulseChanged = true
             end
         end
+        if pulseChanged then acknowledge() end
+    end
+
+    function client.nextPulseDeadline(now)
+        local deadline
+        for _, pulse in pairs(pulses) do
+            local at = pulse.deadline
+            if at and at > now + 0.000001 and (not deadline or at < deadline) then deadline = at end
+        end
+        return deadline
+    end
+
+    local function endPulses()
+        local clears = {}
+        for side, pulse in pairs(pulses) do
+            local actual = outputs[side]
+            if actual and line(actual, pulse.color) and allowed(side) then
+                clears[side] = withLine(actual, pulse.color, false)
+            end
+        end
+        targets, pulses, pendingRevision = clears, {}, nil
     end
 
     function client.clearOutputs()
         local now = os.clock()
-        targets, pendingRevision, client.appliedRevision, client.clearing = {}, nil, -1, true
+        targets, pulses, pendingRevision, client.appliedRevision, client.clearing = {}, {}, nil, -1, true
         for _, side in ipairs(sides) do
             if allowed(side) then
                 outputState(side, now)
@@ -90,8 +142,7 @@ function IO.new(net, config)
         if client.connected then print("OS disconnected; retrying") end
         client.connected = false
         client.lastAnnounce, client.appliedRevision, client.clearing = -math.huge, -1, false
-        targets, pendingRevision = {}, nil
-        if config.safeOff then client.clearOutputs() end
+        if config.safeOff then client.clearOutputs() else endPulses() end
     end
 
     function client.announce(now)
@@ -101,7 +152,7 @@ function IO.new(net, config)
             if allowed(side) then capabilities[side] = {bundled = true, digital = true} end
         end
         net.toServer({type = "announce", clientType = "io", clientId = config.clientId,
-            nonce = client.nonce, capabilities = capabilities})
+            nonce = client.nonce, capabilities = capabilities, buttonMinHundredths = pulseMinHundredths})
         client.lastAnnounce = now
     end
 
@@ -134,7 +185,7 @@ function IO.new(net, config)
             client.connected, client.lastServer = true, now
             if restarted then
                 client.lastRevision, client.appliedRevision = -1, -1
-                targets, pendingRevision = {}, nil
+                endPulses()
             end
             if reconnected then
                 print("Connected to OS computer " .. client.serverId)
@@ -149,6 +200,22 @@ function IO.new(net, config)
                 if not allowed(side) or type(values) ~= "table" or not integer(values.bundled, 65535)
                     or type(values.digital) ~= "boolean" then return end
             end
+            local requests = message.buttonPulses
+            if requests ~= nil then
+                if type(requests) ~= "table" then return end
+                for side, pulse in pairs(requests) do
+                    if not message.outputs[side] or type(pulse) ~= "table"
+                        or not integer(pulse.id, 2147483647) or pulse.id < 1
+                        or not integer(pulse.hundredths, 2147483647) or pulse.hundredths < pulseMinHundredths then return end
+                    if pulse.color ~= nil then
+                        if not integer(pulse.color, 32768) or pulse.color < 1 then return end
+                        local bit = pulse.color
+                        while bit > 1 and bit % 2 == 0 do bit = bit / 2 end
+                        if bit ~= 1 then return end
+                    end
+                    if line(message.outputs[side], pulse.color) then return end
+                end
+            end
             client.lastServer = now
             if message.revision < client.lastRevision
                 or (message.revision == client.appliedRevision and pendingRevision == nil) then
@@ -156,7 +223,13 @@ function IO.new(net, config)
                 return
             end
             if message.revision > client.lastRevision or pendingRevision == nil then
-                targets = {}
+                local nextPulses = {}
+                for side, request in pairs(requests or {}) do
+                    local previous = pulses[side]
+                    if previous and previous.id == request.id then nextPulses[side] = previous
+                    else nextPulses[side] = {id = request.id, color = request.color, hundredths = request.hundredths} end
+                end
+                targets, pulses = {}, nextPulses
                 for side, values in pairs(message.outputs) do
                     targets[side] = {bundled = values.bundled, digital = values.digital}
                 end

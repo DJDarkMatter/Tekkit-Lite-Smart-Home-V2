@@ -27,6 +27,26 @@ function Gui.editText(keyboard, action, value, limit)
     return true
 end
 
+function Gui.editNumber(draft, key, limit)
+    if key == "Clr" then return "" end
+    if key == "Del" then return draft:sub(1, -2) end
+    if #draft < limit and (key ~= "." or not draft:find(".", 1, true)) then
+        return (draft == "0" and key ~= "." and "" or draft) .. key
+    end
+    return draft
+end
+function Gui.durationHundredths(text, minimum)
+    local value = tonumber((text:gsub(",", ".")))
+    if not value or value ~= value or value < 0 or value > 21474836.47 then return nil end
+    local hundredths = math.floor(value * 100 + 0.5)
+    if hundredths >= minimum and math.abs(value * 100 - hundredths) < 0.00001 then return hundredths end
+end
+function Gui.seconds(hundredths)
+    local fraction = hundredths % 100
+    local decimal = fraction % 10 == 0 and tostring(fraction / 10) or string.format("%02d", fraction)
+    return tostring(math.floor(hundredths / 100)) .. "." .. decimal
+end
+
 function Gui.actionAt(hits, x, y)
     for _, hit in ipairs(hits) do
         if hit.enabled ~= false and Gui.hit(hit, x, y) then return hit.action, hit.value end
@@ -231,9 +251,9 @@ function Gui.form(width,height,view,accent,background,panel)
         for i=1,slots do ui.put(1,i+1,wrapped[first+i] or "",width) end
         ui.footer({{"Back",back}})
     end
-    function ui.numberPad(title,draft,back)
+    function ui.numberPad(title,draft,back,decimal)
         ui.heading(title,accent); ui.put(1,2,draft=="" and "0" or draft,width,true)
-        for i,key in ipairs({"1","2","3","4","5","6","7","8","9","Clr","0","Del"}) do
+        for i,key in ipairs({"1","2","3","4","5","6","7","8","9",decimal and "." or "Clr","0","Del"}) do
             local col,row=(i-1)%4,math.floor((i-1)/4)
             ui.action(3+row,key,"digit",key,1+math.floor(col*width/4),math.floor((col+1)*width/4),true,accent)
         end

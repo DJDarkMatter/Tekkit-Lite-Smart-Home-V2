@@ -61,7 +61,8 @@ function Work.serialize(value)
             parts[#parts + 1] = string.format("%q", item); Work.check(#item)
         elseif kind == "number" then
             assert(item == item and math.abs(item) < math.huge, "Cannot serialize non-finite number")
-            parts[#parts + 1] = tostring(item)
+            -- Legacy LuaJ tostring truncates fractional geometry and counters.
+            parts[#parts + 1] = string.format("%.17g", item)
         elseif kind == "boolean" or kind == "nil" then parts[#parts + 1] = tostring(item)
         else
             assert(kind == "table", "Cannot serialize " .. kind)

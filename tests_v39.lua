@@ -393,6 +393,103 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(id, "cancelAmount"); equal(t.state.appStates.logic_sandbox.circuits[1].nodes[1].amount, rule)
     end
 
+    local function logicRoute(t, id, side, color)
+        if not t.server.dialogs[id] then t.click(id, "route") end
+        t.click(id, "select", "io_11"); t.click(id, "select", side); t.click(id, "select", color); t.click(id, "use")
+    end
+    local function logicSource(t, id, port, source)
+        t.click(id, "source", port); t.click(id, "assignSource", source)
+    end
+    local function logicTime(t, id, value)
+        while #t.server.views[id].time.draft > 0 do t.click(id, "digit", "Del") end
+        for digit in value:gmatch(".") do t.click(id, "digit", digit) end
+        t.click(id, "setNumber")
+    end
+    local function logicInput(t, mask)
+        t.bridge.bundledInputs.top = mask
+        t.bus.queue(t.bridge, {"redstone"}); t.bus.pump()
+    end
+
+    function tests.v42_logic_sequence_wires_a_compound_rule_waits_turns_off_and_alarms_with_no_window()
+        local t = setup({logic_sandbox = true})
+        local id = t.open("logic_sandbox", "top", 58, 24, 1, 1)
+        t.click(id, "newCircuit"); t.click(id, "saveText")
+        local function add(kind)
+            if t.server.views[id].screen == "node" then t.click(id, "circuit") end
+            t.click(id, "addNode"); t.click(id, "createNode", kind)
+        end
+        for _, color in ipairs({1, 2, 4}) do add("Input"); logicRoute(t, id, "top", color) end
+        add("AND"); logicSource(t, id, "a", 2); logicSource(t, id, "b", 3)
+        add("OR"); logicSource(t, id, "a", 1); logicSource(t, id, "b", 4)
+        add("Sequence"); logicSource(t, id, "a", 5); t.click(id, "steps")
+        local function block(kind)
+            t.click(id, "addStep"); t.click(id, "createAction", kind)
+            return t.server.views[id].nodeId
+        end
+        local firstWait = block("Wait")
+        t.click(id, "editTime"); logicTime(t, id, "0.5"); t.click(id, "returnRule")
+        block("Set output")
+        t.click(id, "targets"); t.click(id, "newTarget"); logicRoute(t, id, "front", 1)
+        t.click(id, "returnRule")
+        block("Wait")
+        t.click(id, "editTime"); logicTime(t, id, "20.17"); t.click(id, "returnRule")
+        block("Set output")
+        t.click(id, "targets"); t.click(id, "chooseTarget", 9); t.click(id, "outputLevel"); t.click(id, "returnRule")
+        local alarm = block("Alarm")
+        t.click(id, "returnRule")
+        t.click(id, "addStep"); t.click(id, "useAction", firstWait)
+        local nodes = t.state.appStates.logic_sandbox.circuits[1].nodes
+        equal(nodes[6].steps[6], firstWait, "A second occurrence refers to the existing block")
+        t.click(id, "selectStep", 6); t.click(id, "removeStep"); t.click(id, "confirmStep")
+        t.click(id, "selectStep", 4); t.click(id, "moveStep", -1)
+        t.click(id, "selectStep", 3); t.click(id, "moveStep", 1)
+        t.click(id, "node")
+        t.click(id, "circuit"); t.click(id, "flow")
+        local flow = table.concat(t.lines(id), "\n")
+        assert(flow:find("Input 2 AND Input 3", 1, true))
+        assert(flow:find("Input 1 OR AND 4", 1, true))
+        assert(flow:find("3. Wait 20.17s", 1, true))
+        assert(flow:find("4. Set Output target 9 OFF", 1, true))
+        t.click(id, "circuit"); t.click(id, "circuitMenu"); t.click(id, "toggleCircuit")
+        logicInput(t, 2); t.bus.advance(1)
+        equal(t.bridge.bundled.front, 0, "Input 2 alone is not enough")
+        logicInput(t, 6); t.bus.advance(.5)
+        equal(t.bridge.bundled.front, 0, "The first Wait must finish before ON")
+        t.bus.advance(.5); equal(t.bridge.bundled.front, 1)
+        local started = t.bridge.redstoneWrites[#t.bridge.redstoneWrites].time
+        assert(t.api.closeWindow(id))
+        t.bus.advance(20.19); equal(t.bridge.bundled.front, 1)
+        t.bus.advance(.02); equal(t.bridge.bundled.front, 0)
+        local ended = t.bridge.redstoneWrites[#t.bridge.redstoneWrites].time
+        assert(math.abs(ended - started - 20.2) < .000001)
+        local popup = assert(t.server.monitors[topId].notification)
+        assert(table.concat(t.top.lines, "\n"):find("Alarm " .. alarm, 1, true))
+        t.touch("top", popup.ok.x1, popup.ok.y)
+        t.bus.advance(1.5); equal(t.bridge.bundled.front, 0, "A held condition must not trigger a second run")
+        logicInput(t, 0); t.bus.advance(.5)
+        logicInput(t, 1); t.bus.advance(1); equal(t.bridge.bundled.front, 1, "Input 1 alone satisfies the OR branch")
+    end
+
+    function tests.v42_logic_delay_requires_continuous_high_and_wakes_before_the_normal_tick()
+        local t = setup({logic_sandbox = true})
+        local id = t.open("logic_sandbox", "top", 14, 8, 1, 1)
+        t.click(id, "newCircuit"); t.click(id, "saveText")
+        t.click(id, "addNode"); t.click(id, "createNode", "Input"); logicRoute(t, id, "top", 1)
+        t.click(id, "circuit"); t.click(id, "addNode"); t.click(id, "createNode", "Delay")
+        logicSource(t, id, "a", 1); t.click(id, "editTime"); logicTime(t, id, "0.12")
+        t.click(id, "circuit"); t.click(id, "addNode"); t.click(id, "createNode", "Output")
+        logicSource(t, id, "a", 2); logicRoute(t, id, "front", 1)
+        t.click(id, "circuit"); t.click(id, "circuitMenu"); t.click(id, "toggleCircuit")
+        logicInput(t, 1); t.bus.advance(.64); equal(t.bridge.bundled.front, 0)
+        logicInput(t, 0); t.bus.advance(.02); equal(t.bridge.bundled.front, 0, "A low before the deadline cancels the wait")
+        logicInput(t, 1); t.bus.advance(.63); equal(t.bridge.bundled.front, 0)
+        t.bus.advance(.02); equal(t.bridge.bundled.front, 1, "The 0.15s deadline runs before the next half-second tick")
+        t.reboot()
+        local nodes = t.state.appStates.logic_sandbox.circuits[1].nodes
+        equal(nodes[2].delayHundredths, 12); equal(nodes[3].a, 2)
+        equal(t.api.ui.durationHundredths("7200.37", 1), 720037)
+    end
+
     function tests.v39_presets_preview_adapt_and_keep_app_view_across_reboot()
         local t = setup({window_presets = true, notes = true, switchboard = true})
         local a = t.open("notes", "top", 26, 11, 1, 1)

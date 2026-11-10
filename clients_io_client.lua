@@ -18,6 +18,7 @@ print("IO client: " .. config.clientId .. " (computer " .. net.id .. ")")
 if not net.modem then print("Attach a wireless modem; waiting...") end
 client.tick(os.clock())
 local timer = os.startTimer(0.1)
+local pulseTimer, pulseAt
 while true do
     local event, p1, p2, p3, p4 = os.pullEvent()
     if event == "modem_message" then
@@ -28,10 +29,19 @@ while true do
     elseif event == "timer" and p1 == timer then
         client.tick(os.clock())
         timer = os.startTimer(0.1)
+    elseif event == "timer" and p1 == pulseTimer then
+        pulseTimer, pulseAt = nil, nil
+        client.tick(os.clock())
     elseif event == "peripheral" or event == "peripheral_detach" then
         net.peripheralChanged(p1)
         if not net.modem then client.disconnect() end
         client.lastAnnounce = -math.huge
         client.tick(os.clock())
+    end
+    local now = os.clock()
+    local deadline = client.nextPulseDeadline(now)
+    if deadline and (not pulseAt or deadline < pulseAt - 0.000001) then
+        if pulseTimer and os.cancelTimer then os.cancelTimer(pulseTimer) end
+        pulseTimer, pulseAt = os.startTimer(deadline - now), deadline
     end
 end

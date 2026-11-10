@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v41
+-- SmartHome OS installer: bundled-v43
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -69,7 +69,8 @@ function Work.serialize(value)
             parts[#parts + 1] = string.format("%q", item); Work.check(#item)
         elseif kind == "number" then
             assert(item == item and math.abs(item) < math.huge, "Cannot serialize non-finite number")
-            parts[#parts + 1] = tostring(item)
+            -- Legacy LuaJ tostring truncates fractional geometry and counters.
+            parts[#parts + 1] = string.format("%.17g", item)
         elseif kind == "boolean" or kind == "nil" then parts[#parts + 1] = tostring(item)
         else
             assert(kind == "table", "Cannot serialize " .. kind)
@@ -596,6 +597,26 @@ function Gui.editText(keyboard, action, value, limit)
     return true
 end
 
+function Gui.editNumber(draft, key, limit)
+    if key == "Clr" then return "" end
+    if key == "Del" then return draft:sub(1, -2) end
+    if #draft < limit and (key ~= "." or not draft:find(".", 1, true)) then
+        return (draft == "0" and key ~= "." and "" or draft) .. key
+    end
+    return draft
+end
+function Gui.durationHundredths(text, minimum)
+    local value = tonumber((text:gsub(",", ".")))
+    if not value or value ~= value or value < 0 or value > 21474836.47 then return nil end
+    local hundredths = math.floor(value * 100 + 0.5)
+    if hundredths >= minimum and math.abs(value * 100 - hundredths) < 0.00001 then return hundredths end
+end
+function Gui.seconds(hundredths)
+    local fraction = hundredths % 100
+    local decimal = fraction % 10 == 0 and tostring(fraction / 10) or string.format("%02d", fraction)
+    return tostring(math.floor(hundredths / 100)) .. "." .. decimal
+end
+
 function Gui.actionAt(hits, x, y)
     for _, hit in ipairs(hits) do
         if hit.enabled ~= false and Gui.hit(hit, x, y) then return hit.action, hit.value end
@@ -800,9 +821,9 @@ function Gui.form(width,height,view,accent,background,panel)
         for i=1,slots do ui.put(1,i+1,wrapped[first+i] or "",width) end
         ui.footer({{"Back",back}})
     end
-    function ui.numberPad(title,draft,back)
+    function ui.numberPad(title,draft,back,decimal)
         ui.heading(title,accent); ui.put(1,2,draft=="" and "0" or draft,width,true)
-        for i,key in ipairs({"1","2","3","4","5","6","7","8","9","Clr","0","Del"}) do
+        for i,key in ipairs({"1","2","3","4","5","6","7","8","9",decimal and "." or "Clr","0","Del"}) do
             local col,row=(i-1)%4,math.floor((i-1)/4)
             ui.action(3+row,key,"digit",key,1+math.floor(col*width/4),math.floor((col+1)*width/4),true,accent)
         end
@@ -2269,12 +2290,18 @@ function Server.new(net, storage, config, logger)
         lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}, notifications = {}}
     local clientGroups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients, relay = server.relayClients}
     local api, errors, installedApps = {}, {}, {}
-    local history, ioTests = IOHistory.new(), {}
+    local history, ioTests, ioPulses = IOHistory.new(), {}, {}
+    local nextPulseId, wakeAt = 0, nil
     local callingApp
     server.api = api
     api.ui, api.log, api.sharedOutputs, api.sensorProfiles = Gui, log, true, true
     api.cooperate, api.protectedCall = Work.check, Work.call
     api.aeItemProfiles = true
+    function api.wakeAt(deadline)
+        if type(deadline) == "number" and deadline > os.clock() and deadline < math.huge then
+            wakeAt = math.min(wakeAt or deadline, deadline)
+        end
+    end
     function api.clientName(id) return type(state.clientNames[id]) == "string" and state.clientNames[id] or id end
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
@@ -2550,6 +2577,16 @@ function Server.new(net, storage, config, logger)
             values.bundled = values.bundled + (value and color or -color)
         end
     end
+    local function pulseFor(mapping)
+        local clientPulses = ioPulses[mapping.clientId]
+        local pulse = clientPulses and clientPulses[mapping.side]
+        if pulse and pulse.color == mapping.color then return pulse end
+    end
+    local function removePulse(id, side)
+        local group = ioPulses[id]
+        group[side] = nil
+        if not next(group) then ioPulses[id] = nil end
+    end
     local function recordOutputs(id, client, now)
         for side, values in pairs(client.outputSnapshot or {}) do
             local required, pending = client.wireRevisions[side] or {}, 0
@@ -2576,6 +2613,16 @@ function Server.new(net, storage, config, logger)
                 log("IO " .. clientId .. ": mapped side " .. side .. " is unavailable")
             else snapshot[side] = values end
         end
+        local outputs, requests = snapshot, nil
+        if ioPulses[clientId] then
+            snapshot, requests = copy(outputs), {}
+            for side, pulse in pairs(ioPulses[clientId]) do
+                if snapshot[side] then
+                    requests[side] = {id = pulse.id, color = pulse.color, hundredths = pulse.hundredths}
+                    putLine(snapshot[side], pulse.color, true)
+                end
+            end
+        end
         -- A snapshot ACK covers a whole revision, but unrelated wires retain
         -- their earlier confirmation. Requiring the latest client revision for
         -- every output made an entire board flash pending after one toggle.
@@ -2599,8 +2646,41 @@ function Server.new(net, storage, config, logger)
         client.outputSnapshot = copy(snapshot)
         recordOutputs(clientId, client, os.clock())
         net.toClient(client, {type = "ioCommand", command = "syncOutputs", clientId = clientId,
-            serverSession = server.session, revision = client.revision, outputs = snapshot})
+            serverSession = server.session, revision = client.revision, outputs = outputs, buttonPulses = requests})
         client.lastSent = os.clock()
+    end
+
+    function api.outputPulseMinimum(name)
+        local route = state.outputMap[name]
+        local client = route and server.ioClients[route.clientId]
+        return client and client.buttonMinHundredths or nil
+    end
+    function api.pulseOutput(name, hundredths)
+        local route = state.outputMap[name]
+        local client = route and server.ioClients[route.clientId]
+        if not client or not client.online or not client.capabilities[route.side] then return false, "Output unavailable" end
+        local minimum = client.buttonMinHundredths
+        if not minimum then return false, "Update the IO client for Button mode" end
+        if not integer(hundredths, minimum, 2147483647) then return false, "Minimum length on this IO side is " .. Gui.seconds(minimum) .. "s" end
+        local id, side = route.clientId, route.side
+        if ioTests[id] and ioTests[id].side == side then return false, "Test in progress on this side" end
+        if state.outputs[name] == true then return false, "This wire is held ON by a switch" end
+        local group = ioPulses[id] or {}
+        if group[side] and group[side].color ~= route.color then return false, "Another button is active on this side" end
+        nextPulseId = nextPulseId + 1
+        group[side] = {id = nextPulseId, name = name, color = route.color, hundredths = hundredths,
+            untilTime = os.clock() + math.max(5, 2 * config.retryInterval + 1)}
+        ioPulses[id] = group
+        server.syncIO(id, true)
+        return true
+    end
+    function api.cancelOutputPulse(name)
+        local route = state.outputMap[name]
+        local pulse = route and pulseFor(route)
+        if pulse and pulse.name == name then
+            removePulse(route.clientId, route.side)
+            server.syncIO(route.clientId, true)
+        end
     end
 
     local function testOutput(address)
@@ -2608,6 +2688,7 @@ function Server.new(net, storage, config, logger)
         local client = server.ioClients[id]
         if not client or not client.online or not client.capabilities[side] then return false, "Output unavailable" end
         if ioTests[id] then return false, "Test in progress" end
+        if ioPulses[id] and ioPulses[id][side] then return false, "Button in progress on this side" end
         local value = lineValue(outputSnapshot(id)[side], color)
         local previous = state.managedSides[id]
         if not previous or not previous[side] then
@@ -2722,13 +2803,27 @@ function Server.new(net, storage, config, logger)
             state.outputMap, state.outputs, state.managedSides = previousMap, previousValues, previousManaged
             return false, err
         end
+        local cancelled = {}
+        for _, change in ipairs(changes) do
+            local old, new = previousMap[change.name], mappings[change.name]
+            local pulse = old and pulseFor(old)
+            if pulse and pulse.name == change.name
+                and (not new or old.clientId ~= new.clientId or old.side ~= new.side or old.color ~= new.color) then
+                removePulse(old.clientId, old.side)
+                cancelled[old.clientId] = true
+            end
+            if new and change.value ~= nil and pulseFor(new) then
+                removePulse(new.clientId, new.side)
+                cancelled[new.clientId] = true
+            end
+        end
         for _, id in ipairs(sortedKeys(affected)) do
             local snapshot = outputSnapshot(id)
             local test = ioTests[id]
             if test and lineValue(before[id][test.side], test.color) ~= lineValue(snapshot[test.side], test.color) then
                 ioTests[id] = nil
                 server.syncIO(id, true)
-            else server.syncIO(id, not sameSnapshot(before[id], snapshot)) end
+            else server.syncIO(id, cancelled[id] or not sameSnapshot(before[id], snapshot)) end
         end
         return true, err
     end
@@ -2760,6 +2855,11 @@ function Server.new(net, storage, config, logger)
                 and required ~= nil and client.ackedRevision >= required or false
             local test = ioTests[item.clientId]
             if test and test.side == item.side and test.color == item.color then item.confirmed = false end
+            local pulse = pulseFor(item)
+            if pulse then
+                item.pulse = true
+                item.confirmed = item.confirmed and pulse.started == true
+            end
             result[#result + 1] = item
         end
         return result
@@ -4255,6 +4355,7 @@ function Server.new(net, storage, config, logger)
                 ioChanged = ioChanged or ioReset
                 ioReset = ioReset or ioChanged
                 client.announceNonce = message.nonce
+                client.buttonMinHundredths = integer(message.buttonMinHundredths, 50, 2147483647) and message.buttonMinHundredths or nil
             end
             if message.clientType == "sensor" then sensors.announce(client, message, reconnect) end
             net.toClient(client, {type = "welcome", clientId = id, nonce = message.nonce, serverSession = server.session})
@@ -4268,7 +4369,7 @@ function Server.new(net, storage, config, logger)
                 -- check. They do not revoke an acknowledgement already earned.
                 if ioReset then
                     history.offline(id, now)
-                    ioTests[id] = nil
+                    ioTests[id], ioPulses[id] = nil, nil
                     client.ackedRevision, client.outputSnapshot, client.wireRevisions = -1, nil, {}
                 end
                 server.syncIO(id, ioChanged)
@@ -4283,6 +4384,7 @@ function Server.new(net, storage, config, logger)
             client.lastSeen = now
         elseif message.type == "ioAck" then
             local client = registered(server.ioClients, message, replyChannel)
+            if not client or not integer(message.revision, 0, client.revision) then return end
             if client and message.revision == client.revision then
                 client.ackedRevision, client.lastSeen = message.revision, now
                 recordOutputs(id, client, now)
@@ -4291,6 +4393,22 @@ function Server.new(net, storage, config, logger)
                     test.acknowledged = true
                     test.untilTime = math.min(test.untilTime, os.clock() + 1.5)
                 end
+            end
+            local group = ioPulses[id]
+            if group and type(message.buttonPulses) == "table" then
+                local completed = false
+                for _, side in ipairs(sortedKeys(group)) do
+                    local pulse, status = group[side], message.buttonPulses[side]
+                    if type(status) == "table" and status.id == pulse.id and type(status.done) == "boolean" then
+                        if status.done then
+                            removePulse(id, side)
+                            completed = true
+                        elseif not pulse.started then
+                            pulse.started, pulse.untilTime = true, now + pulse.hundredths / 100 + 5
+                        end
+                    end
+                end
+                if completed then server.syncIO(id, true) end
             end
         elseif message.type == "sensorCatalog" or message.type == "sensorSample" then
             local client = registered(server.sensorClients, message, replyChannel)
@@ -4373,13 +4491,14 @@ function Server.new(net, storage, config, logger)
     end
 
     function server.tick(now)
+        wakeAt = nil
         net.ensureModem()
         for kind, group in pairs(clientGroups) do
             for id, client in pairs(group) do
                 if client.online and now - client.lastSeen >= config.clientTimeout then
                     client.online = false
                     logUptime(id, kind, false, now, client.since)
-                    if kind == "io" then history.offline(id, now) end
+                    if kind == "io" then history.offline(id, now); ioPulses[id] = nil end
                     log("Client offline: " .. id)
                     if client.values then
                         if client.values.playerOnline ~= nil then server.playerOnline = false end
@@ -4404,6 +4523,16 @@ function Server.new(net, storage, config, logger)
                 server.syncIO(id, true)
             end
         end
+        for _, id in ipairs(sortedKeys(ioPulses)) do
+            local expired = false
+            for _, side in ipairs(sortedKeys(ioPulses[id])) do
+                if now >= ioPulses[id][side].untilTime then
+                    removePulse(id, side)
+                    expired = true
+                end
+            end
+            if expired then server.syncIO(id, true) end
+        end
         for id, client in pairs(server.ioClients) do
             if client.online and client.ackedRevision ~= client.revision
                 and now - (client.lastSent or -math.huge) >= config.retryInterval then server.syncIO(id, false) end
@@ -4419,6 +4548,7 @@ function Server.new(net, storage, config, logger)
             local app=win and definition(win.appName)
             if app and app.animationInterval then interval=math.min(interval,app.animationInterval) end
         end end
+        if wakeAt then interval = math.min(interval, math.max(0.05, wakeAt - os.clock())) end
         return interval
     end
 
@@ -4548,6 +4678,17 @@ local function integer(value, high)
     return type(value) == "number" and value == math.floor(value)
         and value >= 0 and value <= high
 end
+local function line(values, color)
+    if color then return math.floor(values.bundled / color) % 2 == 1 end
+    return values.digital
+end
+local function withLine(values, color, on)
+    local result = {bundled = values.bundled, digital = values.digital}
+    if color then
+        if line(values, color) ~= on then result.bundled = values.bundled + (on and color or -color) end
+    else result.digital = on end
+    return result
+end
 
 function IO.new(net, config)
     assert(type(config.clientId) == "string" and #config.clientId > 0, "Invalid IO clientId")
@@ -4560,7 +4701,8 @@ function IO.new(net, config)
     for _, side in ipairs(config.sides) do assert(validSides[side], "Invalid IO side: " .. tostring(side)) end
     local client = {connected = false, nonce = 0, lastRevision = -1, appliedRevision = -1, lastAnnounce = -math.huge,
         lastInputs = -math.huge, lastServer = 0, inputs = {}}
-    local outputs, targets, pendingRevision = {}, {}, nil
+    local outputs, targets, pulses, pendingRevision = {}, {}, {}, nil
+    local pulseMinHundredths = math.ceil(outputInterval * 100 - 0.000001)
 
     local function allowed(side)
         if side == net.side then return false end
@@ -4578,22 +4720,36 @@ function IO.new(net, config)
 
     local function acknowledge()
         if client.connected and client.appliedRevision >= 0 then
+            local status
+            for side, pulse in pairs(pulses) do
+                if pulse.deadline then
+                    status = status or {}
+                    status[side] = {id = pulse.id, done = pulse.done == true}
+                end
+            end
             net.send(net.config.channel, client.serverId, {type = "ioAck", clientId = config.clientId,
-                serverSession = client.serverSession, revision = client.appliedRevision})
+                serverSession = client.serverSession, revision = client.appliedRevision, buttonPulses = status})
         end
     end
 
     local function flushOutputs(now)
-        local complete = true
+        local complete, pulseChanged = true, false
         for _, side in ipairs(sides) do
             local wanted = targets[side]
             if wanted and allowed(side) then
                 local actual = outputState(side, now)
+                local pulse = pulses[side]
+                local releasing = pulse and pulse.deadline and now + 0.000001 >= pulse.deadline
+                if pulse and not releasing then wanted = withLine(wanted, pulse.color, true) end
                 if now + 0.000001 >= actual.nextWrite then
                     local kind
                     -- IDT-Fix shares one cooldown between bundled and digital
                     -- writes on each side. Prefer clearing an old signal first.
-                    if actual.bundled ~= wanted.bundled and wanted.bundled == 0 then kind = "bundled"
+                    if releasing and line(actual, pulse.color) then kind = pulse.color and "bundled" or "digital"
+                    elseif pulse and pulse.deadline and not releasing and now + outputInterval > pulse.deadline + 0.000001 then
+                        -- Leave the last write slot free for the timed falling edge.
+                        kind = nil
+                    elseif actual.bundled ~= wanted.bundled and wanted.bundled == 0 then kind = "bundled"
                     elseif actual.digital ~= wanted.digital and not wanted.digital then kind = "digital"
                     elseif actual.bundled ~= wanted.bundled then kind = "bundled"
                     elseif actual.digital ~= wanted.digital then kind = "digital" end
@@ -4603,23 +4759,49 @@ function IO.new(net, config)
                         actual[kind], actual.nextWrite = wanted[kind], now + outputInterval
                     end
                 end
+                if pulse and not pulse.deadline and line(actual, pulse.color) then
+                    pulse.deadline, pulseChanged = now + math.ceil(pulse.hundredths / 5) / 20, true
+                elseif releasing and not pulse.done and not line(actual, pulse.color) then
+                    pulse.done, pulseChanged = true, true
+                end
                 if actual.bundled ~= wanted.bundled or actual.digital ~= wanted.digital then complete = false end
             elseif wanted then
-                targets[side] = nil
+                targets[side], pulses[side] = nil, nil
             end
         end
         if complete then
             client.clearing = false
             if client.connected and pendingRevision ~= nil then
                 client.appliedRevision, pendingRevision = pendingRevision, nil
-                acknowledge()
+                pulseChanged = true
             end
         end
+        if pulseChanged then acknowledge() end
+    end
+
+    function client.nextPulseDeadline(now)
+        local deadline
+        for _, pulse in pairs(pulses) do
+            local at = pulse.deadline
+            if at and at > now + 0.000001 and (not deadline or at < deadline) then deadline = at end
+        end
+        return deadline
+    end
+
+    local function endPulses()
+        local clears = {}
+        for side, pulse in pairs(pulses) do
+            local actual = outputs[side]
+            if actual and line(actual, pulse.color) and allowed(side) then
+                clears[side] = withLine(actual, pulse.color, false)
+            end
+        end
+        targets, pulses, pendingRevision = clears, {}, nil
     end
 
     function client.clearOutputs()
         local now = os.clock()
-        targets, pendingRevision, client.appliedRevision, client.clearing = {}, nil, -1, true
+        targets, pulses, pendingRevision, client.appliedRevision, client.clearing = {}, {}, nil, -1, true
         for _, side in ipairs(sides) do
             if allowed(side) then
                 outputState(side, now)
@@ -4633,8 +4815,7 @@ function IO.new(net, config)
         if client.connected then print("OS disconnected; retrying") end
         client.connected = false
         client.lastAnnounce, client.appliedRevision, client.clearing = -math.huge, -1, false
-        targets, pendingRevision = {}, nil
-        if config.safeOff then client.clearOutputs() end
+        if config.safeOff then client.clearOutputs() else endPulses() end
     end
 
     function client.announce(now)
@@ -4644,7 +4825,7 @@ function IO.new(net, config)
             if allowed(side) then capabilities[side] = {bundled = true, digital = true} end
         end
         net.toServer({type = "announce", clientType = "io", clientId = config.clientId,
-            nonce = client.nonce, capabilities = capabilities})
+            nonce = client.nonce, capabilities = capabilities, buttonMinHundredths = pulseMinHundredths})
         client.lastAnnounce = now
     end
 
@@ -4677,7 +4858,7 @@ function IO.new(net, config)
             client.connected, client.lastServer = true, now
             if restarted then
                 client.lastRevision, client.appliedRevision = -1, -1
-                targets, pendingRevision = {}, nil
+                endPulses()
             end
             if reconnected then
                 print("Connected to OS computer " .. client.serverId)
@@ -4692,6 +4873,22 @@ function IO.new(net, config)
                 if not allowed(side) or type(values) ~= "table" or not integer(values.bundled, 65535)
                     or type(values.digital) ~= "boolean" then return end
             end
+            local requests = message.buttonPulses
+            if requests ~= nil then
+                if type(requests) ~= "table" then return end
+                for side, pulse in pairs(requests) do
+                    if not message.outputs[side] or type(pulse) ~= "table"
+                        or not integer(pulse.id, 2147483647) or pulse.id < 1
+                        or not integer(pulse.hundredths, 2147483647) or pulse.hundredths < pulseMinHundredths then return end
+                    if pulse.color ~= nil then
+                        if not integer(pulse.color, 32768) or pulse.color < 1 then return end
+                        local bit = pulse.color
+                        while bit > 1 and bit % 2 == 0 do bit = bit / 2 end
+                        if bit ~= 1 then return end
+                    end
+                    if line(message.outputs[side], pulse.color) then return end
+                end
+            end
             client.lastServer = now
             if message.revision < client.lastRevision
                 or (message.revision == client.appliedRevision and pendingRevision == nil) then
@@ -4699,7 +4896,13 @@ function IO.new(net, config)
                 return
             end
             if message.revision > client.lastRevision or pendingRevision == nil then
-                targets = {}
+                local nextPulses = {}
+                for side, request in pairs(requests or {}) do
+                    local previous = pulses[side]
+                    if previous and previous.id == request.id then nextPulses[side] = previous
+                    else nextPulses[side] = {id = request.id, color = request.color, hundredths = request.hundredths} end
+                end
+                targets, pulses = {}, nextPulses
                 for side, values in pairs(message.outputs) do
                     targets[side] = {bundled = values.bundled, digital = values.digital}
                 end
@@ -5026,7 +5229,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v41: starting")
+console.log("SmartHome OS v43: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -5067,14 +5270,39 @@ finish(ok, err)
 
 local server, timer, pauseTimer
 local pending, head, tail, sequence = {}, 1, 0, 0
+local packetCount, packetBytes, overflow = 0, 0, false
+local wakeQueued, pauseStarted = false, -math.huge
+local function armPauseTimer()
+    local now = os.clock()
+    -- Arm while entering a fresh event slice, before expensive work. Renew a
+    -- stale ID if a full native queue also dropped its timer event.
+    if not pauseTimer or now - pauseStarted >= 0.1 then
+        pauseTimer, pauseStarted = os.startTimer(0), now
+        wakeQueued = false
+    end
+end
 local function enqueue(item)
     item.received = os.clock()
     tail = tail + 1; pending[tail] = item
 end
 local function collect(item)
     local event = item[1]
-    if event == "timer" and item[2] == pauseTimer then pauseTimer = nil; return end
-    if event == "modem_message" or event == "peripheral" or event == "peripheral_detach" then enqueue(item)
+    if event == "smarthome_server_yield" then
+        if item[2] == sequence then wakeQueued = false end
+        return
+    end
+    if event == "timer" and item[2] == pauseTimer then pauseTimer, wakeQueued = nil, false; return end
+    if event == "modem_message" then
+        local raw = item[5]
+        if (item[3] ~= net.listenChannel and item[3] ~= net.relayChannel)
+            or type(raw) ~= "string" or #raw > 65536 then return end
+        if packetCount >= 256 or packetBytes + #raw > 1048576 then
+            if not overflow then console.log("OS receive queue full; dropping excess packets"); overflow = true end
+            return
+        end
+        packetCount, packetBytes = packetCount + 1, packetBytes + #raw
+        enqueue(item)
+    elseif event == "peripheral" or event == "peripheral_detach" then enqueue(item)
     elseif event == "timer" and item[2] == timer then enqueue(item)
     else
         local command = console.handle(unpack(item))
@@ -5082,22 +5310,21 @@ local function collect(item)
     end
 end
 local function cooperate()
-    sequence = sequence + 1
-    -- A queued marker is the fast path. A native timer also wakes this pause
-    -- if CC drops the marker from its finite event queue. Reuse one timer so
-    -- fast successive pauses do not leave hundreds of timer events behind.
-    if not pauseTimer then pauseTimer = os.startTimer(0) end
-    local fallback = pauseTimer
-    os.queueEvent("smarthome_server_yield", sequence)
-    while true do
-        local item = {os.pullEvent()}
-        if item[1] == "smarthome_server_yield" and item[2] == sequence then return end
-        if item[1] == "timer" and item[2] == fallback then pauseTimer = nil; return end
-        collect(item)
+    if not wakeQueued then
+        sequence, wakeQueued = sequence + 1, true
+        -- A pending legacy watchdog can reject this native call before the
+        -- actual yield. The already-armed timer still wakes os.pullEvent.
+        local queued, why = pcall(os.queueEvent, "smarthome_server_yield", sequence)
+        if not queued and not Work.isWatchdog(why) then error(why, 0) end
     end
+    -- Any delivered event completes a CPU slice. Do not drain a modem burst
+    -- waiting for our own marker, or queue another marker for every packet.
+    collect({os.pullEvent()})
+    armPauseTimer()
 end
 ok, err = Work.protect(function()
-    Work.enable(cooperate)
+    Work.enable(cooperate, 8192)
+    armPauseTimer()
     Work.stage = "Loading saved OS state"
     console.log("Loading saved OS state...")
     server = Server.new(net, storage, config, console.log)
@@ -5112,10 +5339,12 @@ ok, err = Work.protect(function()
             Work.stage = "Waiting for events"
             collect({os.pullEvent()})
         else
+            armPauseTimer()
             local item = pending[head]
             pending[head], head = nil, head + 1
             local event, p1, p2, p3, p4 = unpack(item)
             if event == "modem_message" then
+                packetCount, packetBytes = packetCount - 1, packetBytes - #p4
                 Work.stage = "Receiving modem message"
                 local message = net.receive(p1, p2, p3, p4)
                 if message then
@@ -5136,8 +5365,8 @@ ok, err = Work.protect(function()
                 for _, output in ipairs(lines) do console.log(output) end
                 if quit then console.finish(); return end
             end
-            if head > tail then pending, head, tail = {}, 1, 0 end
-            Work.check(16384)
+            if head > tail then pending, head, tail, overflow = {}, 1, 0, false
+            else Work.check(8192) end
         end
     end
 end)
@@ -5163,6 +5392,7 @@ print("IO client: " .. config.clientId .. " (computer " .. net.id .. ")")
 if not net.modem then print("Attach a wireless modem; waiting...") end
 client.tick(os.clock())
 local timer = os.startTimer(0.1)
+local pulseTimer, pulseAt
 while true do
     local event, p1, p2, p3, p4 = os.pullEvent()
     if event == "modem_message" then
@@ -5173,11 +5403,20 @@ while true do
     elseif event == "timer" and p1 == timer then
         client.tick(os.clock())
         timer = os.startTimer(0.1)
+    elseif event == "timer" and p1 == pulseTimer then
+        pulseTimer, pulseAt = nil, nil
+        client.tick(os.clock())
     elseif event == "peripheral" or event == "peripheral_detach" then
         net.peripheralChanged(p1)
         if not net.modem then client.disconnect() end
         client.lastAnnounce = -math.huge
         client.tick(os.clock())
+    end
+    local now = os.clock()
+    local deadline = client.nextPulseDeadline(now)
+    if deadline and (not pulseAt or deadline < pulseAt - 0.000001) then
+        if pulseTimer and os.cancelTimer then os.cancelTimer(pulseTimer) end
+        pulseTimer, pulseAt = os.startTimer(deadline - now), deadline
     end
 end
 ]=],
@@ -6327,7 +6566,7 @@ workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v41")
+print("SmartHome installer: bundled-v43")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")

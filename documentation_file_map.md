@@ -4,6 +4,8 @@ Repository: https://github.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2
 
 All distributed files have unique filenames and live in the repository root. Runtime-created configuration, state, app and startup files also live in the computer root.
 
+The [menu tree PDF](documentation_menu_tree.pdf), [editable menu source](documentation_menu_tree.md), and `tools_build_menu_tree.py` also live in the root. Full releases include all three. The PDF contains the menu hub, a complete overview, and linked detail pages. System overview is a Settings submenu.
+
 | Previous path | New root filename |
 | --- | --- |
 | `main_os.lua` | `main_os.lua` |

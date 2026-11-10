@@ -57,7 +57,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local ok,err=pcall(central.start)
         equal(ok,false);assert(tostring(err):find("Invalid OS setting: tickInterval",1,true))
         local lines=table.concat(central.console.lines,"\n")
-        assert(lines:find("SmartHome OS v41: starting",1,true))
+        assert(lines:find("SmartHome OS v43: starting",1,true))
         assert(lines:find("OS stopped at: Loading OS configuration",1,true))
         assert(lines:find("Invalid OS setting: tickInterval",1,true))
         local report=assert(central.disk.files["diagnostics_os_error.txt"])
@@ -78,6 +78,91 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         assert(central.env.__smarthomeWork.yields>10)
         equal(nativeFallbacks,1,"Fast cooperative pauses must not accumulate fallback timers")
         assert(central.open[45231]);bus.advance(1);assert(central.active)
+    end
+    function tests.work_modem_checkpoint_survives_watchdog_rejection_of_software_wake()
+        local bus=newBus();local central=bus.computer(10,"server"):start()
+        local bridge=bus.computer(11,"io"):start();bus.advance(.2)
+        local rows={}
+        for i=1,1600 do rows[i]={id=i,text="Saved configuration "..i} end
+        central.server.state.appStates.retained={rows=rows}
+        local queueEvent,startTimer=central.env.os.queueEvent,central.env.os.startTimer
+        local rejected,saved=0,false
+        central.env.os.startTimer=function(delay) return startTimer(delay==0 and .05 or delay) end
+        central.env.os.queueEvent=function(name,...)
+            if name=="smarthome_server_yield" and central.env.__smarthomeWork.stage=="Saving OS state" then
+                rejected=rejected+1
+                error("main_os.lua:67: Too long without yielding",0)
+            end
+            queueEvent(name,...)
+        end
+        local handle=central.server.handle
+        central.server.handle=function(message,...)
+            handle(message,...)
+            if message.type=="inputData" and message.side=="front" and message.value==4 then
+                assert(central.server.save());saved=true
+            end
+        end
+        bridge.bundledInputs.front=4;bridge.client.readInputs(true)
+        bus.advance(3)
+        assert(rejected>0,"Checkpoint never exercised the failing wake-up call")
+        assert(saved and central.active,"Watchdog rejection interrupted the checkpoint")
+        local snapshot=assert(unserialize(central.disk.files["configs_os_state.txt"]))
+        equal(#snapshot.appStates.retained.rows,1600)
+        assert(not central.disk.files["diagnostics_os_error.txt"])
+        bus.command(central,"help");bus.advance(2)
+        assert(table.concat(central.console.lines,"\n"):find("clear | save | errorlog | quit",1,true))
+    end
+    function tests.work_modem_decode_survives_watchdog_rejection_of_software_wake()
+        local bus=newBus();local central=bus.computer(10,"server"):start()
+        local bridge=bus.computer(11,"io"):start();bus.advance(.2)
+        local queueEvent,startTimer=central.env.os.queueEvent,central.env.os.startTimer
+        local rejected=0
+        central.env.os.startTimer=function(delay) return startTimer(delay==0 and .05 or delay) end
+        central.env.os.queueEvent=function(name,...)
+            if name=="smarthome_server_yield" and central.env.__smarthomeWork.stage=="Receiving modem message" then
+                rejected=rejected+1
+                error("main_os.lua:67: Too long without yielding",0)
+            end
+            queueEvent(name,...)
+        end
+        local packet=serialize({protocol="SmartHomeOS/1",networkId="home",sender=11,recipient=10,
+            clientId="io_11",type="unknown",padding=string.rep("X",40000)})
+        bus.queue(central,{"modem_message",central.modemSide,45231,1011,packet,1})
+        bus.advance(.3)
+        assert(rejected>0 and central.active)
+        bridge.bundledInputs.front=4;bridge.client.readInputs(true);bus.advance(.2)
+        equal(central.server.api.getInput("io_11","front").value,4)
+        assert(not central.disk.files["diagnostics_os_error.txt"])
+    end
+    function tests.work_checkpoint_bounds_buffered_packet_bytes_and_preserves_console_commands()
+        local bus=newBus();local central=bus.computer(10,"server"):start()
+        local rows={}
+        for i=1,6000 do rows[i]={id=i,text="Saved configuration "..i} end
+        central.server.state.appStates.retained={rows=rows}
+        local packet=string.rep("?",65536)
+        local decode,queueEvent=central.env.textutils.unserialize,central.env.os.queueEvent
+        local decoded,injected=0,false
+        central.env.textutils.unserialize=function(raw)
+            if raw==packet then decoded=decoded+1;return nil end
+            return decode(raw)
+        end
+        central.env.os.queueEvent=function(name,...)
+            queueEvent(name,...)
+            if name=="smarthome_server_yield" and not injected and central.env.__smarthomeWork.stage=="Saving OS state" then
+                injected=true
+                for i=1,48 do bus.queue(central,{"modem_message",central.modemSide,45231,1011,packet,1}) end
+                for char in ("help"):gmatch(".") do bus.queue(central,{"char",char}) end
+                bus.queue(central,{"key",28})
+            end
+        end
+        bus.command(central,"save");bus.advance(.2)
+        assert(injected and central.active)
+        equal(decoded,16,"The OS must cap buffered packets at one MiB during a save")
+        local lines=table.concat(central.console.lines,"\n")
+        assert(lines:find("OS receive queue full",1,true))
+        assert(lines:find("clear | save | errorlog | quit",1,true))
+        equal(#assert(unserialize(central.disk.files["configs_os_state.txt"])).appStates.retained.rows,6000)
+        assert(not central.disk.files["diagnostics_os_error.txt"])
     end
     function tests.work_nested_protected_calls_yield_portably_preserve_nil_results_and_ignore_unowned_callers()
         local comp=newBus().computer(10,"server"); local work=comp.env.dofile("lib_work.lua")
@@ -100,7 +185,8 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
     end
     function tests.work_large_serializer_yields_and_round_trips_legacy_plain_data_without_shared_references()
         local comp=newBus().computer(10,"server"); local work=comp.env.dofile("lib_work.lua")
-        local value={rows={},holes={[1]="first",[99]="last"},text="quotes \" slash \\ newline\n tab\t zero\000",flag=false,big="9007199254740991"}
+        local value={rows={},holes={[1]="first",[99]="last"},text="quotes \" slash \\ newline\n tab\t zero\000",flag=false,big="9007199254740991",
+            precise={10/24,31/81,math.pi,1/100,9007199254740991,1e-20}}
         for i=1,1200 do value.rows[i]={id=i,name="item "..i,count=i*17} end
         local thread=coroutine.create(function()
             work.enable(function() coroutine.yield("pause") end,512)
@@ -109,6 +195,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local text,pauses=drain(thread); assert(pauses>20)
         local saved=assert(unserialize(text)); equal(#saved.rows,1200); equal(saved.rows[1200].count,20400)
         equal(saved.text,value.text); equal(saved.holes[99],"last"); equal(saved.holes[2],nil); equal(saved.flag,false); equal(saved.big,value.big)
+        for index,number in ipairs(value.precise) do equal(saved.precise[index],number,"Saved numbers must round-trip exactly") end
     end
     function tests.work_serializer_rejects_cycles_without_replacing_saved_state()
         local comp=newBus().computer(10,"server"); local storage=comp.env.dofile("lib_storage.lua")

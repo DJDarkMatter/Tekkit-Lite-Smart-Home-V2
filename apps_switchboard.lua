@@ -94,7 +94,7 @@ end
 
 function app.init(state, api, context)
     ready = false
-    assert(api.sharedOutputs and api.ui and api.ui.keyboard and api.ui.actionAt and api.ui.breadcrumb and api.pickIO and api.setAppColour, "Switchboard requires bundled-v41 OS; run inst server")
+    assert(api.pulseOutput and api.ui.durationHundredths, "Switchboard requires bundled-v42 OS; run inst server")
     appName = context and context.appName or "switchboard"
     if state.version == nil then
         state.version, state.boards, state.nextBoardId, state.nextButtonId = 1, {}, 1, 1
@@ -119,6 +119,8 @@ function app.init(state, api, context)
             assert(type(button) == "table" and integer(button.id, 1, 2147483000) and not buttonIds[button.id]
                 and name(button.name, 24) and type(button.customName) == "boolean"
                 and (button.displayColour == nil or colour(button.displayColour)) and (button.fillMode == nil or button.fillMode == "state")
+                and (button.buttonMode == nil or button.buttonMode == true)
+                and (button.pulseHundredths == nil or integer(button.pulseHundredths, 50, 2147483647))
                 and validStateColors(button.stateColors), "Invalid saved switch")
             local route = button.route
             assert(route == nil or type(route) == "table" and type(route.clientId) == "string" and route.clientId ~= ""
@@ -138,10 +140,16 @@ local function build(width, height, state, api, context)
     local view, theme = context.view, state.settings
     local screen = view.screen or "home"
     local board = boardById(state, view.boardId)
-    local needsBoard = {board = true, edit = true, switches = true, button = true, confirm = true, buttonColors = true, viewColors = true}
+    local needsBoard = {board = true, edit = true, switches = true, button = true, behavior = true, pulseLength = true,
+        confirm = true, buttonColors = true, viewColors = true}
     if needsBoard[screen] and not board and not (screen == "confirm" and view.confirm == "allOff") then screen, view.screen = "home", "home" end
     if screen == "grid" and view.gridDraft.target ~= "new" and not board then screen, view.screen = "home", "home" end
-    if (screen == "button" or screen == "buttonColors") and not buttonById(board, view.buttonId) then screen, view.screen = "edit", "edit" end
+    local selectedSwitch = buttonById(board, view.buttonId)
+    if (screen == "button" or screen == "buttonColors" or screen == "behavior" or screen == "pulseLength") and not selectedSwitch then
+        screen, view.screen = board and "edit" or "home", board and "edit" or "home"
+    elseif screen == "pulseLength" and (not selectedSwitch.buttonMode or not view.pulseDraft) then
+        screen, view.screen = "behavior", "behavior"
+    end
     if screen == "palette" and view.colourField == "switch" and not buttonById(board, view.buttonId) then
         screen, view.screen = board and "switches" or "home", board and "switches" or "home"
     end
@@ -219,10 +227,11 @@ local function build(width, height, state, api, context)
         if action then ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + w - 1, y1 = y, y2 = y + h - 1, action = action, value = value} end
     end
     local function switchStatus(switch, wire, previewTheme, previewBoard)
-        local status = not switch.route and "SET IO" or not wire and "ROUTE!" or not wire.online and (wire.value and "ON offline" or "OFF offline")
-            or not wire.confirmed and (wire.value and "ON ..." or "OFF ...") or wire.value and "ON" or "OFF"
+        local on = wire and (wire.pulse or wire.value)
+        local status = not switch.route and "SET IO" or not wire and "ROUTE!" or not wire.online and (on and "ON offline" or "OFF offline")
+            or not wire.confirmed and (on and "ON ..." or "OFF ...") or on and "ON" or switch.buttonMode and "PRESS" or "OFF"
         local theme = previewTheme or theme
-        local field = wire and wire.online and wire.confirmed and (wire.value and "active" or "inactive") or "pending"
+        local field = wire and wire.online and wire.confirmed and (on and "active" or "inactive") or "pending"
         local statusColour = not switch.route and theme.unbound or stateColour(switch, previewBoard or board, theme, field)
         return status, statusColour
     end
@@ -317,16 +326,34 @@ local function build(width, height, state, api, context)
         if height >= 8 then ui.text(3, route and (route.side .. " / " .. (route.color and api.ui.colourName(route.color) or "Digital")) or "Choose Routing", true) end
         if height >= 10 and route then
             local wire = wireFor(switch, outputs(api))
-            ui.text(4, not wire and "Routing changed" or not wire.online and "IO offline" or not wire.confirmed and "Waiting for IO" or wire.value and "ON" or "OFF", true)
+            ui.text(4, not wire and "Routing changed" or not wire.online and "IO offline" or not wire.confirmed and "Waiting for IO"
+                or (wire.value or wire.pulse) and "ON" or "OFF", true)
         end
         local third = math.floor(width / 3)
         button(height - 3, third>=6 and "Rename" or "Name", "renameSwitch", nil, 1, third)
         local _, statusColor = switchStatus(switch, wireFor(switch, outputs(api)))
         button(height - 3, "Color", "switchColour", nil, third + 1, 2 * third, true, buttonColour(switch, theme, statusColor))
         button(height - 3, third>=11 and "State colors" or "States", "buttonColors", nil, 2 * third + 1, width)
-        button(height - 2, "Routing", "route")
+        local half = math.floor(width / 2)
+        button(height - 2, half >= 7 and "Routing" or "Route", "route", nil, 1, half)
+        button(height - 2, width - half >= 8 and "Behavior" or "Mode", "behavior", nil, half + 1, width)
         button(height - 1, "Disconnect", "askClear", nil, nil, nil, route ~= nil)
         footer("Back", "switches")
+    elseif screen == "behavior" then
+        ui.heading("Switch mode", accent)
+        local half = math.floor(width / 2)
+        button(2, "Switch", "setMode", "switch", 1, half, true, not selectedSwitch.buttonMode and accent or nil)
+        button(2, "Button", "setMode", "button", half + 1, width, true, selectedSwitch.buttonMode and accent or nil)
+        if selectedSwitch.buttonMode then
+            button(3, "Time " .. api.ui.seconds(selectedSwitch.pulseHundredths or 100) .. "s", "editPulseLength")
+            local minimum = api.outputPulseMinimum(outputName(selectedSwitch))
+            if minimum then ui.text(4, "Min " .. api.ui.seconds(minimum) .. "s", true) end
+        else ui.text(4, "Tap to toggle", true) end
+        footer("Back", "button")
+    elseif screen == "pulseLength" then
+        local pad = api.ui.form(width, height, {}, accent, theme.background, theme.border)
+        pad.numberPad("Length (s)", view.pulseDraft, "behavior", true)
+        return pad.lines, pad.hits
     elseif screen == "buttonColors" or screen == "viewColors" then
         local scope = screen == "buttonColors" and "button" or "board"
         local target = scope == "button" and buttonById(board, view.buttonId) or board
@@ -508,7 +535,7 @@ local function sceneTouch(x, y, w, h, state, api, view)
                 if view.captureBoard == 0 or view.captureBoard == board.id then
                     for _, switch in ipairs(board.buttons) do
                         local wire = wireFor(switch, all)
-                        if wire then entries[#entries + 1] = {id = switch.id, route = copy(switch.route), value = wire.value} end
+                        if wire and not switch.buttonMode then entries[#entries + 1] = {id = switch.id, route = copy(switch.route), value = wire.value} end
                     end
                 end
             end
@@ -530,10 +557,15 @@ local function sceneTouch(x, y, w, h, state, api, view)
     elseif action == "apply" then
         local selected = sceneById(state, value)
         if not selected then return true end
-        local all, changes = outputs(api), {}
+        local all, changes, switches = outputs(api), {}, {}
+        for _, board in ipairs(state.boards) do
+            for _, switch in ipairs(board.buttons) do if not switch.buttonMode then switches[switch.id] = true end end
+        end
         for _, entry in ipairs(selected.entries) do
             local logical = appName .. "_switch_" .. entry.id
-            if sameRoute(entry.route, all[logical]) then changes[#changes + 1] = {name = logical, value = entry.value} end
+            if switches[entry.id] and sameRoute(entry.route, all[logical]) then
+                changes[#changes + 1] = {name = logical, value = entry.value}
+            end
         end
         if #changes > 0 then
             local ok, err = api.updateOutputs(changes)
@@ -658,9 +690,47 @@ function app.handleTouch(x, y, width, height, state, api, context)
             local wire = wireFor(switch, outputs(api))
             if not wire then notify(view, "Routing missing or changed. Use Edit > Routing to reconnect this switch.")
             else
-                local ok, err = api.setOutput(outputName(switch), not wire.value)
-                if not ok then notify(view, "Could not save: " .. tostring(err)) end
+                local ok, err
+                if switch.buttonMode then ok, err = api.pulseOutput(outputName(switch), switch.pulseHundredths or 100)
+                else
+                    ok, err = api.setOutput(outputName(switch), not (wire.pulse or wire.value))
+                    if not ok then err = "Could not save: " .. tostring(err) end
+                end
+                if not ok then notify(view, err) end
             end
+        end
+    elseif action == "setMode" then
+        local isButton = value == "button"
+        if isButton ~= (switch.buttonMode == true) then
+            local changes
+            if isButton and switch.route then
+                local all, id = outputs(api), outputName(switch)
+                local wire = wireFor(switch, all)
+                if wire and wire.value then
+                    local shared = false
+                    for name, other in pairs(all) do
+                        if name ~= id and sameRoute(wire, other) then shared = true; break end
+                    end
+                    if not shared then changes = {{name = id, value = false}} end
+                end
+            end
+            if commit(state, api, view, function() switch.buttonMode = isButton or nil end, function() return changes end) then
+                api.cancelOutputPulse(outputName(switch))
+                api.invalidateAppViews(appName)
+            end
+        end
+    elseif action == "editPulseLength" then
+        view.pulseBefore = switch.pulseHundredths
+        view.pulseDraft, view.screen = api.ui.seconds(switch.pulseHundredths or 100), "pulseLength"
+    elseif action == "digit" then view.pulseDraft = api.ui.editNumber(view.pulseDraft, value, 12)
+    elseif action == "setNumber" then
+        local minimum = api.outputPulseMinimum(outputName(switch)) or 50
+        local hundredths = api.ui.durationHundredths(view.pulseDraft, minimum)
+        if switch.pulseHundredths ~= view.pulseBefore then notify(view, "Length changed; open it again", "behavior")
+        elseif not hundredths then notify(view, "Minimum " .. api.ui.seconds(minimum) .. "s. Use up to two decimal places.", "pulseLength")
+        elseif commit(state, api, view, function() switch.pulseHundredths = hundredths end) then
+            view.screen, view.pulseDraft = "behavior", nil
+            api.invalidateAppViews(appName)
         end
     elseif action == "route" then
         local key = "route_" .. board.id .. "_" .. switch.id

@@ -753,7 +753,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         for index = 1, 9 do sample(index, 0, index <= 5 and -1 or 0) end
         assert(screen.lines[2]:find("X:0 Y:0", 1, true))
         assert(screen.lines[17]:find("Mixed readings", 1, true))
-        assert(table.concat(display.log, "\n"):find("Y:-0.56", 1, true))
+        assert(table.concat(display.log, "\n"):find(string.format("Y:%.2f", -5 / 9), 1, true))
         equal(display.disk.files["configs_monitor.txt"], previous)
         resume("char", "c"); equal(coroutine.status(work), "dead")
         equal(display.disk.files["configs_monitor.txt"], previous)

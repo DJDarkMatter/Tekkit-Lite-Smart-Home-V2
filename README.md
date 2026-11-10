@@ -6,6 +6,16 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
+## Updating to v43
+
+The central OS can yield when the legacy watchdog rejects its software wake-up event. Modem bursts use a bounded receive buffer, with shorter work slices and a shared native timer fallback. Update the central computer using **bundled-v43** and run `inst server`, then `reboot`. See the [v43 install instructions and changed files](documentation_update_v43.md).
+
+The [clickable portrait menu tree](documentation_menu_tree.pdf) covers Settings, desktop controls, shared dialogs and all 13 optional apps. Its [editable source](documentation_menu_tree.md) stays with the repository and full releases.
+
+## Updating to v42
+
+Switchboard tiles can toggle or act as timed buttons. Logic Sandbox adds Delay, If / Then rules and reusable action blocks. Update the central OS and IO clients before using Button mode, then reinstall Switchboard and Logic Sandbox. See [the v42 install commands and changed files](documentation_update_v42.md).
+
 ## Updating to v41
 
 **Settings** keeps the selected client when you back out of Rename. The shared keyboard uses QWERTY, a larger symbol bank and a mode button labeled with its next action. Logic Sandbox adds a live **Item amount** input for AE1 counts. Nyan Cat keeps its full outline, and the screensaver catalog now has 25 designs.
@@ -54,7 +64,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v41`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v43`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -355,7 +365,11 @@ Periodic checkpoints can lose progress since the last successful checkpoint on a
 From the repository root:
 
 ```sh
+python3 tools_build_installer.py --check
+python3 tools_build_menu_tree.py --check
 lua5.1 tests_run.lua
 ```
+
+For menu changes, review [the editable tree](documentation_menu_tree.md) against the Lua menus, then regenerate the [portrait PDF](documentation_menu_tree.pdf) with `python3 tools_build_menu_tree.py`. Building requires `reportlab==4.4.9`. The freshness check uses the Python standard library. The builder reads the OS version, app titles and screensaver catalog from Lua, checks app coverage and links, and flags stale documented sources. The optional workflow also runs this check. Include the PDF, menu source and builder in every full release.
 
 The tests include installing and booting all five roles with HTTP absent, plus exercising the optional GitHub installer. App-install tests cover GitHub downloads that yield like CC 1.5 HTTP, optional older response handles without status methods, branch/commit selection, failed/invalid responses, preservation of saved progress, and deferred execution until boot. They run the actual entry points as separate computers with independent disks and event queues, using string-only virtual modems and three-dimensional radio distance. Every simulated output write enforces a shared 0.5-second per-side cooldown, including unchanged values and cooldowns across program restarts. They cover startup order, reply-channel collisions, dropped traffic, sessions/restarts, safe-off, modem relocation, remapping, zero inputs, touch/layout restoration, interrupted checkpoints, failed saves, malformed packets, sensor isolation and background timing. Relay coverage includes the 120-block vertical gap, 16/17-relay chains, overlapping paths without repeated actions, independent client listings, alternate routes, outages/recovery, large packets and legacy direct compatibility. The root `github_workflows_lua.yml` is an optional workflow template; GitHub requires workflows in `.github/workflows/`, so run the root test/build commands locally for this flat package.

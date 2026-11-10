@@ -189,6 +189,10 @@ Sources allow 61440 encoded characters to leave route headroom; forwards still m
 5. Client validates the complete snapshot, ignores earlier revisions/sessions and queues the latest accepted state. Changed outputs are written at least `outputInterval` seconds apart per side (default 0.6), sharing the cooldown between bundled and digital redstone for IDT-Fix servers. Network and input events continue during the wait. Only when every value in the latest snapshot has reached the hardware does the client send `ioAck` with that revision and session. Repeated applied snapshots are acknowledged without redundant writes.
 6. OS retries unacknowledged state every two seconds. Announcements/full resynchronization also repeat every five seconds, recovering lost welcomes/acks/frames and OS/client restarts.
 
+V42 IO clients advertise `buttonMinHundredths`, the shortest supported timed press in hundredths of a second. `api.pulseOutput(name, hundredths)` requests a timed high on a mapped wire whose steady state is off. `api.outputPulseMinimum(name)` reads the advertised minimum. The OS includes the press ID, `hundredths` and optional bundled color in `buttonPulses[side]` alongside the steady snapshot. The IO client starts its deadline when the line actually goes high and reports the same ID and completion state in `ioAck`. Repeated snapshots reuse that ID and leave the timer alone. Only the configured mode and length are saved. `api.getOutputs()` exposes the transient request as `pulse = true` while `value` remains the steady intent.
+
+`api.wakeAt(uptime)` lets an app's background tick request an earlier next OS tick at an `os.clock()` deadline. Logic Sandbox uses it for Delay and Wait blocks.
+
 An IO snapshot looks like:
 
 ```lua

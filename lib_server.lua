@@ -157,12 +157,18 @@ function Server.new(net, storage, config, logger)
         lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}, notifications = {}}
     local clientGroups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients, relay = server.relayClients}
     local api, errors, installedApps = {}, {}, {}
-    local history, ioTests = IOHistory.new(), {}
+    local history, ioTests, ioPulses = IOHistory.new(), {}, {}
+    local nextPulseId, wakeAt = 0, nil
     local callingApp
     server.api = api
     api.ui, api.log, api.sharedOutputs, api.sensorProfiles = Gui, log, true, true
     api.cooperate, api.protectedCall = Work.check, Work.call
     api.aeItemProfiles = true
+    function api.wakeAt(deadline)
+        if type(deadline) == "number" and deadline > os.clock() and deadline < math.huge then
+            wakeAt = math.min(wakeAt or deadline, deadline)
+        end
+    end
     function api.clientName(id) return type(state.clientNames[id]) == "string" and state.clientNames[id] or id end
     local function definition(name) return server.systemApps[name] or server.apps[name] end
     local function invalidateInput(id)
@@ -438,6 +444,16 @@ function Server.new(net, storage, config, logger)
             values.bundled = values.bundled + (value and color or -color)
         end
     end
+    local function pulseFor(mapping)
+        local clientPulses = ioPulses[mapping.clientId]
+        local pulse = clientPulses and clientPulses[mapping.side]
+        if pulse and pulse.color == mapping.color then return pulse end
+    end
+    local function removePulse(id, side)
+        local group = ioPulses[id]
+        group[side] = nil
+        if not next(group) then ioPulses[id] = nil end
+    end
     local function recordOutputs(id, client, now)
         for side, values in pairs(client.outputSnapshot or {}) do
             local required, pending = client.wireRevisions[side] or {}, 0
@@ -464,6 +480,16 @@ function Server.new(net, storage, config, logger)
                 log("IO " .. clientId .. ": mapped side " .. side .. " is unavailable")
             else snapshot[side] = values end
         end
+        local outputs, requests = snapshot, nil
+        if ioPulses[clientId] then
+            snapshot, requests = copy(outputs), {}
+            for side, pulse in pairs(ioPulses[clientId]) do
+                if snapshot[side] then
+                    requests[side] = {id = pulse.id, color = pulse.color, hundredths = pulse.hundredths}
+                    putLine(snapshot[side], pulse.color, true)
+                end
+            end
+        end
         -- A snapshot ACK covers a whole revision, but unrelated wires retain
         -- their earlier confirmation. Requiring the latest client revision for
         -- every output made an entire board flash pending after one toggle.
@@ -487,8 +513,41 @@ function Server.new(net, storage, config, logger)
         client.outputSnapshot = copy(snapshot)
         recordOutputs(clientId, client, os.clock())
         net.toClient(client, {type = "ioCommand", command = "syncOutputs", clientId = clientId,
-            serverSession = server.session, revision = client.revision, outputs = snapshot})
+            serverSession = server.session, revision = client.revision, outputs = outputs, buttonPulses = requests})
         client.lastSent = os.clock()
+    end
+
+    function api.outputPulseMinimum(name)
+        local route = state.outputMap[name]
+        local client = route and server.ioClients[route.clientId]
+        return client and client.buttonMinHundredths or nil
+    end
+    function api.pulseOutput(name, hundredths)
+        local route = state.outputMap[name]
+        local client = route and server.ioClients[route.clientId]
+        if not client or not client.online or not client.capabilities[route.side] then return false, "Output unavailable" end
+        local minimum = client.buttonMinHundredths
+        if not minimum then return false, "Update the IO client for Button mode" end
+        if not integer(hundredths, minimum, 2147483647) then return false, "Minimum length on this IO side is " .. Gui.seconds(minimum) .. "s" end
+        local id, side = route.clientId, route.side
+        if ioTests[id] and ioTests[id].side == side then return false, "Test in progress on this side" end
+        if state.outputs[name] == true then return false, "This wire is held ON by a switch" end
+        local group = ioPulses[id] or {}
+        if group[side] and group[side].color ~= route.color then return false, "Another button is active on this side" end
+        nextPulseId = nextPulseId + 1
+        group[side] = {id = nextPulseId, name = name, color = route.color, hundredths = hundredths,
+            untilTime = os.clock() + math.max(5, 2 * config.retryInterval + 1)}
+        ioPulses[id] = group
+        server.syncIO(id, true)
+        return true
+    end
+    function api.cancelOutputPulse(name)
+        local route = state.outputMap[name]
+        local pulse = route and pulseFor(route)
+        if pulse and pulse.name == name then
+            removePulse(route.clientId, route.side)
+            server.syncIO(route.clientId, true)
+        end
     end
 
     local function testOutput(address)
@@ -496,6 +555,7 @@ function Server.new(net, storage, config, logger)
         local client = server.ioClients[id]
         if not client or not client.online or not client.capabilities[side] then return false, "Output unavailable" end
         if ioTests[id] then return false, "Test in progress" end
+        if ioPulses[id] and ioPulses[id][side] then return false, "Button in progress on this side" end
         local value = lineValue(outputSnapshot(id)[side], color)
         local previous = state.managedSides[id]
         if not previous or not previous[side] then
@@ -610,13 +670,27 @@ function Server.new(net, storage, config, logger)
             state.outputMap, state.outputs, state.managedSides = previousMap, previousValues, previousManaged
             return false, err
         end
+        local cancelled = {}
+        for _, change in ipairs(changes) do
+            local old, new = previousMap[change.name], mappings[change.name]
+            local pulse = old and pulseFor(old)
+            if pulse and pulse.name == change.name
+                and (not new or old.clientId ~= new.clientId or old.side ~= new.side or old.color ~= new.color) then
+                removePulse(old.clientId, old.side)
+                cancelled[old.clientId] = true
+            end
+            if new and change.value ~= nil and pulseFor(new) then
+                removePulse(new.clientId, new.side)
+                cancelled[new.clientId] = true
+            end
+        end
         for _, id in ipairs(sortedKeys(affected)) do
             local snapshot = outputSnapshot(id)
             local test = ioTests[id]
             if test and lineValue(before[id][test.side], test.color) ~= lineValue(snapshot[test.side], test.color) then
                 ioTests[id] = nil
                 server.syncIO(id, true)
-            else server.syncIO(id, not sameSnapshot(before[id], snapshot)) end
+            else server.syncIO(id, cancelled[id] or not sameSnapshot(before[id], snapshot)) end
         end
         return true, err
     end
@@ -648,6 +722,11 @@ function Server.new(net, storage, config, logger)
                 and required ~= nil and client.ackedRevision >= required or false
             local test = ioTests[item.clientId]
             if test and test.side == item.side and test.color == item.color then item.confirmed = false end
+            local pulse = pulseFor(item)
+            if pulse then
+                item.pulse = true
+                item.confirmed = item.confirmed and pulse.started == true
+            end
             result[#result + 1] = item
         end
         return result
@@ -2143,6 +2222,7 @@ function Server.new(net, storage, config, logger)
                 ioChanged = ioChanged or ioReset
                 ioReset = ioReset or ioChanged
                 client.announceNonce = message.nonce
+                client.buttonMinHundredths = integer(message.buttonMinHundredths, 50, 2147483647) and message.buttonMinHundredths or nil
             end
             if message.clientType == "sensor" then sensors.announce(client, message, reconnect) end
             net.toClient(client, {type = "welcome", clientId = id, nonce = message.nonce, serverSession = server.session})
@@ -2156,7 +2236,7 @@ function Server.new(net, storage, config, logger)
                 -- check. They do not revoke an acknowledgement already earned.
                 if ioReset then
                     history.offline(id, now)
-                    ioTests[id] = nil
+                    ioTests[id], ioPulses[id] = nil, nil
                     client.ackedRevision, client.outputSnapshot, client.wireRevisions = -1, nil, {}
                 end
                 server.syncIO(id, ioChanged)
@@ -2171,6 +2251,7 @@ function Server.new(net, storage, config, logger)
             client.lastSeen = now
         elseif message.type == "ioAck" then
             local client = registered(server.ioClients, message, replyChannel)
+            if not client or not integer(message.revision, 0, client.revision) then return end
             if client and message.revision == client.revision then
                 client.ackedRevision, client.lastSeen = message.revision, now
                 recordOutputs(id, client, now)
@@ -2179,6 +2260,22 @@ function Server.new(net, storage, config, logger)
                     test.acknowledged = true
                     test.untilTime = math.min(test.untilTime, os.clock() + 1.5)
                 end
+            end
+            local group = ioPulses[id]
+            if group and type(message.buttonPulses) == "table" then
+                local completed = false
+                for _, side in ipairs(sortedKeys(group)) do
+                    local pulse, status = group[side], message.buttonPulses[side]
+                    if type(status) == "table" and status.id == pulse.id and type(status.done) == "boolean" then
+                        if status.done then
+                            removePulse(id, side)
+                            completed = true
+                        elseif not pulse.started then
+                            pulse.started, pulse.untilTime = true, now + pulse.hundredths / 100 + 5
+                        end
+                    end
+                end
+                if completed then server.syncIO(id, true) end
             end
         elseif message.type == "sensorCatalog" or message.type == "sensorSample" then
             local client = registered(server.sensorClients, message, replyChannel)
@@ -2261,13 +2358,14 @@ function Server.new(net, storage, config, logger)
     end
 
     function server.tick(now)
+        wakeAt = nil
         net.ensureModem()
         for kind, group in pairs(clientGroups) do
             for id, client in pairs(group) do
                 if client.online and now - client.lastSeen >= config.clientTimeout then
                     client.online = false
                     logUptime(id, kind, false, now, client.since)
-                    if kind == "io" then history.offline(id, now) end
+                    if kind == "io" then history.offline(id, now); ioPulses[id] = nil end
                     log("Client offline: " .. id)
                     if client.values then
                         if client.values.playerOnline ~= nil then server.playerOnline = false end
@@ -2292,6 +2390,16 @@ function Server.new(net, storage, config, logger)
                 server.syncIO(id, true)
             end
         end
+        for _, id in ipairs(sortedKeys(ioPulses)) do
+            local expired = false
+            for _, side in ipairs(sortedKeys(ioPulses[id])) do
+                if now >= ioPulses[id][side].untilTime then
+                    removePulse(id, side)
+                    expired = true
+                end
+            end
+            if expired then server.syncIO(id, true) end
+        end
         for id, client in pairs(server.ioClients) do
             if client.online and client.ackedRevision ~= client.revision
                 and now - (client.lastSent or -math.huge) >= config.retryInterval then server.syncIO(id, false) end
@@ -2307,6 +2415,7 @@ function Server.new(net, storage, config, logger)
             local app=win and definition(win.appName)
             if app and app.animationInterval then interval=math.min(interval,app.animationInterval) end
         end end
+        if wakeAt then interval = math.min(interval, math.max(0.05, wakeAt - os.clock())) end
         return interval
     end
 

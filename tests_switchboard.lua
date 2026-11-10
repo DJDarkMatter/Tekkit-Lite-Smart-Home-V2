@@ -127,6 +127,97 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(id, "open", board.id); t.click(id, "edit"); t.click(id, "switches")
         t.click(id, "editSwitch", board.buttons[index or 1].id); t.click(id, "switchColour")
     end
+    local function buttonMode(t, id, board, index, seconds)
+        t.view(id).screen, t.view(id).boardId, t.view(id).buttonId = "button", board.id, board.buttons[index].id
+        t.click(id, "behavior"); t.click(id, "setMode", "button")
+        t.click(id, "editPulseLength")
+        while #t.view(id).pulseDraft > 0 do t.click(id, "digit", "Del") end
+        for digit in seconds:gmatch(".") do t.click(id, "digit", digit) end
+        t.click(id, "setNumber")
+    end
+
+    function tests.v42_switchboard_button_duration_is_saved_and_times_out_after_closing_the_app()
+        local t = setup(15, 10)
+        local board = t.empty(t.id, 1, 1)
+        local switch = board.buttons[1]
+        t.route(t.id, board, 1, "io_11", "left", 1)
+        assert(t.api.setOutput(logical(switch), true)); t.bus.advance(.8)
+        buttonMode(t, t.id, board, 1, "0.75")
+        equal(switch.buttonMode, true); equal(switch.pulseHundredths, 75)
+        t.bus.advance(.8); equal(t.io.bundled.left, 0)
+        t.view(t.id).screen = "board"
+        t.click(t.id, "toggle", switch.id)
+        equal(t.io.bundled.left, 1)
+        equal(t.api.getOutput(logical(switch)), false)
+        local started = t.io.redstoneWrites[#t.io.redstoneWrites].time
+        assert(t.api.closeWindow(t.id)); equal(t.central.server.running.switchboard, nil)
+        t.bus.advance(.74); equal(t.io.bundled.left, 1)
+        t.bus.advance(.02); equal(t.io.bundled.left, 0)
+        local stopped = t.io.redstoneWrites[#t.io.redstoneWrites].time
+        assert(math.abs(stopped - started - .75) < .000001, "The IO client owns the 0.75s deadline")
+        t.reboot()
+        local restored = t.state.boards[1].buttons[1]
+        equal(restored.buttonMode, true); equal(restored.pulseHundredths, 75)
+        equal(t.io.bundled.left, 0)
+        local reopened = t.open()
+        t.view(reopened).boardId, t.view(reopened).buttonId, t.view(reopened).screen = board.id, switch.id, "behavior"
+        t.click(reopened, "setMode", "switch"); equal(restored.buttonMode, nil); equal(restored.pulseHundredths, 75)
+        t.view(reopened).screen = "board"; t.click(reopened, "toggle", switch.id)
+        t.bus.advance(2); equal(t.io.bundled.left, 1)
+    end
+
+    function tests.v42_switchboard_retrigger_extends_the_button_and_the_wire_releases_without_the_os()
+        local t = setup()
+        local board = t.empty(t.id, 1, 1)
+        local switch = board.buttons[1]
+        t.route(t.id, board, 1, "io_11", "left")
+        buttonMode(t, t.id, board, 1, "0.63")
+        equal(switch.pulseHundredths, 63)
+        t.view(t.id).screen = "board"; t.click(t.id, "toggle", switch.id)
+        equal(t.io.digital.left, true)
+        t.bus.advance(.3)
+        t.click(t.id, "toggle", switch.id)
+        t.central.active = false
+        t.bus.advance(.64); equal(t.io.digital.left, true)
+        t.bus.advance(.02); equal(t.io.digital.left, false)
+        equal(#t.io.redstoneWrites, 2, "A retrigger extends the same high signal without extra writes")
+        t.reboot(); equal(t.io.digital.left, false)
+    end
+
+    function tests.v42_switchboard_completed_pulse_cannot_replay_and_shared_switch_can_cancel_it()
+        local t = setup()
+        local board = t.empty(t.id, 2, 1)
+        local first, alias = board.buttons[1], board.buttons[2]
+        t.route(t.id, board, 1, "io_11", "left", 1)
+        t.route(t.id, board, 2, "io_11", "left", 1)
+        buttonMode(t, t.id, board, 1, "0.55")
+        equal(first.pulseHundredths, nil)
+        assert(t.view(t.id).message:find("0.6", 1, true))
+        buttonMode(t, t.id, board, 1, "0.75")
+        t.view(t.id).screen = "board"
+        t.bus.drop = function(packet)
+            local m = packet.message
+            return m.type == "ioAck" and m.buttonPulses and m.buttonPulses.left and m.buttonPulses.left.done
+        end
+        t.click(t.id, "toggle", first.id); equal(t.io.bundled.left, 1)
+        t.bus.advance(.8); equal(t.io.bundled.left, 0)
+        assert(t.api.mapOutput("other_wire", "io_11", "front", 2, true))
+        t.bus.advance(1); equal(t.io.bundled.left, 0)
+        equal(t.io.bundled.front, 2)
+        local leftWrites = 0
+        for _, write in ipairs(t.io.redstoneWrites) do if write.side == "left" then leftWrites = leftWrites + 1 end end
+        equal(leftWrites, 2, "A new snapshot with a completed request cannot replay it")
+        t.bus.drop = nil
+        t.bus.advance(6)
+        t.click(t.id, "toggle", first.id); equal(t.io.bundled.left, 1)
+        t.click(t.id, "toggle", alias.id)
+        t.bus.advance(.61); equal(t.io.bundled.left, 0)
+        equal(t.api.getOutput(logical(alias)), false)
+        t.click(t.id, "toggle", alias.id); t.bus.advance(.7)
+        t.click(t.id, "toggle", first.id)
+        assert(t.view(t.id).message:find("held ON", 1, true))
+        equal(t.io.bundled.left, 1, "A timed press leaves another switch's steady ON intent alone")
+    end
 
     local function setStateColor(t,board,scope,field,color,id)
         id=id or t.id; local view=t.view(id)
