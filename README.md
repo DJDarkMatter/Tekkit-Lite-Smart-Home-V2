@@ -6,6 +6,12 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
+## Updating to v41
+
+**Settings** keeps the selected client when you back out of Rename. The shared keyboard uses QWERTY, a larger symbol bank and a mode button labeled with its next action. Logic Sandbox adds a live **Item amount** input for AE1 counts. Nyan Cat keeps its full outline, and the screensaver catalog now has 25 designs.
+
+Upload the full v41 root to GitHub and use **bundled-v41** for the central OS, IO clients and monitor clients. See the [update commands and changed files](documentation_update_v41.md) and [Logic Sandbox examples](documentation_logic_sandbox.md).
+
 ## Updating to v40
 
 V40 addresses a CraftOS 1.5 watchdog error observed in the Rednet worker on a relay. The shared fix applies to the central OS and each client role. Replace your installer paste with **bundled-v40**, then reinstall the role on each computer. See [the v40 commands and exact changed files](documentation_update_v40.md).
@@ -48,7 +54,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v40`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v41`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. OS settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 

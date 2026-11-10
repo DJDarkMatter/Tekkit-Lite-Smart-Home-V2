@@ -3,7 +3,7 @@ local System = dofile("lib_system.lua")
 local Settings = {}
 
 function Settings.new(actions)
-    local app = {title = "OS settings", minWidth = 12, minHeight = 6, preferredWidth = 34, preferredHeight = 13}
+    local app = {title = "Settings", minWidth = 12, minHeight = 6, preferredWidth = 34, preferredHeight = 13}
     local pending = {}
 
     function app.init(state)
@@ -25,6 +25,14 @@ function Settings.new(actions)
         end
         local ui = api.ui.form(w, h, view, 2048)
         local section = view.section or "home"
+        if section == "nameClient" or section == "nameKeyboard" then
+            if type(view.nameId) ~= "string" then
+                view.section, view.keyboard = "names", nil
+            elseif section == "nameKeyboard" and not view.keyboard then
+                view.section = "nameClient"
+            end
+            section = view.section
+        end
         local draft = pending[context.windowId]
         if draft then
             local title = "Are you sure?"
@@ -50,7 +58,7 @@ function Settings.new(actions)
                 ui.action(h, button, "commit", nil, nil, nil, true, 16384)
             end
         elseif section == "home" then
-            ui.menu("OS settings", {{"Appearance", "appearance"}, {"System overview", "overview"},
+            ui.menu(app.title, {{"Appearance", "appearance"}, {"System overview", "overview"},
                 {"Client names", "names"}, {"Screensavers", "screensavers"}, {"App data", "data"}}, "settings", {{"Close", "close"}})
         elseif section == "appearance" then
             local settings = api.getOSSettings()
@@ -91,7 +99,7 @@ function Settings.new(actions)
             local title = ({reset = "Reset data", delete = "Delete apps", backup = "Create backup", restore = "Restore backup"})[mode]
             local back = (mode == "backup" or mode == "restore") and "backupMenu" or "data"
             ui.menu(view.status or title, rows, section, {{"Back", back}})
-        else ui.info("OS settings", {view.status or "Select an option"}, "status", view.back or "home") end
+        else ui.info(app.title, {view.status or "Select an option"}, "status", view.back or "home") end
         return ui.lines, ui.hits
     end
 
@@ -111,7 +119,9 @@ function Settings.new(actions)
         if action == "page" then view.pages[value.key] = value.page
         elseif action == "close" then return api.closeWindow(id)
         elseif action == "background" or action == "windowBorder" or action == "taskbar" then return api.pickColour(id, action)
-        elseif action == "nameClient" then view.nameId, view.section = value, "nameClient"
+        elseif action == "nameClient" then
+            if value then view.nameId = value end
+            view.section, view.keyboard, view.status = "nameClient", nil, nil
         elseif action == "editName" then
             view.keyboard = {draft = api.clientName(view.nameId) ~= view.nameId and api.clientName(view.nameId) or "",
                 bank = 0, page = 1, back = "nameClient"}
@@ -121,6 +131,7 @@ function Settings.new(actions)
             local ok, err = api.setClientName(view.nameId, action == "clearName" and "" or view.keyboard.draft)
             view.section = ok and "nameClient" or "status"
             view.status, view.back = err, "nameClient"
+            view.keyboard = nil
         elseif action == "selectScope" then
             local mode = value.mode
             local info = (mode == "restore" or mode == "backup") and actions.backupInfo(value.id) or nil

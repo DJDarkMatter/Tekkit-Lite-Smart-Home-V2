@@ -4,6 +4,8 @@ local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
 local digits = "0123456789abcdef"
 local names = {"White", "Orange", "Magenta", "Light blue", "Yellow", "Lime", "Pink", "Gray",
     "Light gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
+local nextBank = {[0] = 1, [1] = 2, [2] = 0, abc = "ABC", ABC = "123", ["123"] = "abc"}
+local bankName = {[0] = "abc", [1] = "ABC", [2] = "123", abc = "abc", ABC = "ABC", ["123"] = "123"}
 -- Shift applies to one accepted letter, consistently across all app keyboards.
 function Gui.typeKey(keyboard, key, limit)
     if type(key) ~= "string" or #keyboard.draft >= limit then return false end
@@ -19,7 +21,7 @@ function Gui.editText(keyboard, action, value, limit)
     elseif action == "space" then Gui.typeKey(keyboard, " ", limit)
     elseif action == "backspace" then keyboard.draft = keyboard.draft:sub(1, -2)
     elseif action == "clearText" then keyboard.draft = ""
-    elseif action == "bank" then keyboard.bank, keyboard.page = (keyboard.bank + 1) % 3, 1
+    elseif action == "bank" then keyboard.bank, keyboard.page = nextBank[keyboard.bank] or 0, 1
     elseif action == "keyPage" then keyboard.page = keyboard.page % keyboard.pages + 1
     else return false end
     return true
@@ -128,6 +130,54 @@ function Gui.palette(width, height, current, title)
     ui.button(height, "Back", "cancel")
     return ui.lines, ui.hits
 end
+local letterRows = {"qwertyuiop", "asdfghjkl", "zxcvbnm"}
+local symbols = [=[1234567890-_/.:!?+()@#&=,%*'"$^[]{}<>\|;`~]=]
+function Gui.keyboard(ui, width, height, k, accent, footer)
+    local columns = math.min(10, math.floor(width / 2))
+    local mode = bankName[k.bank] or "abc"
+    local chars = k.symbols or symbols
+    local pages = mode == "123" and math.ceil(#chars / (columns * 3)) or math.ceil(10 / columns)
+    k.page, k.pages = math.max(1, math.min(k.page or 1, pages)), pages
+    ui.heading(k.draft == "" and "Type here" or k.draft:sub(-width), accent)
+    local keyWidth = math.floor(width / columns)
+    local gap, rowGap = width >= 30 and 1 or 0, height >= 10 and 1 or 0
+    local available = height - 3 + rowGap
+    for row = 1, 3 do
+        local start = (k.page - 1) * columns + 1
+        local keys = letterRows[row]:sub(start, start + columns - 1)
+        if mode == "ABC" then keys = keys:upper()
+        elseif mode == "123" then
+            start = ((k.page - 1) * 3 + row - 1) * columns + 1
+            keys = chars:sub(start, start + columns - 1)
+        end
+        local left = 1 + math.floor((width - #keys * keyWidth + gap) / 2)
+        local y1 = 2 + math.floor((row - 1) * available / 3)
+        local y2 = 1 + math.floor(row * available / 3) - rowGap
+        for column = 1, #keys do
+            local x1 = left + (column - 1) * keyWidth
+            local span = keyWidth - gap
+            local key = keys:sub(column, column)
+            local bg = (row + column) % 2 == 0 and 128 or 256
+            ui.style(x1, y1, span, y2 - y1 + 1, Gui.contrast(bg), bg)
+            ui.button(math.floor((y1 + y2) / 2), key, "key", x1, x1 + span - 1, true, bg, nil, key)
+            local hit = ui.hits[#ui.hits]
+            hit.y1, hit.y2 = y1, y2
+        end
+    end
+    local controls = {{bankName[nextBank[k.bank]] or "ABC", "bank"},
+        {width >= 20 and "Space" or "Sp", "space"}, {"Del", "backspace"}}
+    if pages > 1 then controls[4] = {k.page .. "/" .. pages, "keyPage"} end
+    for index, row in ipairs(controls) do
+        ui.button(height - 1, row[1], row[2], 1 + math.floor((index - 1) * width / #controls),
+            math.floor(index * width / #controls), true, row[2] == "bank" and accent or nil)
+    end
+    footer = footer or {{"Set", "saveText"}, {"Clr", "clearText"}, {"Back", k.back}}
+    for index, row in ipairs(footer) do
+        ui.button(height, row[1], row[2], 1 + math.floor((index - 1) * width / #footer),
+            math.floor(index * width / #footer), row[4], index == 1 and accent or nil, nil, row[3])
+    end
+end
+
 -- Common app forms keep drawing and hit regions together at 12x6 and above.
 function Gui.form(width,height,view,accent,background,panel)
     local ui=Gui.content(width,height); view.pages=view.pages or {}
@@ -190,18 +240,7 @@ function Gui.form(width,height,view,accent,background,panel)
         ui.footer({{"Set","setNumber"},{"Back",back}})
     end
     function ui.keyboard(k)
-        local bank=k.bank==2 and (k.symbols or "1234567890-_/.:") or k.bank==1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
-        ui.heading(k.draft=="" and "Type here" or k.draft:sub(-width),accent)
-        local cols,rows=math.max(4,math.min(10,math.floor(width/2))),math.max(1,math.min(3,height-4))
-        local slots=cols*rows; local pages=math.ceil(#bank/slots); k.page=math.max(1,math.min(k.page or 1,pages)); k.pages=pages
-        for i=1,slots do local ch=bank:sub((k.page-1)*slots+i,(k.page-1)*slots+i); if ch~="" then
-            local col,row=(i-1)%cols,math.floor((i-1)/cols)
-            ui.action(2+row,ch,"key",ch,1+math.floor(col*width/cols),math.floor((col+1)*width/cols),true,accent)
-        end end
-        for i,row in ipairs({{"ABC","bank"},{"Sp","space"},{"Del","backspace"},{k.page.."/"..pages,"keyPage"}}) do
-            ui.action(height-1,row[1],row[2],nil,1+math.floor((i-1)*width/4),math.floor(i*width/4))
-        end
-        ui.footer({{"Set","saveText"},{"Clr","clearText"},{"Back",k.back}})
+        Gui.keyboard(ui, width, height, k, accent)
     end
     return ui
 end

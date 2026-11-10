@@ -1,7 +1,10 @@
 -- User-wired Boolean circuits. The OS owns routing, persistence and popups.
 local app = {title = "Logic Sandbox", minWidth = 12, minHeight = 6, preferredWidth = 37, preferredHeight = 15, backgroundService = true}
+local Me = dofile("lib_me.lua")
 local appName = "logic_sandbox"
-local kinds = {"Input", "AND", "OR", "NOT", "XOR", "Output"}
+local kinds = {"Input", "AND", "OR", "NOT", "XOR", "Output", "Item amount"}
+local comparisons = {under = "<", over = ">", exact = "="}
+local sources, previews, itemLists, nextWatch, nextRead = {}, {}, {}, 0, 0
 local function find(list, id)
     for i, item in ipairs(list or {}) do if item.id == id then return item, i end end
 end
@@ -19,6 +22,55 @@ local function outputChange(node, remove)
     if remove then return {name = logical(node), remove = true} end
     return {name = logical(node), clientId = node.route.clientId, side = node.route.side, color = node.route.color, initialValue = false}
 end
+local function sourceKey(binding)
+    local card, targetType = binding.card or "", binding.targetType or ""
+    local address = Me.sourceKey(binding)
+    return #address .. ":" .. address .. #card .. ":" .. card .. targetType
+end
+local function stock(binding)
+    local source = Me.address(binding) and sources[sourceKey(binding)]
+    return source and source.snapshot or nil
+end
+local function itemCount(node)
+    local rule = node.amount
+    return rule and Me.count(stock(rule.sensor), rule.item.key)
+end
+local function readAmounts(state, api, now)
+    local needed = {}
+    local function include(binding)
+        if Me.address(binding) then needed[sourceKey(binding)] = binding end
+    end
+    for _, circuit in ipairs(state.circuits) do
+        if circuit.enabled then
+            for _, node in ipairs(circuit.nodes) do
+                if node.kind == "Item amount" and node.amount then include(node.amount.sensor) end
+            end
+        end
+    end
+    local visible = {}
+    for id, preview in pairs(previews) do
+        if preview.expires >= now then
+            include(preview.binding)
+            visible[id] = preview
+        end
+    end
+    previews = visible
+    local boots = next(needed) and Me.boots(api)
+    local live = {}
+    for key, binding in pairs(needed) do
+        local source = sources[key]
+        if not source then
+            nextWatch = nextWatch + 1
+            source = {watch = appName .. "_amount_" .. nextWatch, cache = {}}
+        end
+        api.watchSensor(source.watch, binding, {profile = "ae_items"})
+        source.snapshot = Me.snapshot(source.cache, api, binding, boots)
+        live[key] = source
+        api.cooperate(24)
+    end
+    for key, source in pairs(sources) do if not live[key] then api.unwatchSensor(source.watch) end end
+    sources = live
+end
 local function evaluate(circuit, api)
     local nodes, result, done = {}, {}, {}
     for _, node in ipairs(circuit.nodes) do nodes[node.id] = node end
@@ -30,6 +82,13 @@ local function evaluate(circuit, api)
         local v
         if node.kind == "Input" then
             if node.route then v = api.readInput(node.route) end
+        elseif node.kind == "Item amount" then
+            local count, rule = itemCount(node), node.amount
+            if count ~= nil then
+                if rule.operator == "under" then v = count < rule.threshold
+                elseif rule.operator == "over" then v = count > rule.threshold
+                else v = count == rule.threshold end
+            end
         else
             local a, b = value(node.a), value(node.b)
             if node.kind == "Output" then v = a
@@ -76,16 +135,27 @@ local last = {}
 function app.init(state, api, context)
     assert(api.getUsedIO and api.ui.actionAt, "Logic Sandbox requires bundled-v39 OS")
     appName, last = context.appName, {}
+    sources, previews, itemLists, nextWatch, nextRead = {}, {}, {}, 0, 0
     if not state.circuits then state.circuits, state.nextCircuit, state.nextNode, state.nextAlert = {}, 1, 1, 1 end
     local mapped, changes = {}, {}
     for _, item in ipairs(api.getOutputs()) do mapped[item.name] = item end
     for _, circuit in ipairs(state.circuits) do
+        local usesStock = false
+        for _, node in ipairs(circuit.nodes) do
+            if node.kind == "Item amount" then usesStock = true; break end
+        end
         for _, node in ipairs(circuit.nodes) do
             if node.kind == "Output" then
                 local existing = mapped[logical(node)]
                 if circuit.enabled and node.route and not same(existing, node.route) then
                     changes[#changes + 1] = outputChange(node)
-                elseif (not circuit.enabled or not node.route) and existing then changes[#changes + 1] = outputChange(node, true) end
+                elseif existing then
+                    if not circuit.enabled or not node.route then changes[#changes + 1] = outputChange(node, true)
+                    elseif usesStock and existing.value then
+                        -- Wait for live stock before restoring a stock circuit's output.
+                        changes[#changes + 1] = {name = logical(node), value = false}
+                    end
+                end
             end
         end
     end
@@ -103,6 +173,11 @@ function app.ioRoutes(state)
     return result
 end
 function app.background(dt, state, api)
+    local now = os.clock()
+    if now >= nextRead then
+        readAmounts(state, api, now)
+        nextRead = now + 0.5
+    end
     local changes, updates, nextLast, oldAlertId = {}, {}, {}, state.nextAlert
     local pendingCount = 0
     for _, circuit in ipairs(state.circuits) do
@@ -144,6 +219,12 @@ function app.background(dt, state, api)
     last = nextLast
     if #updates > 0 then notifications(state, api) end
 end
+function app.onClose(state, api, context)
+    previews[context.windowId], itemLists[context.windowId] = nil, nil
+end
+function app.shutdown(state, api)
+    for _, source in pairs(sources) do api.unwatchSensor(source.watch) end
+end
 function app.handleNotification(key, state, api)
     for _, circuit in ipairs(state.circuits) do
         for _, node in ipairs(circuit.nodes) do
@@ -181,16 +262,103 @@ local function keyboard(view, purpose, text, back)
     view.screen = "keyboard"
     view.keyboard = {purpose = purpose, draft = text, bank = 0, page = 1, back = back}
 end
+local function validAmount(rule)
+    return Me.address(rule.sensor) and Me.itemValid(rule.item) and comparisons[rule.operator]
+        and Me.integer(rule.threshold, 0, Me.MAX) or false
+end
+local function amountCaption(rule)
+    return comparisons[rule.operator] .. " " .. Me.amount(rule.threshold)
+end
+local amountScreens = {amountEdit = true, amountOperator = true, amountList = true,
+    amountFind = true, amountManual = true, amountNumber = true}
+local function amountEditor(view, node)
+    return node and node.kind == "Item amount" and view.amountDraft
+        and view.amountNode == node.id and view.amountRevision == (node.amountRevision or 0)
+end
+local function clearAmountEditor(view, id)
+    previews[id], itemLists[id] = nil, nil
+    view.amountDraft, view.amountNode, view.amountRevision = nil, nil, nil
+    view.manualItem, view.amountQuery, view.amountNumber = nil, nil, nil
+end
+local function drawItems(ui, w, h, view, id, api)
+    local binding = view.amountDraft.sensor
+    local snapshot = stock(binding)
+    local rows = itemLists[id]
+    if not rows and snapshot and snapshot.status == "ok" then
+        rows = {}
+        local query = (view.amountQuery or ""):lower()
+        for _, item in pairs(snapshot.items) do
+            local label = item.name:lower()
+            if label:find(query, 1, true) or item.raw:lower():find(query, 1, true) then
+                rows[#rows + 1] = {item = Me.identity(item), sort = label}
+            end
+            api.cooperate(32)
+        end
+        table.sort(rows, function(a, b)
+            if a.sort ~= b.sort then return a.sort < b.sort end
+            return a.item.key < b.item.key
+        end)
+        itemLists[id] = rows
+    end
+    rows = rows or {}
+    ui.heading("Select item")
+    local path = api.ui.breadcrumb({api.clientName(binding.clientId), binding.side, binding.target}, w, h)
+    local start = path and 3 or 2
+    if path then ui.put(1, 2, path, w) end
+    local slots = h - start
+    if #rows > slots then slots = slots - 1 end
+    local first = ui.page("amountItems", #rows, slots, h - 1)
+    for i = 1, slots do
+        local row = rows[first + i]
+        if row then
+            local item, y = row.item, start + i - 1
+            local count = Me.amount(Me.count(snapshot, item.key), math.floor(w / 2))
+            local span = math.min(#count, math.floor(w / 2))
+            local label = item.name .. (item.damage > 0 and (" [" .. item.damage .. "]") or "")
+            ui.action(y, "", "amountItem", item)
+            ui.put(1, y, label, w - span - 1)
+            ui.put(w - span + 1, y, count, span)
+        end
+    end
+    if #rows == 0 then
+        ui.put(1, start, snapshot and (snapshot.status == "ok" and "No matching items" or snapshot.error or snapshot.status)
+            or "Waiting for ME", w)
+    end
+    ui.footer({{"Back", "amountEdit"}, {"Find", "amountFind"}})
+end
 local function nodeLabel(node)
     return node and node.name or "Unwired"
 end
-local function build(w, h, state, api, view)
+local function build(w, h, state, api, context)
+    local view, id = context.view, context.windowId
     local ui = api.ui.form(w, h, view, api.getAppColour(appName))
     local screen = view.screen or "home"
     local circuit = find(state.circuits, view.circuitId)
     local node = find(circuit and circuit.nodes, view.nodeId)
+    local k = view.keyboard
+    if screen == "keyboard" and (not k or type(k.purpose) ~= "string" or (k.purpose == "renameCircuit" and not circuit)
+        or (k.purpose == "renameNode" and not node)) then
+        screen, view.keyboard = circuit and "circuit" or "home", nil
+    end
+    if amountScreens[screen] or (screen == "keyboard" and k.purpose:sub(1, 6) == "amount") then
+        if not amountEditor(view, node) then
+            clearAmountEditor(view, id)
+            screen, view.keyboard = node and "node" or "circuit", nil
+        elseif screen == "amountList" and not Me.address(view.amountDraft.sensor) then
+            screen = "amountEdit"
+        elseif (screen == "amountManual" and not view.manualItem) or (screen == "amountNumber" and not view.amountNumber) then
+            screen = "amountEdit"
+        end
+    end
     if not circuit and screen ~= "keyboard" and screen ~= "message" then screen = "home" end
-    if not node and (screen == "node" or screen == "sources" or screen == "deleteNode") then screen = "circuit" end
+    if (screen == "node" or screen == "sources" or screen == "deleteNode") and not node then screen = "circuit" end
+    if screen == "sources" and view.port ~= "a" and view.port ~= "b" then screen = "node" end
+    view.screen = screen
+    local rule = view.amountDraft
+    local binding = rule and rule.sensor
+    if amountScreens[screen] and binding then
+        previews[id] = {binding = binding, expires = os.clock() + 4}
+    else previews[id] = nil end
     if screen == "home" then
         local rows = {{"+ New circuit", "newCircuit", nil, #state.circuits < 24}}
         for _, item in ipairs(state.circuits) do
@@ -221,8 +389,17 @@ local function build(w, h, state, api, view)
             rows[#rows + 1] = {label, "route"}
             if node.route then rows[#rows + 1] = {"Clear routing", "clearRoute"} end
         end
-        if node.kind ~= "Input" then rows[#rows + 1] = {"A " .. nodeLabel(find(circuit.nodes, node.a)), "source", "a"} end
-        if node.kind ~= "Input" and node.kind ~= "Output" and node.kind ~= "NOT" then
+        if node.kind == "Item amount" then
+            local configured = node.amount
+            rows[#rows + 1] = {configured and "Edit count" or "Set item count", "editAmount"}
+            if configured then
+                rows[#rows + 1] = {configured.item.name .. " " .. amountCaption(configured), nil, nil, false}
+                rows[#rows + 1] = {"Count " .. Me.amount(itemCount(node)), nil, nil, false}
+            end
+        elseif node.kind ~= "Input" then
+            rows[#rows + 1] = {"A " .. nodeLabel(find(circuit.nodes, node.a)), "source", "a"}
+        end
+        if node.kind == "AND" or node.kind == "OR" or node.kind == "XOR" then
             rows[#rows + 1] = {"B " .. nodeLabel(find(circuit.nodes, node.b)), "source", "b"}
         end
         rows[#rows + 1] = {node.popup and "Popup ON" or "Popup OFF", "popup"}
@@ -238,6 +415,27 @@ local function build(w, h, state, api, view)
             end
         end
         ui.menu(node.name .. " / " .. view.port:upper(), rows, "sources", {{"Back", "node"}})
+    elseif screen == "amountEdit" then
+        ui.menu("Item amount", {{binding and "ME " .. api.clientName(binding.clientId) or "Select ME", "amountSensor"},
+            {rule.item and rule.item.name or "Select item", "amountList", nil, binding ~= nil},
+            {"Compare " .. comparisons[rule.operator], "amountOperator"},
+            {"Level " .. Me.amount(rule.threshold), "editNumber", "threshold"}}, "amountEdit",
+            {{"Cancel", "cancelAmount"}, {"Save", "saveAmount", nil, validAmount(rule)}})
+    elseif screen == "amountOperator" then
+        ui.menu("Compare count", {{"Under (<)", "setOperator", "under"}, {"Over (>)", "setOperator", "over"},
+            {"Exactly (=)", "setOperator", "exact"}}, "amountOperator", {{"Back", "amountEdit"}})
+    elseif screen == "amountList" then drawItems(ui, w, h, view, id, api)
+    elseif screen == "amountFind" then
+        ui.menu("Find item", {{"Search " .. (view.amountQuery or ""), "amountSearch"}, {"Refresh", "refreshItems"},
+            {"Manual item", "newManualItem"}}, "amountFind", {{"Back", "amountList"}})
+    elseif screen == "amountManual" then
+        local m = view.manualItem
+        ui.menu("Manual item", {{"Name " .. m.name, "manualText", "name"}, {"RawName " .. m.raw, "manualText", "raw"},
+            {"Damage " .. m.damage, "editNumber", "damage"}}, "amountManual",
+            {{"Back", "amountFind"}, {"Use", "useManualItem", nil, Me.textValue(m.raw, 256) and Me.textValue(m.name, 256)}})
+    elseif screen == "amountNumber" then
+        local n = view.amountNumber
+        ui.numberPad(n.field == "damage" and "Damage" or "Item level", n.draft, n.back)
     elseif screen == "keyboard" then ui.keyboard(view.keyboard)
     elseif screen == "deleteCircuit" or screen == "deleteNode" then
         local target = screen == "deleteCircuit" and circuit or node
@@ -247,12 +445,25 @@ local function build(w, h, state, api, view)
     else ui.info("Logic Sandbox", {view.message or "Circuit changed"}, "message", view.back or "home") end
     return ui
 end
-function app.render(w, h, state, api, context) return build(w, h, state, api, context.view).lines end
+function app.render(w, h, state, api, context) return build(w, h, state, api, context).lines end
+function app.handleSensorSelection(key, binding, state, api, context)
+    local view = context.view
+    local circuit = find(state.circuits, view.circuitId)
+    local node = find(circuit and circuit.nodes, view.nodeId)
+    if not amountEditor(view, node) or key ~= "amount_" .. node.id or not Me.address(binding) then
+        return false, "Item amount editor changed"
+    end
+    view.amountDraft.sensor, view.amountQuery, view.pages.amountItems = copy(binding), nil, nil
+    itemLists[context.windowId] = nil
+    view.screen = "amountEdit"
+    api.invalidateAppViews(appName)
+    return true
+end
 function app.handleIOSelection(key, address, state, api, context)
     local view = context.view
     local circuit = find(state.circuits, view.circuitId)
     local node = find(circuit and circuit.nodes, view.nodeId)
-    if not node or key ~= "node_" .. node.id then return false, "Node changed" end
+    if not node or (node.kind ~= "Input" and node.kind ~= "Output") or key ~= "node_" .. node.id then return false, "Node changed" end
     if node.kind == "Output" then
         for _, item in ipairs(state.circuits) do
             for _, other in ipairs(item.nodes) do
@@ -270,7 +481,7 @@ function app.handleIOSelection(key, address, state, api, context)
 end
 function app.handleTouch(x, y, w, h, state, api, context)
     local view = context.view
-    local action, value = api.ui.actionAt(build(w, h, state, api, view).hits, x, y)
+    local action, value = api.ui.actionAt(build(w, h, state, api, context).hits, x, y)
     if not action then return false end
     local circuit, circuitIndex = find(state.circuits, view.circuitId)
     local node, nodeIndex = find(circuit and circuit.nodes, view.nodeId)
@@ -281,12 +492,71 @@ function app.handleTouch(x, y, w, h, state, api, context)
     elseif action == "newCircuit" then keyboard(view, action, "Circuit " .. state.nextCircuit, "home")
     elseif action == "renameCircuit" then keyboard(view, action, circuit.name, "circuitMenu")
     elseif action == "renameNode" then keyboard(view, action, node.name, "node")
-    elseif view.screen == "keyboard" and api.ui.editText(view.keyboard, action, value, 32) then return true
+    elseif action == "editAmount" then
+        clearAmountEditor(view, context.windowId)
+        view.amountDraft = copy(node.amount or {operator = "under", threshold = 64})
+        view.amountNode, view.amountRevision, view.screen = node.id, node.amountRevision or 0, "amountEdit"
+    elseif action == "amountSensor" then
+        local ok, err = api.pickSensor(context.windowId, "amount_" .. node.id, view.amountDraft.sensor, "ae")
+        if not ok then notice(view, err, "amountEdit") end
+    elseif action == "setOperator" then view.amountDraft.operator, view.screen = value, "amountEdit"
+    elseif action == "amountItem" then view.amountDraft.item, view.screen = Me.identity(value), "amountEdit"
+    elseif action == "amountSearch" then
+        keyboard(view, action, view.amountQuery or "", "amountFind")
+        view.keyboard.limit = 64
+    elseif action == "refreshItems" then
+        itemLists[context.windowId], view.pages.amountItems, view.screen = nil, 1, "amountList"
+    elseif action == "newManualItem" then
+        view.manualItem = view.amountDraft.item and Me.identity(view.amountDraft.item) or {name = "New item", raw = "", damage = 0}
+        view.screen = "amountManual"
+    elseif action == "manualText" then
+        keyboard(view, "amountManualText", view.manualItem[value], "amountManual")
+        view.keyboard.limit, view.keyboard.field = 256, value
+    elseif action == "useManualItem" then
+        local item = view.manualItem
+        item.key = Me.itemKey(item.raw, item.damage, item.name)
+        view.amountDraft.item, view.screen = Me.identity(item), "amountEdit"
+    elseif action == "editNumber" then
+        local number = value == "damage" and view.manualItem.damage or view.amountDraft.threshold
+        view.amountNumber = {field = value, draft = Me.digits(number), back = view.screen}
+        view.screen = "amountNumber"
+    elseif action == "digit" then
+        local n = view.amountNumber
+        if value == "Clr" then n.draft = ""
+        elseif value == "Del" then n.draft = n.draft:sub(1, -2)
+        elseif #n.draft < 16 then n.draft = (n.draft == "0" and "" or n.draft) .. value end
+    elseif action == "setNumber" then
+        local n = view.amountNumber
+        local number = tonumber(n.draft == "" and "0" or n.draft)
+        if not Me.integer(number, 0, n.field == "damage" and 2147483647 or Me.MAX) then
+            notice(view, "Use a whole number in range", "amountNumber")
+        else
+            local target = n.field == "damage" and view.manualItem or view.amountDraft
+            target[n.field], view.screen = number, n.back
+        end
+    elseif action == "cancelAmount" then
+        clearAmountEditor(view, context.windowId)
+        view.screen = "node"
+    elseif action == "saveAmount" then
+        local draft = view.amountDraft
+        if validAmount(draft) and commit(state, api, view, function()
+            node.amount = copy(draft)
+            node.amountRevision = (node.amountRevision or 0) + 1
+        end) then
+            clearAmountEditor(view, context.windowId)
+            view.screen = "node"
+        end
+    elseif view.screen == "keyboard" and api.ui.editText(view.keyboard, action, value, view.keyboard.limit or 32) then return true
     elseif action == "saveText" then
         local k = view.keyboard
         local text = k.draft:match("^%s*(.-)%s*$")
-        if text == "" then return true end
-        if k.purpose == "newCircuit" and #state.circuits < 24 then
+        if k.purpose == "amountSearch" then
+            view.amountQuery, view.pages.amountItems, view.screen = text, 1, "amountList"
+            itemLists[context.windowId] = nil
+        elseif k.purpose == "amountManualText" then
+            view.manualItem[k.field], view.screen = text, k.back
+        elseif text == "" then return true
+        elseif k.purpose == "newCircuit" and #state.circuits < 24 then
             local id = state.nextCircuit
             if commit(state, api, view, function()
                 state.circuits[#state.circuits + 1] = {id = id, name = text, nodes = {}, enabled = false}

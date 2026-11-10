@@ -73,6 +73,20 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         bus.advance(1); t.id=t.open()
         return t
     end
+    function tests.v41_clock_signal_details_recover_when_alarm_is_deleted_on_another_monitor()
+        local t = setup()
+        local alarm = t.new(t.id, "alarm", {minute = 1200}, nil)
+        t.view(t.id).screen = "alarms"
+        t.click(t.id, "open", function(value) return value.id == alarm.id end)
+        t.click(t.id, "routeInfo")
+        local second = t.open("left")
+        t.click(second, "alarms"); t.click(second, "open", function(value) return value.id == alarm.id end)
+        t.click(second, "delete"); t.click(second, "confirmDelete")
+        t.paint()
+        equal(t.view(t.id).screen, "alarms")
+        assert(table.concat(t.content(t.id), "\n"):find("No alarms", 1, true))
+    end
+
     function tests.clock_timers_trigger_pulses_in_background_and_resume_from_checkpoints_without_counting_downtime()
         local t=setup()
         local timer=t.new(t.id,"timer",{duration=5,signal={kind="pulse",on=4,off=1,total=4}},1)

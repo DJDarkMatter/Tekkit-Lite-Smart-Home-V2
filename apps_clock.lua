@@ -144,7 +144,7 @@ local function offChanges(state,item,kind)
     return {{name=outputName(item,kind),value=on}}
 end
 function app.init(state,api,context)
-    assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"clock requires bundled-v33 OS; run inst server")
+    assert(api.ui and api.ui.keyboard and api.ui.breadcrumb,"clock requires bundled-v41 OS; run inst server")
     ready=false; lastError,retryElapsed=nil,0
     assert(api.updateOutputs and api.setNotifications,"Clock requires bundled-v25 OS")
     appName=context and context.appName or "clock"
@@ -298,7 +298,9 @@ local function build(width,height,state,api,context)
     local screen=view.screen or "home"
     local kind=view.kind or "alarm"
     local item=find(kind=="alarm" and state.alarms or state.timers,view.id)
-    if (screen=="detail" or screen=="delete") and not item then view.screen,screen=kind=="alarm" and "alarms" or "timers",kind=="alarm" and "alarms" or "timers" end
+    if (screen=="detail" or screen=="delete" or screen=="routeInfo") and not item then
+        screen=kind=="alarm" and "alarms" or "timers"; view.screen=screen
+    end
     if (screen=="edit" or screen=="number" or screen=="keyboard") and not view.draft then screen,view.screen="home","home" end
     local ui,accent=api.ui.content(width,height),api.getAppColour(context.appName or appName)
     ui.style(1,1,width,height,1,32768)
@@ -419,20 +421,9 @@ local function build(width,height,state,api,context)
         end
         footer({{"Set","setNumber"},{"Back","edit"}})
     elseif screen=="keyboard" then
-        local keyboard=view.keyboard
-        local letters=keyboard.bank==2 and "1234567890-_/.:" or keyboard.bank==1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
-        ui.heading(keyboard.draft:sub(-width),accent)
-        local cols,rows=math.max(4,math.min(10,math.floor(width/2))),math.max(1,math.min(3,height-4))
-        local slots=cols*rows; local pages=math.ceil(#letters/slots); keyboard.page=math.max(1,math.min(keyboard.page,pages))
-        for i=1,slots do local value=letters:sub((keyboard.page-1)*slots+i,(keyboard.page-1)*slots+i)
-            if value~="" then local col,row=(i-1)%cols,math.floor((i-1)/cols)
-                button(2+row,value,"key",value,1+math.floor(col*width/cols),math.floor((col+1)*width/cols),true,accent)
-            end
-        end
-        for i,row in ipairs({{"ABC","bank"},{"Sp","space"},{"Del","backspace"},{keyboard.page.."/"..pages,"keyPage"}}) do
-            button(height-1,row[1],row[2],nil,1+math.floor((i-1)*width/4),math.floor(i*width/4))
-        end
-        footer({{"Set","saveName"},{"Clr","clearName"},{"Back","edit"}})
+        local keyboard = view.keyboard
+        api.ui.keyboard(ui, width, height, keyboard, accent,
+            {{"Set","saveName"},{"Clr","clearName"},{"Back","edit"}})
     elseif screen=="routeInfo" then
         local output=item.route
         local lines={output and (output.clientId.." / "..output.side.." / "..(output.color and api.ui.colourName(output.color) or "Digital")) or "No output selected",
@@ -570,12 +561,8 @@ function app.handleTouch(x,y,w,h,state,api,context)
         if not valid then notice(view,field.key=="minute" and "Use HHMM, 0000-2359" or (allowZero and "Use whole seconds; 0 = until OK" or "Use whole seconds, at least 1"),"number")
         else if field.key=="on" or field.key=="off" or field.key=="total" then view.draft.signal[field.key]=val else view.draft[field.key]=val end; view.screen="edit" end
     elseif action=="name" then view.keyboard={draft=view.draft.name,bank=0,page=1}; view.screen="keyboard"
-    elseif action=="key" or action=="space" then api.ui.typeKey(view.keyboard,action=="space" and " " or value,24)
-    elseif action=="backspace" then view.keyboard.draft=view.keyboard.draft:sub(1,-2)
-    elseif action=="clearName" then view.keyboard.draft=""
-    elseif action=="bank" then view.keyboard.bank,view.keyboard.page=(view.keyboard.bank+1)%3,1
-    elseif action=="keyPage" then
-        local k=view.keyboard; local slots=math.max(4,math.min(10,math.floor(w/2)))*math.max(1,math.min(3,h-4)); k.page=k.page%math.ceil((k.bank==2 and 15 or 26)/slots)+1
+    elseif view.screen == "keyboard" and api.ui.editText(view.keyboard, action, value, 24) then return true
+    elseif action == "clearName" then view.keyboard.draft = ""
     elseif action=="saveName" then
         local name=view.keyboard.draft:gsub("^%s+",""):gsub("%s+$","")
         if validName(name) then view.draft.name,view.screen=name,"edit" end

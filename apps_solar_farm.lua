@@ -757,11 +757,7 @@ function app.handleTouch(x,y,w,h,state,api,context)
             else ok=pin(state,api,view,item) end
             if ok then view.screen="home" end
         end
-    elseif action=="key" or action=="space" then api.ui.typeKey(view.keyboard,action=="space" and " " or value,view.keyboard.limit)
-    elseif action=="backspace" then view.keyboard.draft=view.keyboard.draft:sub(1,-2)
-    elseif action=="clearText" then view.keyboard.draft=""
-    elseif action=="bank" then view.keyboard.bank,view.keyboard.page=(view.keyboard.bank+1)%3,1
-    elseif action=="keyPage" then local k=view.keyboard; local slots=math.max(4,math.min(10,math.floor(w/2)))*math.max(1,math.min(3,h-4)); k.page=k.page%math.ceil((k.bank==2 and 15 or 26)/slots)+1
+    elseif view.screen=="keyboard" and api.ui.editText(view.keyboard,action,value,view.keyboard.limit) then return true
     elseif action=="saveText" then
         local k=view.keyboard; local text=k.draft:gsub("^%s+",""):gsub("%s+$","")
         if k.target=="search" then view.query,view.screen=text,"items"; frozen[context.windowId]=nil; view.pages.items=nil

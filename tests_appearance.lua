@@ -56,6 +56,48 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         end
         for _,bank in ipairs({2,"123"}) do local k={bank=bank,draft=""}; Gui.typeKey(k,"1",4); equal(k.bank,bank) end
     end
+    function tests.v41_shared_keyboard_qwerty_paging_and_next_mode_labels()
+        local Gui = dofile("lib_gui.lua")
+        for _, size in ipairs({{12, 6}, {19, 8}, {20, 6}, {38, 14}, {64, 26}}) do
+            local w, h = unpack(size)
+            local k = {draft = "", bank = 0, page = 1, back = "home"}
+            local function draw(label)
+                local ui = Gui.form(w, h, {}, 2048)
+                ui.keyboard(k)
+                local keys, occupied, mode = {}, {}, nil
+                for _, hit in ipairs(ui.hits) do
+                    local y1, y2 = hit.y1 or hit.y, hit.y2 or hit.y
+                    assert(hit.x1 >= 1 and hit.x2 <= w and y1 >= 1 and y2 <= h)
+                    for y = y1, y2 do
+                        for x = hit.x1, hit.x2 do
+                            local key = x .. ":" .. y
+                            assert(not occupied[key], "Overlapping keyboard keys")
+                            occupied[key] = true
+                        end
+                    end
+                    if hit.action == "key" then keys[hit.value] = hit.y
+                    elseif hit.action == "bank" then mode = ui.lines[hit.y]:sub(hit.x1, hit.x2):match("%S+") end
+                end
+                equal(mode, label)
+                return keys
+            end
+            local keys = draw("ABC")
+            assert(keys.q == keys.w and keys.q < keys.a and keys.a < keys.z)
+            if w >= 20 then equal(keys.q, keys.p); equal(k.pages, 1)
+            else Gui.editText(k, "keyPage", nil, 32); assert(draw("ABC").p) end
+            Gui.editText(k, "bank", nil, 32); assert(draw("123").Q)
+            Gui.editText(k, "key", "Q", 32); assert(draw("ABC").q); equal(k.draft, "Q")
+            Gui.editText(k, "bank", nil, 32); Gui.editText(k, "bank", nil, 32)
+            local all = {}
+            repeat
+                for key in pairs(draw("abc")) do all[key] = true end
+                if k.page == k.pages then break end
+                Gui.editText(k, "keyPage", nil, 32)
+            until false
+            assert(all["1"] and all["!"] and all["@"] and all["{"] and all["|"] and all["~"])
+            Gui.editText(k, "bank", nil, 32); assert(draw("ABC").q)
+        end
+    end
     function tests.appearance_route_selectors_keep_previous_choices_visible_and_preserve_compact_paging()
         local Gui=dofile("lib_gui.lua"); local IO=dofile("lib_io_picker.lua"); local Sensor=dofile("lib_sensor_picker.lua")
         local io=IO.new("route","output",{clientId="io_12345",side="bottom"})
@@ -82,7 +124,8 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         for _, item in ipairs(t.central.server.monitors["monitor_13:top"].menuHits) do
             if item.item and item.item.value == "@settings" then hit = item end
         end
-        assert(hit, "OS settings must be available before installing apps")
+        assert(hit, "Settings must be available before installing apps")
+        equal(hit.item.label, "Settings")
         t.touch("top", hit.x1, hit.y)
         local id
         for key, win in pairs(t.central.server.state.windows) do if win.appName == "@settings" then id = key end end

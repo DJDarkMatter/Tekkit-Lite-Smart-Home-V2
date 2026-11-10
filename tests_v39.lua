@@ -67,7 +67,8 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         function t.lines(id)
             local win = assert(t.state.windows[id], "Window closed")
             local app = t.server.apps[win.appName] or t.server.systemApps[win.appName]
-            return app.render(win.width - 2, win.height - 2, t.state.appStates[win.appName], t.api,
+            local inset = win.fullscreen and 0 or 2
+            return app.render(win.width - inset, win.height - inset, t.state.appStates[win.appName], t.api,
                 {windowId = id, monitorId = win.monitorId, appName = win.appName, view = t.server.views[id]})
         end
         function t.click(id, action, value)
@@ -103,10 +104,11 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     local function scope(target) return function(value) return value.id == target end end
 
     function tests.v39_catalog_uses_actual_cycle_names_and_keeps_nyan_anchor()
-        local t = setup({screensaver = true})
+        local t = setup({screensaver = true}, 72, 34)
         local names, installed = t.api.getScreensavers()
-        assert(installed); equal(#names, 20); equal(names[9], "Nyan Cat")
-        local win = t.open(settings, "top", 55, 25, 1, 1)
+        assert(installed); equal(#names, 25); equal(names[9], "Nyan Cat")
+        equal(names[21], "DVD Bounce"); equal(names[25], "Among Us Drift")
+        local win = t.open(settings, "top", 55, 30, 1, 1)
         t.click(win, "screensavers")
         local text = table.concat(t.lines(win), "\n")
         for i, name in ipairs(names) do assert(text:find(i .. ". " .. name, 1, true), name) end
@@ -146,6 +148,87 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.reboot()
         equal(t.api.clientName("io_11"), "Pump Room")
         equal(t.api.clientName("sensor_14"), "Farm Sensor")
+    end
+
+    function tests.v41_cancel_client_rename_retains_selected_id_and_saved_name()
+        local t = setup()
+        assert(t.api.setClientName("io_11", "Pump Room"))
+        local win = t.open(settings, "top", 40, 18, 1, 1)
+        t.click(win, "names"); t.click(win, "nameClient", "io_11"); t.click(win, "editName")
+        t.click(win, "clearText"); t.click(win, "key", "x"); t.click(win, "nameClient")
+        local view = t.server.views[win]
+        equal(view.nameId, "io_11"); equal(view.keyboard, nil)
+        equal(t.api.clientName("io_11"), "Pump Room")
+        assert(table.concat(t.top.lines, "\n"):find("ID io_11", 1, true))
+        t.click(win, "editName"); equal(view.keyboard.draft, "Pump Room")
+        view.section, view.nameId = "nameClient", nil -- Recover views saved by the old Back action.
+        assert(t.api.save())
+        t.reboot(); equal(t.server.views[win].section, "names")
+        t.click(win, "nameClient", "io_11")
+        equal(t.api.clientName("io_11"), "Pump Room")
+    end
+
+    function tests.v41_relay_map_back_keeps_the_observed_client_path()
+        local t = setup()
+        local win = t.open(settings, "top", 40, 19, 1, 1)
+        t.click(win, "overview"); t.click(win, "relayMap"); t.click(win, "path", "io_11")
+        t.click(win, "pathClient"); t.click(win, "path")
+        equal(t.server.views[win].overview.clientId, "io_11")
+        assert(table.concat(t.lines(win)):find("> io_11", 1, true))
+        t.click(win, "pathClient"); t.click(win, "path"); t.click(win, "relayMap")
+    end
+
+    function tests.v41_desktop_load_prunes_invalid_entries_and_keeps_valid_saved_windows()
+        local t = setup()
+        local win = t.open(settings, "top", 40, 18, 1, 1)
+        t.click(win, "appearance")
+        assert(t.api.save())
+        local path = "configs_os_state.txt"
+        local saved = unserialize(t.central.disk.files[path])
+        saved.windows.old = true
+        saved.windows[0] = {appName = settings, monitorId = topId}
+        saved.appearance.appColours = {[settings] = 2048, invalid = 3, [22] = 16}
+        t.central.disk.files[path] = serialize(saved)
+        t.reboot()
+        equal(t.state.windows.old, nil); equal(t.state.windows[0], nil)
+        equal(t.state.appearance.appColours.invalid, nil); equal(t.state.appearance.appColours[22], nil)
+        equal(t.state.appearance.appColours[settings], 2048)
+        equal(t.server.views[win].section, "appearance")
+    end
+
+    function tests.v41_monitor_detach_keeps_the_other_screen_connected()
+        local t = setup()
+        local win = t.open(settings, "left", 14, 8, 1, 1)
+        t.display.monitors.top = nil
+        t.bus.queue(t.display, {"peripheral_detach", "top"}); t.bus.pump()
+        equal(t.display.client.devices.top, nil)
+        equal(t.display.client.devices.left.connected, true)
+        t.click(win, "names")
+        t.display.monitors.top = t.top
+        t.bus.queue(t.display, {"peripheral", "top"}); t.bus.pump()
+        t.bus.advance(3)
+        equal(t.display.client.devices.top.connected, true)
+    end
+
+    function tests.v41_all_apps_open_on_compact_and_large_monitors_in_one_os()
+        local names = {"clock", "coffee", "io_scope", "level_emitter", "logic_sandbox", "me_monitor", "me_storage",
+            "notes", "reactors", "screensaver", "solar_farm", "switchboard", "window_presets"}
+        local enabled = {}
+        for _, name in ipairs(names) do enabled[name] = true end
+        local t = setup(enabled)
+        names[#names + 1] = settings
+        for _, name in ipairs(names) do
+            local big = t.open(name, "top", 58, 23, 1, 1)
+            local small = t.open(name, "left", 14, 8, 1, 1)
+            t.bus.advance(.6)
+            for _, id in ipairs({big, small}) do
+                local lines = t.lines(id)
+                assert(#lines >= 6, name .. " returned incomplete content")
+                assert(not table.concat(lines, "\n"):find("App render failed", 1, true), name)
+                assert(t.api.closeWindow(id))
+            end
+        end
+        equal(t.central.disk.files["diagnostics_os_error.txt"], nil)
     end
 
     function tests.v39_test_output_pulses_only_selected_wire_and_restores_state()
@@ -236,6 +319,80 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(#t.api.getUsedIO(), 2, "Disabled circuit retains configured IO")
     end
 
+    local function logicAE(t)
+        local iron = {Name = "Iron Ingot", RawName = "item.ingotIron", Size = 64, DamageValue = 0}
+        local data = {Powered = true, Items = {iron}}
+        local sensor = t.bus.computer(14, "sensor", {sensors = {top = {card = "openccsensors.item.appliedenergisticssensor",
+            targets = {me = {Name = "ME Access Point"}}, details = {me = data}}}}):start()
+        t.bus.advance(3)
+        return sensor, data, iron
+    end
+    local function selectLogicME(t, id)
+        t.click(id, "amountSensor")
+        for _, choice in ipairs({"sensor_14", "top", "me"}) do
+            t.click(id, "select", function(value) return value.value == choice end)
+        end
+        t.click(id, "use")
+    end
+
+    function tests.v41_logic_item_amount_tracks_live_stock_and_runs_closed_after_reboot()
+        local t = setup({logic_sandbox = true})
+        local sensor, data, iron = logicAE(t)
+        local id = t.open("logic_sandbox", "top", 50, 22, 1, 1)
+        t.click(id, "newCircuit"); t.click(id, "saveText")
+        t.click(id, "addNode"); t.click(id, "createNode", "Item amount"); t.click(id, "editAmount")
+        selectLogicME(t, id)
+        t.click(id, "amountList"); t.click(id, "amountFind"); t.click(id, "amountSearch")
+        t.click(id, "key", "i"); t.click(id, "saveText")
+        t.bus.advance(5); t.click(id, "amountItem", function(item) return item.raw == iron.RawName end)
+        t.click(id, "editNumber", "threshold"); t.click(id, "digit", "Clr"); t.click(id, "digit", "6")
+        t.click(id, "digit", "4"); t.click(id, "setNumber"); t.click(id, "saveAmount")
+        local node = t.state.appStates.logic_sandbox.circuits[1].nodes[1]
+        equal(node.amount.item.raw, iron.RawName); equal(node.amount.threshold, 64)
+        t.click(id, "editAmount"); t.click(id, "amountOperator"); t.click(id, "setOperator", "over")
+        t.click(id, "cancelAmount"); equal(node.amount.operator, "under")
+        t.click(id, "circuit"); t.click(id, "addNode"); t.click(id, "createNode", "NOT")
+        t.click(id, "source", "a"); t.click(id, "assignSource", 1)
+        for _, wiring in ipairs({{1, 1}, {2, 2}}) do
+            t.click(id, "circuit"); t.click(id, "addNode"); t.click(id, "createNode", "Output")
+            t.click(id, "source", "a"); t.click(id, "assignSource", wiring[1])
+            t.click(id, "route"); t.click(id, "select", "io_11"); t.click(id, "select", "front")
+            t.click(id, "select", wiring[2]); t.click(id, "use")
+        end
+        t.click(id, "circuit"); t.click(id, "circuitMenu"); t.click(id, "toggleCircuit")
+        t.bus.advance(5); equal(t.bridge.bundled.front, 2, "At the threshold, Under is false")
+        equal(#sensor.client.watches, 1)
+        iron.Size = 63
+        t.bus.advance(5); equal(t.bridge.bundled.front, 1)
+        data.Powered = false
+        t.bus.advance(5); equal(t.bridge.bundled.front, 0, "Unknown must stay unknown through NOT")
+        data.Powered, data.Items = true, {}
+        t.bus.advance(5); equal(t.bridge.bundled.front, 1, "Missing item in complete inventory is zero")
+        t.click(id, "home"); t.click(id, "close")
+        t.reboot(); equal(t.bridge.bundled.front, 1, "The circuit resumes after fresh stock arrives")
+        sensor.active = false
+        t.bus.advance(25); equal(t.bridge.bundled.front, 0, "A lost sensor must release the output")
+    end
+
+    function tests.v41_logic_item_amount_manual_identity_and_cancel_fit_small_window()
+        local t = setup({logic_sandbox = true})
+        logicAE(t)
+        local id = t.open("logic_sandbox", "top", 14, 8, 1, 1)
+        t.click(id, "newCircuit"); t.click(id, "saveText")
+        t.click(id, "addNode"); t.click(id, "createNode", "Item amount"); t.click(id, "editAmount")
+        selectLogicME(t, id)
+        t.click(id, "amountList"); t.click(id, "amountFind"); t.click(id, "newManualItem")
+        t.click(id, "manualText", "raw"); t.click(id, "key", "a"); t.click(id, "saveText")
+        t.click(id, "editNumber", "damage"); t.click(id, "digit", "7"); t.click(id, "setNumber")
+        t.click(id, "useManualItem"); t.click(id, "amountOperator"); t.click(id, "setOperator", "exact")
+        t.click(id, "editNumber", "threshold"); t.click(id, "digit", "Clr"); t.click(id, "setNumber")
+        t.click(id, "saveAmount")
+        local rule = t.state.appStates.logic_sandbox.circuits[1].nodes[1].amount
+        equal(rule.item.raw, "a"); equal(rule.item.damage, 7); equal(rule.operator, "exact"); equal(rule.threshold, 0)
+        t.click(id, "editAmount"); t.click(id, "amountSensor"); t.click(id, "cancel")
+        t.click(id, "cancelAmount"); equal(t.state.appStates.logic_sandbox.circuits[1].nodes[1].amount, rule)
+    end
+
     function tests.v39_presets_preview_adapt_and_keep_app_view_across_reboot()
         local t = setup({window_presets = true, notes = true, switchboard = true})
         local a = t.open("notes", "top", 26, 11, 1, 1)
@@ -244,7 +401,10 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.open("switchboard", "top", 29, 14, 30, 1)
         local id = t.open("window_presets", "top", 45, 20, 1, 1)
         t.click(id, "capture"); t.click(id, "captureScope", "one"); t.click(id, "saveText")
-        t.click(id, "open", 1); t.click(id, "slot", topId); t.click(id, "assign"); t.click(id, "assignTarget", leftId)
+        t.click(id, "open", 1); t.click(id, "slot", topId); t.click(id, "assign"); t.click(id, "slot")
+        equal(t.server.views[id].slotId, topId)
+        assert(table.concat(t.lines(id)):find("From " .. topId, 1, true))
+        t.click(id, "assign"); t.click(id, "assignTarget", leftId)
         t.click(id, "preview")
         local slots = t.state.appStates.window_presets.presets[1].slots
         local plan, valid = t.api.previewWindowPreset(slots, {[topId] = leftId})

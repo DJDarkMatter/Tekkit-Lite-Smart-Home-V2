@@ -18,7 +18,14 @@ local function build(w, h, state, api, view)
     local ui = api.ui.form(w, h, view, api.getAppColour(name))
     local screen = view.screen or "home"
     local preset = find(state.presets, view.presetId)
-    if not preset and (screen == "preview" or screen == "slot" or screen == "assign" or screen == "confirm" or screen == "delete") then screen = "home" end
+    if (screen == "slot" or screen == "assign") and not (preset and find(preset.slots, view.slotId)) then
+        view.screen = preset and "preview" or "home"
+    elseif not preset and (screen == "preview" or screen == "confirm" or screen == "delete") then
+        view.screen = "home"
+    elseif screen == "keyboard" and (not view.keyboard or (view.keyboard.purpose == "rename" and not preset)) then
+        view.screen, view.keyboard = "home", nil
+    end
+    screen = view.screen or "home"
     if screen == "home" then
         local rows = {{"+ Save layout", "capture", nil, #state.presets < 24}}
         for _, item in ipairs(state.presets) do rows[#rows + 1] = {item.name .. " / " .. #item.slots, "open", item.id} end
@@ -88,7 +95,9 @@ function app.handleTouch(x, y, w, h, state, api, context)
         preset = find(state.presets, value)
         view.presetId, view.screen, view.pages, view.assignments = value, "preview", {}, {}
         for source, target in pairs(preset.assignments or {}) do view.assignments[source] = target end
-    elseif action == "slot" then view.slotId, view.screen, view.pages.slot = value, "slot", 1
+    elseif action == "slot" then
+        if value then view.slotId, view.pages.slot = value, 1 end
+        view.screen = "slot"
     elseif action == "assignTarget" then
         local target = value
         if value == "skip" then target = false elseif value == "original" then target = nil end
@@ -105,7 +114,7 @@ function app.handleTouch(x, y, w, h, state, api, context)
             ok, err = api.save()
             if not ok then preset.name = previous end
             view.screen = "preview"
-        elseif #state.presets < 24 then
+        elseif view.keyboard.purpose == "capture" and #state.presets < 24 then
             local slots = api.captureWindowPreset(context.monitorId, view.captureAll)
             if #slots == 0 then notice(view, "No online monitors", "home"); return true end
             local count = 0

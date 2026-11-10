@@ -118,7 +118,7 @@ local function commit(state, api, view, change)
     return true
 end
 function app.init(state, api, context)
-    assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"me_storage requires bundled-v33 OS; run inst server")
+    assert(api.ui and api.ui.keyboard and api.ui.breadcrumb,"me_storage requires bundled-v41 OS; run inst server")
     ready = false
     assert(api.sensorProfiles and api.pickSensor and api.watchSensor, "ME storage requires the bundled-v21 OS")
     appName = context and context.appName or "me_storage"
@@ -352,21 +352,8 @@ local function build(width, height, state, api, context)
         footer({{"Back","home"}})
     elseif screen == "rename" then
         local keyboard = view.keyboard
-        ui.heading(keyboard.draft:sub(-width),accent)
-        local letters = keyboard.bank == 2 and "1234567890-_/.:" or keyboard.bank == 1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
-        local cols, rows = math.max(4,math.min(10,math.floor(width/2))), math.max(1,math.min(3,height-4))
-        local slots = cols*rows; local pages=math.ceil(#letters/slots)
-        keyboard.page=math.max(1,math.min(keyboard.page or 1,pages))
-        for i=1,slots do
-            local letter=letters:sub((keyboard.page-1)*slots+i,(keyboard.page-1)*slots+i)
-            if letter~="" then
-                local col,row=(i-1)%cols,math.floor((i-1)/cols)
-                button(2+row,letter,"key",letter,1+math.floor(col*width/cols),math.floor((col+1)*width/cols),true,accent)
-            end
-        end
-        local actions={{"ABC","bank"},{"Sp","space"},{"Del","del"},{keyboard.page.."/"..pages,"keyPage"}}
-        for i,item in ipairs(actions) do button(height-1,item[1],item[2],nil,1+math.floor((i-1)*width/4),math.floor(i*width/4)) end
-        footer({{"Save","saveName",nil,keyboard.draft:find("%S") ~= nil},{"Clr","clearName"},{"Back","edit"}})
+        api.ui.keyboard(ui, width, height, keyboard, accent,
+            {{"Save","saveName",nil,keyboard.draft:find("%S")~=nil},{"Clr","clearName"},{"Back","edit"}})
     elseif screen == "remove" or screen == "removeDrive" then
         ui.heading(screen == "remove" and "Remove system?" or "Remove drive?",accent)
         ui.text(2,"Only removes this binding",true)
@@ -405,15 +392,8 @@ function app.handleTouch(x,y,width,height,state,api,context)
     elseif action=="accent" then
         local ok,err=api.pickColour(context.windowId); if not ok then notice(view,err) end
     elseif action=="rename" then view.keyboard,view.screen={draft=entry.name,original=entry.name,page=1,bank=0},"rename"
-    elseif action=="key" or action=="space" then
-        api.ui.typeKey(view.keyboard,action=="space" and " " or value,24)
-    elseif action=="del" then view.keyboard.draft=view.keyboard.draft:sub(1,-2)
-    elseif action=="clearName" then view.keyboard.draft=""
-    elseif action=="bank" then view.keyboard.bank,view.keyboard.page=(view.keyboard.bank+1)%3,1
-    elseif action=="keyPage" then view.keyboard.page=(view.keyboard.page or 1)+1
-        local letters=view.keyboard.bank==2 and #"1234567890-_/.:" or 26
-        local slots=math.max(4,math.min(10,math.floor(width/2)))*math.max(1,math.min(3,height-4))
-        if view.keyboard.page>math.ceil(letters/slots) then view.keyboard.page=1 end
+    elseif view.screen == "rename" and api.ui.editText(view.keyboard, action, value, 24) then return true
+    elseif action == "clearName" then view.keyboard.draft = ""
     elseif action=="saveName" then
         if entry.name~=view.keyboard.original then notice(view,"Name changed in another window","edit")
         else

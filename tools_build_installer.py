@@ -16,7 +16,7 @@ def lua_string(value):
         equals += "="
     return "[" + equals + "[" + value + "]" + equals + "]"
 
-header = '''-- SmartHome OS installer: bundled-v40
+header = '''-- SmartHome OS installer: bundled-v41
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -33,7 +33,7 @@ workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v40")
+print("SmartHome installer: bundled-v41")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
@@ -48,7 +48,7 @@ if role == "app" then
     assert(not source and not args[4]
         or (source == "--file" or source == "--ref") and args[4] and not args[5]
         or source and source:match("^%w+$") and not args[4], appUsage)
-    assert(name ~= "system", "System Overview is built into OS settings on bundled-v40")
+    assert(name ~= "system", "System Overview is built into Settings")
     local github = source == nil or source == "--ref"
     local ref = source == "--ref" and args[4] or "main"
     assert(not github or ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)

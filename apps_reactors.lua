@@ -1,14 +1,8 @@
 -- Optional reactor overview. All sensors and output switches belong to OS APIs.
 local app = {title = "Reactors", minWidth = 12, minHeight = 6, preferredWidth = 50, preferredHeight = 18}
+local Me = dofile("lib_me.lua")
 local appName, ready = "reactors", false
-local function copy(value)
-    if type(value) ~= "table" then return value end
-    local result = {}; for key, item in pairs(value) do result[key] = copy(item) end; return result
-end
-local function restore(state, old)
-    for key in pairs(state) do state[key] = nil end
-    for key, value in pairs(old) do state[key] = value end
-end
+local copy, restore = Me.copy, Me.restore
 local function find(state, id)
     for index, entry in ipairs(state.reactors) do if entry.id == id then return entry, index end end
 end
@@ -29,10 +23,20 @@ local function number(value)
     local text=table.concat(out):gsub("(%d%d%d)","%1 "):reverse():gsub("^ ","")
     return (negative and "-" or "")..text
 end
+local function decimal(value, places)
+    local scale = 10 ^ places
+    if value ~= value or math.abs(value) > Me.MAX / scale then return tostring(value) end
+    local rounded = math.floor(math.abs(value) * scale + 0.5)
+    local fraction = Me.digits(rounded % scale)
+    return (value < 0 and "-" or "") .. Me.digits(math.floor(rounded / scale)) .. "."
+        .. string.rep("0", places - #fraction) .. fraction
+end
 local function energy(value, compact)
     for _, unit in ipairs({{1000000000000000000, "EEU"}, {1000000000000000, "PEU"}, {1000000000000, "TEU"},
         {1000000000, "GEU"}, {1000000, "MEU"}, {1000, "kEU"}}) do
-        if value >= unit[1] then return string.format(compact and "%.1f%s" or "%.2f %s", value / unit[1], unit[2]) end
+        if value >= unit[1] then
+            return decimal(value / unit[1], compact and 1 or 2) .. (compact and "" or " ") .. unit[2]
+        end
     end
     return number(value) .. (compact and "EU" or " EU")
 end
@@ -49,7 +53,7 @@ local function commit(state, api, view, change, changes)
     return true
 end
 function app.init(state, api, context)
-    assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"reactors requires bundled-v33 OS; run inst server")
+    assert(api.ui and api.ui.keyboard and api.ui.breadcrumb,"reactors requires bundled-v41 OS; run inst server")
     ready = false
     assert(api.pickSensor and api.watchSensor and api.sharedOutputs, "Reactors requires bundled-v15 OS")
     appName = context and context.appName or "reactors"
@@ -150,7 +154,7 @@ local function build(width, height, state, api, context)
             (compact and (reactor.meltingDerived and "M*: " or "M: ") or reactor.meltingDerived and "Melting*: " or "Melting: ") .. number(reactor.melting),
             (compact and "Out: " or "Output: ") .. number(reactor.output) .. " EU/t"}
         if reactor.heat then
-            if includePercent~=false then values[#values+1]=string.format(compact and "Heat: %.1f%%" or "Heat level: %.1f%%",reactor.percent) end
+            if includePercent~=false then values[#values+1]=(compact and "Heat: " or "Heat level: ")..decimal(reactor.percent,1).."%" end
             values[#values+1]=(compact and "M+" or "To melting")..(reactor.meltingDerived and "*: " or ": ")..number(reactor.heatToMelting)
             values[#values+1]=(compact and "Max+: " or "To MaxHeat: ")..number(reactor.heatToMax)
         end
@@ -295,7 +299,7 @@ local function build(width, height, state, api, context)
                 local filled = math.floor((width - 2) * fraction)
                 if filled > 0 then ui.style(2, barRow, filled, 1, nil,
                     status.status ~= "ok" and 128 or value.heat >= value.melting and 16384 or 32) end
-                put(2, barRow, string.format("%.1f%% heat", value.percent), width - 2, true)
+                put(2, barRow, decimal(value.percent, 1) .. "% heat", width - 2, true)
             end
         end
         if status.status ~= "ok" then
@@ -332,32 +336,8 @@ local function build(width, height, state, api, context)
         button(height, "Cancel", "settings", nil, math.floor(width / 2) + 1, width)
     elseif screen == "rename" then
         local keyboard = view.keyboard
-        local letters = keyboard.bank == "123" and "1234567890-_/.:!?+()@#&=" or "qwertyuiopasdfghjklzxcvbnm"
-        if keyboard.bank == "ABC" then letters = letters:upper() end
-        local columns = width < 24 and math.max(4, math.floor(width / 2)) or 10
-        local count = columns * 3
-        local total = math.ceil(#letters / count)
-        keyboard.page = math.min(keyboard.page, total)
-        ui.text(1, (keyboard.draft .. "_"):sub(-width))
-        ui.style(1, 1, width, 1, 32768, 1)
-        local available = height - 3
-        for index = 1, count do
-            local letter = letters:sub((keyboard.page - 1) * count + index, (keyboard.page - 1) * count + index)
-            if letter ~= "" then
-                local col, row = (index - 1) % columns, math.floor((index - 1) / columns)
-                local x1, x2 = 1 + math.floor(col * width / columns), math.floor((col + 1) * width / columns)
-                local y1, y2 = 2 + math.floor(row * available / 3), 1 + math.floor((row + 1) * available / 3)
-                ui.style(x1, y1, x2 - x1 + 1, y2 - y1 + 1, 1, (row + col) % 2 == 0 and 128 or 32768)
-                put(x1, math.floor((y1 + y2) / 2), letter, x2 - x1 + 1, true)
-                ui.hits[#ui.hits + 1] = {x1 = x1, x2 = x2, y1 = y1, y2 = y2, action = "key", value = letter}
-            end
-        end
-        local actions = {{"ABC", "bank"}, {"Space", "space"}, {"Del", "del"}, {keyboard.page .. "/" .. total, "keyPage"}}
-        for i, item in ipairs(actions) do button(height - 1, item[1], item[2], nil, 1 + math.floor((i - 1) * width / 4), math.floor(i * width / 4)) end
-        local third = math.floor(width / 3)
-        button(height, "Save", "saveName", nil, 1, third, keyboard.draft:find("%S") ~= nil, accent)
-        button(height, "Clr", "clearName", nil, third + 1, 2 * third)
-        button(height, "Back", "edit", nil, 2 * third + 1, width)
+        api.ui.keyboard(ui, width, height, keyboard, accent,
+            {{"Save","saveName",nil,keyboard.draft:find("%S")~=nil},{"Clr","clearName"},{"Back","edit"}})
     elseif screen == "delete" then
         ui.heading("Delete reactor?", accent)
         ui.text(2, entry.name, true); ui.text(3, "Unshared OFF", true)
@@ -430,11 +410,7 @@ function app.handleTouch(x, y, width, height, state, api, context)
     elseif action == "page" then view.pages[value.key] = math.max(1, math.min(value.pages, view.pages[value.key] + value.delta))
     elseif action == "previous" or action == "next" then view.menuPage = math.max(1, math.min(view.menuPages, view.menuPage + (action == "next" and 1 or -1)))
     elseif action == "rename" then view.keyboard, view.screen = {draft = entry.name, original = entry.name, page = 1, bank = "abc"}, "rename"
-    elseif action == "key" or action == "space" then
-        api.ui.typeKey(view.keyboard, action == "space" and " " or value, 32)
-    elseif action == "bank" then view.keyboard.bank, view.keyboard.page = view.keyboard.bank == "abc" and "ABC" or view.keyboard.bank == "ABC" and "123" or "abc", 1
-    elseif action == "keyPage" then view.keyboard.page = view.keyboard.page == 1 and 2 or 1
-    elseif action == "del" then view.keyboard.draft = view.keyboard.draft:sub(1, -2)
+    elseif view.screen == "rename" and api.ui.editText(view.keyboard, action, value, 32) then return true
     elseif action == "clearName" then view.keyboard.draft = ""
     elseif action == "saveName" then
         if entry.name ~= view.keyboard.original then notice(view, "Name changed in another window", "edit")

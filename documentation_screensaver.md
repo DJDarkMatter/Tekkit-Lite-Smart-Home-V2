@@ -1,6 +1,6 @@
 # Screensaver
 
-Install `inst app screensaver` on the central computer and reboot. **OS settings → Screensavers** on bundled-v39 lists the installed designs in cycle order. Nyan Cat is number 9. Open **Start → Screensaver** on the desired monitor. It always occupies that monitor's full screen, without a frame, taskbar or visible corner buttons. It never opens automatically, including after a reboot.
+Install `inst app screensaver` on the central computer and reboot. **Settings → Screensavers** lists the installed designs in cycle order. Nyan Cat is number 9. Open **Start → Screensaver** on the desired monitor. It always occupies that monitor's full screen, without a frame, taskbar or visible corner buttons. It never opens automatically, including after a reboot.
 
 - Touch any cell in the **top-left 2×2 area** for the previous design.
 - Touch any cell in the **top-right 2×2 area** for the next design.
@@ -23,7 +23,7 @@ The screensaver adds no taskbar entry on other monitors. Other windows, app back
 | 6 | Silk Waves | Interlaced ribbons |
 | 7 | Kaleidoscope | Rotating symmetric waves |
 | 8 | Life Garden | Reseeded cellular patterns |
-| 9 | Nyan Cat | Cat and rainbow animation with wrapping stars |
+| 9 | Nyan Cat | Cat and rainbow animation with wrapping stars and the full outline on all twelve frames |
 | 10 | Starflight | Stars approaching from a central vanishing point |
 | 11 | Northern Lights | Green, cyan and purple curtains |
 | 12 | Lava Lamp | Moving blobs that merge into bright cores |
@@ -35,6 +35,11 @@ The screensaver adds no taskbar entry on other monitors. Other windows, app back
 | 18 | Sunset Surf | Warm sky, a moving sun and turquoise waves |
 | 19 | Pixel Quilt | Scrolling multicolor triangles with bright seams |
 | 20 | Orbit Parade | Alternating rings of colorful orbiting segments |
+| 21 | DVD Bounce | Color-changing DVD badge that bounces off the edges |
+| 22 | Pac-Man Chase | Pac-Man and two ghosts looping through a pellet tunnel |
+| 23 | Tetris Rain | Seven familiar block shapes falling in colored lanes |
+| 24 | Rainbow Road | Scrolling rainbow track bending into a starry horizon |
+| 25 | Among Us Drift | Crewmate drifting through space and changing suit colors |
 
 Both `ConvertToScreenSaverLater` files in [DJDarkMatter/TekkitSwitchBoard](https://github.com/DJDarkMatter/TekkitSwitchBoard) are Matrix-style animations, so both are represented. Their standalone peripheral/IO/event logic is not reused. The second file credits **Felix Maxwell (2013), CC BY-SA 3.0**. This app's pattern renderers are new implementations inspired by those visuals and established mathematical patterns; they are not claimed to be a collection of independently human-authored assets. `apps_screensaver.lua` is distributed under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/) with those credits retained. The Nyan Cat design adapts the twelve animation frames from [K. Lange’s ComputerCraft port](https://github.com/klange/nyancat-cc/blob/main/nyancat.lua), copyright 2016–2022 K. Lange. Its full permissive copyright/permission/warranty notice is retained directly above the embedded frames. The original Nyan Cat animation is by prguitarman (Chris Torres), as credited by [the upstream terminal project](https://github.com/klange/nyancat). Only the cropped artwork is reused; monitor discovery, loops and palette changes are replaced by the OS renderer. The other added patterns are new implementations, not claimed to be third-party programs. No runtime downloads, custom palettes, sound or external files are required.
 

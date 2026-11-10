@@ -551,10 +551,11 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         for _, bank in ipairs({"abc", "ABC", "123"}) do
             local keyboard = t.view(t.id).keyboard
             keyboard.bank, keyboard.page = bank, 1
-            for page = 1, 2 do
+            repeat
                 for _, hit in ipairs(t.content(t.id).hits) do if hit.action == "key" then found[hit.value] = true end end
-                if page == 1 then t.click(t.id, "keyPage") end
-            end
+                if keyboard.page == keyboard.pages then break end
+                t.click(t.id, "keyPage")
+            until false
         end
         for char in ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/.:!?+()@#&=,%*'\""):gmatch(".") do assert(found[char], "Missing key " .. char) end
         local keyboard = t.view(t.id).keyboard

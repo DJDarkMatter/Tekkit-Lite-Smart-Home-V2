@@ -94,7 +94,7 @@ end
 
 function app.init(state, api, context)
     ready = false
-    assert(api.sharedOutputs and api.ui and api.ui.typeKey and api.ui.actionAt and api.ui.breadcrumb and api.pickIO and api.setAppColour, "Switchboard requires bundled-v39 OS; run inst server")
+    assert(api.sharedOutputs and api.ui and api.ui.keyboard and api.ui.actionAt and api.ui.breadcrumb and api.pickIO and api.setAppColour, "Switchboard requires bundled-v41 OS; run inst server")
     appName = context and context.appName or "switchboard"
     if state.version == nil then
         state.version, state.boards, state.nextBoardId, state.nextButtonId = 1, {}, 1, 1
@@ -433,48 +433,8 @@ local function build(width, height, state, api, context)
         end
     elseif screen == "keyboard" then
         local keyboard = view.keyboard
-        local letters = keyboard.bank == "123" and "1234567890-_/.:!?+()@#&=,%*'\"" or "qwertyuiopasdfghjklzxcvbnm"
-        if keyboard.bank == "ABC" then letters = letters:upper() end
-        local narrow = width < 24
-        local columns = narrow and math.max(4, math.floor(width / 2)) or 10
-        local slots = columns * 3
-        local pages = math.ceil(#letters / slots)
-        keyboard.page = math.min(keyboard.page or 1, pages)
-        local fieldRow, top = height >= 9 and 2 or 1, height >= 9 and 4 or 2
-        if height >= 9 then ui.heading(keyboard.kind == "view" and "View name" or "Switch name", accent) end
-        ui.style(1, fieldRow, width, 1, 32768, 1)
-        ui.text(fieldRow, (keyboard.draft .. "_"):sub(-width))
-        local available = height - 2 - top + 1
-        local gap = width >= 32 and 1 or 0
-        local rowGap = available >= 8 and 1 or 0
-        for row = 0, 2 do
-            local length = not narrow and keyboard.bank ~= "123" and ({10, 9, 7})[row + 1] or columns
-            local start = not narrow and keyboard.bank ~= "123" and ({0, 10, 19})[row + 1] or row * columns
-            for column = 0, length - 1 do
-                local index = (keyboard.page - 1) * slots + start + column + 1
-                local letter = letters:sub(index, index)
-                if letter ~= "" then
-                    local cellWidth = math.floor((width + gap) / columns)
-                    local offset = math.floor((width - (cellWidth * length - gap)) / 2)
-                    local x1 = 1 + offset + column * cellWidth
-                    local y1 = top + math.floor(row * (available + rowGap) / 3)
-                    local y2 = top - 1 + math.floor((row + 1) * (available + rowGap) / 3) - rowGap
-                    local rect = {x = x1, y = y1, w = cellWidth - gap, h = y2 - y1 + 1}
-                    tile(rect, letter, nil, "key", letter, theme.border)
-                end
-            end
-        end
-        local controls = pages > 1 and 4 or 3
-        local labels = {keyboard.bank == "abc" and "ABC" or keyboard.bank == "ABC" and "123" or "abc", "Space", "Del", keyboard.page .. "/" .. pages}
-        local actions = {"bank", "space", "backspace", "keyPage"}
-        for index = 1, controls do
-            local x1, x2 = 1 + math.floor((index - 1) * width / controls), math.floor(index * width / controls)
-            button(height - 1, x2 - x1 + 1 < 5 and (index == 2 and "Sp" or labels[index]) or labels[index], actions[index], nil, x1, x2)
-        end
-        local third = math.floor(width / 3)
-        button(height, "Save", "saveName", nil, 1, third, keyboard.draft:match("%S") ~= nil, accent)
-        button(height, third >= 5 and "Clear" or "Clr", "clearName", nil, third + 1, 2 * third)
-        button(height, width - 2 * third >= 6 and "Cancel" or "Back", "cancelName", nil, 2 * third + 1, width)
+        api.ui.keyboard(ui, width, height, keyboard, accent,
+            {{"Save", "saveName", nil, keyboard.draft:find("%S") ~= nil}, {"Clr", "clearName"}, {"Back", "cancelName"}})
     elseif screen == "confirm" then
         local labels = {delete = "Delete view?", clear = "Disconnect?", shrink = "Remove cells?", off = "All OFF?", allOff = "All OFF?"}
         ui.heading(labels[view.confirm] or "Confirm?", accent)
@@ -712,14 +672,8 @@ function app.handleTouch(x, y, width, height, state, api, context)
         view.keyboard = {kind = action == "renameView" and "view" or "switch", id = target.id, draft = target.name,
             original = target.name, bank = "abc", page = 1, back = view.screen}
         view.screen = "keyboard"
-    elseif action == "bank" then
-        local keyboard = view.keyboard
-        keyboard.bank, keyboard.page = keyboard.bank == "abc" and "ABC" or keyboard.bank == "ABC" and "123" or "abc", 1
-    elseif action == "keyPage" then view.keyboard.page = view.keyboard.page == 1 and 2 or 1
-    elseif action == "key" or action == "space" then
-        local keyboard = view.keyboard
-        api.ui.typeKey(keyboard, action == "space" and " " or value, keyboard.kind == "view" and 32 or 24)
-    elseif action == "backspace" then view.keyboard.draft = view.keyboard.draft:sub(1, -2)
+    elseif view.screen == "keyboard" and api.ui.editText(view.keyboard, action, value,
+        view.keyboard.kind == "view" and 32 or 24) then return true
     elseif action == "clearName" then view.keyboard.draft = ""
     elseif action == "cancelName" then view.screen = view.keyboard.back; view.keyboard = nil
     elseif action == "saveName" then

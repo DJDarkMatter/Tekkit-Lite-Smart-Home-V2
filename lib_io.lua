@@ -42,8 +42,9 @@ function IO.new(net, config)
 
     local function flushOutputs(now)
         local complete = true
-        for side, wanted in pairs(targets) do
-            if allowed(side) then
+        for _, side in ipairs(sides) do
+            local wanted = targets[side]
+            if wanted and allowed(side) then
                 local actual = outputState(side, now)
                 if now + 0.000001 >= actual.nextWrite then
                     local kind
@@ -60,7 +61,7 @@ function IO.new(net, config)
                     end
                 end
                 if actual.bundled ~= wanted.bundled or actual.digital ~= wanted.digital then complete = false end
-            else
+            elseif wanted then
                 targets[side] = nil
             end
         end

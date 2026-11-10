@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v40
+-- SmartHome OS installer: bundled-v41
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -567,12 +567,14 @@ function Console.new(screen)
 end
 return Console
 ]=],
-    ["lib_gui.lua"] = [=[-- CC 1.5 colour surfaces. Uses write/setTextColor/setBackgroundColor, never blit.
+    ["lib_gui.lua"] = [==[-- CC 1.5 colour surfaces. Uses write/setTextColor/setBackgroundColor, never blit.
 local Gui = {}
 local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
 local digits = "0123456789abcdef"
 local names = {"White", "Orange", "Magenta", "Light blue", "Yellow", "Lime", "Pink", "Gray",
     "Light gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
+local nextBank = {[0] = 1, [1] = 2, [2] = 0, abc = "ABC", ABC = "123", ["123"] = "abc"}
+local bankName = {[0] = "abc", [1] = "ABC", [2] = "123", abc = "abc", ABC = "ABC", ["123"] = "123"}
 -- Shift applies to one accepted letter, consistently across all app keyboards.
 function Gui.typeKey(keyboard, key, limit)
     if type(key) ~= "string" or #keyboard.draft >= limit then return false end
@@ -588,7 +590,7 @@ function Gui.editText(keyboard, action, value, limit)
     elseif action == "space" then Gui.typeKey(keyboard, " ", limit)
     elseif action == "backspace" then keyboard.draft = keyboard.draft:sub(1, -2)
     elseif action == "clearText" then keyboard.draft = ""
-    elseif action == "bank" then keyboard.bank, keyboard.page = (keyboard.bank + 1) % 3, 1
+    elseif action == "bank" then keyboard.bank, keyboard.page = nextBank[keyboard.bank] or 0, 1
     elseif action == "keyPage" then keyboard.page = keyboard.page % keyboard.pages + 1
     else return false end
     return true
@@ -697,6 +699,54 @@ function Gui.palette(width, height, current, title)
     ui.button(height, "Back", "cancel")
     return ui.lines, ui.hits
 end
+local letterRows = {"qwertyuiop", "asdfghjkl", "zxcvbnm"}
+local symbols = [=[1234567890-_/.:!?+()@#&=,%*'"$^[]{}<>\|;`~]=]
+function Gui.keyboard(ui, width, height, k, accent, footer)
+    local columns = math.min(10, math.floor(width / 2))
+    local mode = bankName[k.bank] or "abc"
+    local chars = k.symbols or symbols
+    local pages = mode == "123" and math.ceil(#chars / (columns * 3)) or math.ceil(10 / columns)
+    k.page, k.pages = math.max(1, math.min(k.page or 1, pages)), pages
+    ui.heading(k.draft == "" and "Type here" or k.draft:sub(-width), accent)
+    local keyWidth = math.floor(width / columns)
+    local gap, rowGap = width >= 30 and 1 or 0, height >= 10 and 1 or 0
+    local available = height - 3 + rowGap
+    for row = 1, 3 do
+        local start = (k.page - 1) * columns + 1
+        local keys = letterRows[row]:sub(start, start + columns - 1)
+        if mode == "ABC" then keys = keys:upper()
+        elseif mode == "123" then
+            start = ((k.page - 1) * 3 + row - 1) * columns + 1
+            keys = chars:sub(start, start + columns - 1)
+        end
+        local left = 1 + math.floor((width - #keys * keyWidth + gap) / 2)
+        local y1 = 2 + math.floor((row - 1) * available / 3)
+        local y2 = 1 + math.floor(row * available / 3) - rowGap
+        for column = 1, #keys do
+            local x1 = left + (column - 1) * keyWidth
+            local span = keyWidth - gap
+            local key = keys:sub(column, column)
+            local bg = (row + column) % 2 == 0 and 128 or 256
+            ui.style(x1, y1, span, y2 - y1 + 1, Gui.contrast(bg), bg)
+            ui.button(math.floor((y1 + y2) / 2), key, "key", x1, x1 + span - 1, true, bg, nil, key)
+            local hit = ui.hits[#ui.hits]
+            hit.y1, hit.y2 = y1, y2
+        end
+    end
+    local controls = {{bankName[nextBank[k.bank]] or "ABC", "bank"},
+        {width >= 20 and "Space" or "Sp", "space"}, {"Del", "backspace"}}
+    if pages > 1 then controls[4] = {k.page .. "/" .. pages, "keyPage"} end
+    for index, row in ipairs(controls) do
+        ui.button(height - 1, row[1], row[2], 1 + math.floor((index - 1) * width / #controls),
+            math.floor(index * width / #controls), true, row[2] == "bank" and accent or nil)
+    end
+    footer = footer or {{"Set", "saveText"}, {"Clr", "clearText"}, {"Back", k.back}}
+    for index, row in ipairs(footer) do
+        ui.button(height, row[1], row[2], 1 + math.floor((index - 1) * width / #footer),
+            math.floor(index * width / #footer), row[4], index == 1 and accent or nil, nil, row[3])
+    end
+end
+
 -- Common app forms keep drawing and hit regions together at 12x6 and above.
 function Gui.form(width,height,view,accent,background,panel)
     local ui=Gui.content(width,height); view.pages=view.pages or {}
@@ -759,18 +809,7 @@ function Gui.form(width,height,view,accent,background,panel)
         ui.footer({{"Set","setNumber"},{"Back",back}})
     end
     function ui.keyboard(k)
-        local bank=k.bank==2 and (k.symbols or "1234567890-_/.:") or k.bank==1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
-        ui.heading(k.draft=="" and "Type here" or k.draft:sub(-width),accent)
-        local cols,rows=math.max(4,math.min(10,math.floor(width/2))),math.max(1,math.min(3,height-4))
-        local slots=cols*rows; local pages=math.ceil(#bank/slots); k.page=math.max(1,math.min(k.page or 1,pages)); k.pages=pages
-        for i=1,slots do local ch=bank:sub((k.page-1)*slots+i,(k.page-1)*slots+i); if ch~="" then
-            local col,row=(i-1)%cols,math.floor((i-1)/cols)
-            ui.action(2+row,ch,"key",ch,1+math.floor(col*width/cols),math.floor((col+1)*width/cols),true,accent)
-        end end
-        for i,row in ipairs({{"ABC","bank"},{"Sp","space"},{"Del","backspace"},{k.page.."/"..pages,"keyPage"}}) do
-            ui.action(height-1,row[1],row[2],nil,1+math.floor((i-1)*width/4),math.floor(i*width/4))
-        end
-        ui.footer({{"Set","saveText"},{"Clr","clearText"},{"Back",k.back}})
+        Gui.keyboard(ui, width, height, k, accent)
     end
     return ui
 end
@@ -860,7 +899,7 @@ function Gui.drawRow(screen, y, text, fg, bg, colour, paint)
     end
 end
 return Gui
-]=],
+]==],
     ["lib_me.lua"] = [=[-- Shared AE1 item identities, safe snapshots and bounded stock-rate history.
 local MAX=9007199254740991
 local Work=rawget(_G,"__smarthomeWork") or dofile("lib_work.lua")
@@ -1072,7 +1111,7 @@ local System = dofile("lib_system.lua")
 local Settings = {}
 
 function Settings.new(actions)
-    local app = {title = "OS settings", minWidth = 12, minHeight = 6, preferredWidth = 34, preferredHeight = 13}
+    local app = {title = "Settings", minWidth = 12, minHeight = 6, preferredWidth = 34, preferredHeight = 13}
     local pending = {}
 
     function app.init(state)
@@ -1094,6 +1133,14 @@ function Settings.new(actions)
         end
         local ui = api.ui.form(w, h, view, 2048)
         local section = view.section or "home"
+        if section == "nameClient" or section == "nameKeyboard" then
+            if type(view.nameId) ~= "string" then
+                view.section, view.keyboard = "names", nil
+            elseif section == "nameKeyboard" and not view.keyboard then
+                view.section = "nameClient"
+            end
+            section = view.section
+        end
         local draft = pending[context.windowId]
         if draft then
             local title = "Are you sure?"
@@ -1119,7 +1166,7 @@ function Settings.new(actions)
                 ui.action(h, button, "commit", nil, nil, nil, true, 16384)
             end
         elseif section == "home" then
-            ui.menu("OS settings", {{"Appearance", "appearance"}, {"System overview", "overview"},
+            ui.menu(app.title, {{"Appearance", "appearance"}, {"System overview", "overview"},
                 {"Client names", "names"}, {"Screensavers", "screensavers"}, {"App data", "data"}}, "settings", {{"Close", "close"}})
         elseif section == "appearance" then
             local settings = api.getOSSettings()
@@ -1160,7 +1207,7 @@ function Settings.new(actions)
             local title = ({reset = "Reset data", delete = "Delete apps", backup = "Create backup", restore = "Restore backup"})[mode]
             local back = (mode == "backup" or mode == "restore") and "backupMenu" or "data"
             ui.menu(view.status or title, rows, section, {{"Back", back}})
-        else ui.info("OS settings", {view.status or "Select an option"}, "status", view.back or "home") end
+        else ui.info(app.title, {view.status or "Select an option"}, "status", view.back or "home") end
         return ui.lines, ui.hits
     end
 
@@ -1180,7 +1227,9 @@ function Settings.new(actions)
         if action == "page" then view.pages[value.key] = value.page
         elseif action == "close" then return api.closeWindow(id)
         elseif action == "background" or action == "windowBorder" or action == "taskbar" then return api.pickColour(id, action)
-        elseif action == "nameClient" then view.nameId, view.section = value, "nameClient"
+        elseif action == "nameClient" then
+            if value then view.nameId = value end
+            view.section, view.keyboard, view.status = "nameClient", nil, nil
         elseif action == "editName" then
             view.keyboard = {draft = api.clientName(view.nameId) ~= view.nameId and api.clientName(view.nameId) or "",
                 bank = 0, page = 1, back = "nameClient"}
@@ -1190,6 +1239,7 @@ function Settings.new(actions)
             local ok, err = api.setClientName(view.nameId, action == "clearName" and "" or view.keyboard.draft)
             view.section = ok and "nameClient" or "status"
             view.status, view.back = err, "nameClient"
+            view.keyboard = nil
         elseif action == "selectScope" then
             local mode = value.mode
             local info = (mode == "restore" or mode == "backup") and actions.backupInfo(value.id) or nil
@@ -1446,7 +1496,9 @@ function app.handleTouch(x,y,w,h,state,api,context)
         local action,value=hit.action,hit.value
         if action=="page" then view.pages[value.key]=value.page
         elseif action=="client" and value then view.clientId,view.screen,view.clientBack=value,"client",view.screen or "clients"
-        elseif action=="path" then view.clientId,view.screen,view.pages.path=value,"path",1
+        elseif action=="path" then
+            if value then view.clientId,view.pages.path=value,1 end
+            view.screen="path"
         elseif action=="pathClient" then view.screen,view.clientBack="client","path"
         elseif action=="settingsHome" then view.exit=true
         elseif action=="target" and value then view.target,view.screen=value,"target"
@@ -2200,10 +2252,13 @@ function Server.new(net, storage, config, logger)
     for field, value in pairs(defaultAppearance) do
         if not colour(state.appearance[field]) then state.appearance[field] = value end
     end
-    if type(state.appearance.appColours) ~= "table" then state.appearance.appColours = {} end
-    for name, value in pairs(state.appearance.appColours) do
-        if type(name) ~= "string" or not colour(value) then state.appearance.appColours[name] = nil end
+    local appColours = {}
+    if type(state.appearance.appColours) == "table" then
+        for name, value in pairs(state.appearance.appColours) do
+            if type(name) == "string" and colour(value) then appColours[name] = value end
+        end
     end
+    state.appearance.appColours = appColours
     for _, key in ipairs({"clientNames", "uptimeHistory", "alertHistory", "archivedRoutes"}) do
         if type(state[key]) ~= "table" then state[key] = {} end
     end
@@ -2228,11 +2283,12 @@ function Server.new(net, storage, config, logger)
     end
     state.nextWindowId = 1
     local legacyDesktop = (tonumber(state.desktopVersion) or 1) < 2
-    for id, win in pairs(state.windows) do
-        if not integer(id, 1, 2147483646) or type(win) ~= "table"
-            or type(win.appName) ~= "string" or type(win.monitorId) ~= "string" then
-            state.windows[id] = nil
-        else
+    local savedWindows = state.windows
+    state.windows = {}
+    for id, win in pairs(savedWindows) do
+        if integer(id, 1, 2147483646) and type(win) == "table"
+            and type(win.appName) == "string" and type(win.monitorId) == "string" then
+            state.windows[id] = win
             state.nextWindowId = math.max(state.nextWindowId, id + 1)
             win.id, win.order = id, tonumber(win.order) or id
             if not state.appStates[win.appName] and type(win.appState) == "table" then
@@ -2747,7 +2803,7 @@ function Server.new(net, storage, config, logger)
         target = target or "app"
         local option = systemColours[target]
         if not win or (target ~= "app" and not option) then return false, "Invalid color selector" end
-        if option and win.appName ~= "@settings" then return false, "Open OS settings for system colors" end
+        if option and win.appName ~= "@settings" then return false, "Open Settings for system colors" end
         local content = Desktop.contentRect(win)
         if content.width < 12 or content.height < 6 then return false, "Color settings need a 12x6 content area" end
         server.dialogs[windowId] = {kind = "colour", target = target,
@@ -3304,7 +3360,7 @@ function Server.new(net, storage, config, logger)
             if left == right then return a.id < b.id end
             return left < right
         end)
-        local targets = {{id = "@all", label = "Entire OS"}, {id = "@settings", label = "OS settings"}}
+        local targets = {{id = "@all", label = "Entire OS"}, {id = "@settings", label = definition("@settings").title}}
         for _, app in ipairs(apps) do targets[#targets + 1] = app end
         return targets
     end
@@ -3489,7 +3545,7 @@ function Server.new(net, storage, config, logger)
         local result, found = {}, {}
         local function include(id)
             if not found[id] and backupBundle(id) then
-                result[#result + 1] = {id = id, label = id == "@all" and "Entire OS" or id == "@settings" and "OS settings" or appTitle(id)}
+                result[#result + 1] = {id = id, label = id == "@all" and "Entire OS" or appTitle(id)}
                 found[id] = true
             end
         end
@@ -3806,7 +3862,7 @@ function Server.new(net, storage, config, logger)
             local items, title, model
             if monitor.launcher then
                 model, title = monitor, "Start"
-                items = {{label = "OS settings", value = "@settings", enabled = compatible("@settings", monitor)}}
+                items = {{label = appTitle("@settings"), value = "@settings", enabled = compatible("@settings", monitor)}}
                 for _, name in ipairs(sortedKeys(server.apps)) do
                     if compatible(name, monitor) then
                         items[#items + 1] = {label = (server.apps[name].title or name) .. (server.running[name] and " *" or ""), value = name, enabled = true}
@@ -4529,8 +4585,9 @@ function IO.new(net, config)
 
     local function flushOutputs(now)
         local complete = true
-        for side, wanted in pairs(targets) do
-            if allowed(side) then
+        for _, side in ipairs(sides) do
+            local wanted = targets[side]
+            if wanted and allowed(side) then
                 local actual = outputState(side, now)
                 if now + 0.000001 >= actual.nextWrite then
                     local kind
@@ -4547,7 +4604,7 @@ function IO.new(net, config)
                     end
                 end
                 if actual.bundled ~= wanted.bundled or actual.digital ~= wanted.digital then complete = false end
-            else
+            elseif wanted then
                 targets[side] = nil
             end
         end
@@ -4691,10 +4748,8 @@ function Monitor.new(net, config)
         device.cache = {}
     end
     function client.scan()
-        local present = {}
         for _, side in ipairs(sides) do
             if peripheral.getType(side) == "monitor" then
-                present[side] = true
                 local device = client.devices[side]
                 local wrapped = peripheral.wrap(side)
                 if not device or device.textScale ~= config.textScale then
@@ -4722,9 +4777,8 @@ function Monitor.new(net, config)
                         device.inputRevision, device.hasFrame = nil, false
                     end
                 end
-            end
+            else client.devices[side] = nil end
         end
-        for side in pairs(client.devices) do if not present[side] then client.devices[side] = nil end end
     end
     function client.handle(message, now)
         for _, device in pairs(client.devices) do
@@ -4972,7 +5026,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v40: starting")
+console.log("SmartHome OS v41: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -6273,7 +6327,7 @@ workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v40")
+print("SmartHome installer: bundled-v41")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
@@ -6288,7 +6342,7 @@ if role == "app" then
     assert(not source and not args[4]
         or (source == "--file" or source == "--ref") and args[4] and not args[5]
         or source and source:match("^%w+$") and not args[4], appUsage)
-    assert(name ~= "system", "System Overview is built into OS settings on bundled-v40")
+    assert(name ~= "system", "System Overview is built into Settings")
     local github = source == nil or source == "--ref"
     local ref = source == "--ref" and args[4] or "main"
     assert(not github or ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)

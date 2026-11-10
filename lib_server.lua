@@ -140,10 +140,13 @@ function Server.new(net, storage, config, logger)
     for field, value in pairs(defaultAppearance) do
         if not colour(state.appearance[field]) then state.appearance[field] = value end
     end
-    if type(state.appearance.appColours) ~= "table" then state.appearance.appColours = {} end
-    for name, value in pairs(state.appearance.appColours) do
-        if type(name) ~= "string" or not colour(value) then state.appearance.appColours[name] = nil end
+    local appColours = {}
+    if type(state.appearance.appColours) == "table" then
+        for name, value in pairs(state.appearance.appColours) do
+            if type(name) == "string" and colour(value) then appColours[name] = value end
+        end
     end
+    state.appearance.appColours = appColours
     for _, key in ipairs({"clientNames", "uptimeHistory", "alertHistory", "archivedRoutes"}) do
         if type(state[key]) ~= "table" then state[key] = {} end
     end
@@ -168,11 +171,12 @@ function Server.new(net, storage, config, logger)
     end
     state.nextWindowId = 1
     local legacyDesktop = (tonumber(state.desktopVersion) or 1) < 2
-    for id, win in pairs(state.windows) do
-        if not integer(id, 1, 2147483646) or type(win) ~= "table"
-            or type(win.appName) ~= "string" or type(win.monitorId) ~= "string" then
-            state.windows[id] = nil
-        else
+    local savedWindows = state.windows
+    state.windows = {}
+    for id, win in pairs(savedWindows) do
+        if integer(id, 1, 2147483646) and type(win) == "table"
+            and type(win.appName) == "string" and type(win.monitorId) == "string" then
+            state.windows[id] = win
             state.nextWindowId = math.max(state.nextWindowId, id + 1)
             win.id, win.order = id, tonumber(win.order) or id
             if not state.appStates[win.appName] and type(win.appState) == "table" then
@@ -687,7 +691,7 @@ function Server.new(net, storage, config, logger)
         target = target or "app"
         local option = systemColours[target]
         if not win or (target ~= "app" and not option) then return false, "Invalid color selector" end
-        if option and win.appName ~= "@settings" then return false, "Open OS settings for system colors" end
+        if option and win.appName ~= "@settings" then return false, "Open Settings for system colors" end
         local content = Desktop.contentRect(win)
         if content.width < 12 or content.height < 6 then return false, "Color settings need a 12x6 content area" end
         server.dialogs[windowId] = {kind = "colour", target = target,
@@ -1244,7 +1248,7 @@ function Server.new(net, storage, config, logger)
             if left == right then return a.id < b.id end
             return left < right
         end)
-        local targets = {{id = "@all", label = "Entire OS"}, {id = "@settings", label = "OS settings"}}
+        local targets = {{id = "@all", label = "Entire OS"}, {id = "@settings", label = definition("@settings").title}}
         for _, app in ipairs(apps) do targets[#targets + 1] = app end
         return targets
     end
@@ -1429,7 +1433,7 @@ function Server.new(net, storage, config, logger)
         local result, found = {}, {}
         local function include(id)
             if not found[id] and backupBundle(id) then
-                result[#result + 1] = {id = id, label = id == "@all" and "Entire OS" or id == "@settings" and "OS settings" or appTitle(id)}
+                result[#result + 1] = {id = id, label = id == "@all" and "Entire OS" or appTitle(id)}
                 found[id] = true
             end
         end
@@ -1746,7 +1750,7 @@ function Server.new(net, storage, config, logger)
             local items, title, model
             if monitor.launcher then
                 model, title = monitor, "Start"
-                items = {{label = "OS settings", value = "@settings", enabled = compatible("@settings", monitor)}}
+                items = {{label = appTitle("@settings"), value = "@settings", enabled = compatible("@settings", monitor)}}
                 for _, name in ipairs(sortedKeys(server.apps)) do
                     if compatible(name, monitor) then
                         items[#items + 1] = {label = (server.apps[name].title or name) .. (server.running[name] and " *" or ""), value = name, enabled = true}

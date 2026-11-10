@@ -15,10 +15,8 @@ function Monitor.new(net, config)
         device.cache = {}
     end
     function client.scan()
-        local present = {}
         for _, side in ipairs(sides) do
             if peripheral.getType(side) == "monitor" then
-                present[side] = true
                 local device = client.devices[side]
                 local wrapped = peripheral.wrap(side)
                 if not device or device.textScale ~= config.textScale then
@@ -46,9 +44,8 @@ function Monitor.new(net, config)
                         device.inputRevision, device.hasFrame = nil, false
                     end
                 end
-            end
+            else client.devices[side] = nil end
         end
-        for side in pairs(client.devices) do if not present[side] then client.devices[side] = nil end end
     end
     function client.handle(message, now)
         for _, device in pairs(client.devices) do

@@ -166,7 +166,7 @@ local function newTile(state)
     local tile={id=state.nextTileId}; state.nextTileId=state.nextTileId+1; return tile
 end
 function app.init(state,api,context)
-    assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"me_monitor requires bundled-v33 OS; run inst server")
+    assert(api.ui and api.ui.keyboard and api.ui.breadcrumb,"me_monitor requires bundled-v41 OS; run inst server")
     ready=false; sources,pickers,elapsed={},{},0
     assert(api.aeItemProfiles and api.pickSensor and api.watchSensor,"ME monitors requires bundled-v22 OS")
     appName=context and context.appName or "me_monitor"
@@ -529,22 +529,10 @@ local function build(width,height,state,api,context)
         end
         footer({{"Apply","applyColour"},{"Auto","autoColour"},{"Back","item"}})
     elseif screen=="keyboard" then
-        local keyboard=view.keyboard
-        local letters=keyboard.bank==2 and "1234567890-_/.:" or keyboard.bank==1 and "ABCDEFGHIJKLMNOPQRSTUVWXYZ" or "abcdefghijklmnopqrstuvwxyz"
-        ui.heading(keyboard.draft:sub(-width),accent)
-        local cols,rows=math.max(4,math.min(10,math.floor(width/2))),math.max(1,math.min(3,height-4))
-        local slots=cols*rows; local pages=math.ceil(#letters/slots)
-        keyboard.page=math.max(1,math.min(keyboard.page or 1,pages))
-        for i=1,slots do
-            local value=letters:sub((keyboard.page-1)*slots+i,(keyboard.page-1)*slots+i)
-            if value~="" then
-                local col,row=(i-1)%cols,math.floor((i-1)/cols)
-                button(2+row,value,"key",value,1+math.floor(col*width/cols),math.floor((col+1)*width/cols),true,accent)
-            end
-        end
-        local items={{"ABC","bank"},{"Sp","space"},{"Del","del"},{keyboard.page.."/"..pages,"keyPage"}}
-        for i,item in ipairs(items) do button(height-1,item[1],item[2],nil,1+math.floor((i-1)*width/4),math.floor(i*width/4)) end
-        footer({{keyboard.kind=="search" and "Find" or "Save","saveText",nil,keyboard.kind=="search" or keyboard.draft:find("%S")~=nil},{"Clr","clearText"},{"Back","cancelText"}})
+        local keyboard = view.keyboard
+        api.ui.keyboard(ui, width, height, keyboard, accent,
+            {{keyboard.kind=="search" and "Find" or "Save","saveText",nil,keyboard.kind=="search" or keyboard.draft:find("%S")~=nil},
+             {"Clr","clearText"},{"Back","cancelText"}})
     elseif screen=="delete" or screen=="shrink" then
         ui.heading(screen=="delete" and "Delete view?" or "Remove last tiles?",accent)
         ui.text(2,board.name,true)
@@ -612,15 +600,7 @@ function app.handleTouch(x,y,width,height,state,api,context)
         view.keyboard={kind=action=="search" and "search" or "name",draft=action=="search" and (view.query or "") or board.name,
             original=board.name,bank=0,page=1}
         view.screen="keyboard"
-    elseif action=="key" or action=="space" then
-        local k=view.keyboard
-        api.ui.typeKey(k,action=="space" and " " or value,k.kind=="search" and 48 or 24)
-    elseif action=="del" then view.keyboard.draft=view.keyboard.draft:sub(1,-2)
-    elseif action=="clearText" then view.keyboard.draft=""
-    elseif action=="bank" then view.keyboard.bank,view.keyboard.page=(view.keyboard.bank+1)%3,1
-    elseif action=="keyPage" then
-        local k=view.keyboard; local slots=math.max(4,math.min(10,math.floor(width/2)))*math.max(1,math.min(3,height-4))
-        k.page=k.page%math.ceil((k.bank==2 and 15 or 26)/slots)+1
+    elseif view.screen == "keyboard" and api.ui.editText(view.keyboard, action, value, view.keyboard.kind=="search" and 48 or 24) then return true
     elseif action=="cancelText" then view.screen=view.keyboard.kind=="search" and "picker" or "edit"
     elseif action=="saveText" then
         local k=view.keyboard

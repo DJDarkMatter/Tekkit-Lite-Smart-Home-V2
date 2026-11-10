@@ -6,7 +6,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local content=t.content(nil,w,h);local surface=Gui.new(w,h)
         for y=1,h do surface.write(1,y,content[y]) end
         for _,style in ipairs(content.styles) do surface.style(style.x,style.y,style.width,style.height,style.fg,style.bg) end
-        return content,surface.foreground
+        return content,surface.foreground,surface.background
     end
     function tests.screensaver_never_autostarts_and_explicit_open_is_always_fullscreen()
         local t=setup("screensaver",false,{noOpen=true}); equal(t.central.server.running.screensaver,nil)
@@ -203,6 +203,19 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         end
         assert(last-first>=10,"The Nyan sprite must not flatten with large-frame grouping");assert(white,"Nyan eye pixels must remain white")
     end
+    function tests.v41_screensaver_nyan_right_cheek_and_outline_fit_all_twelve_frames()
+        local t=setup("screensaver",true); assert(t.app.onOpen(t.state,t.api,t.context()));t.view().design=9
+        local cheekRows={13,13,14,14,14,13,13,13,14,14,14,13}
+        local rightEdges={80,82,82,82,80,80,80,82,82,82,80,80}
+        for i,y in ipairs(cheekRows) do
+            t.now=(i-.5)/5
+            local _,_,background=frame(t,86,32)
+            local x,row=rightEdges[i],background[6+y]
+            equal(row:sub(x-2,x-2),Gui.code(64),"Right cheek in frame "..i)
+            equal(row:sub(x,x),Gui.code(32768),"Right outline in frame "..i)
+            equal(row:sub(x+1,x+1),Gui.code(2048),"Sky after outline in frame "..i)
+        end
+    end
     function tests.screensaver_exit_tap_stays_on_its_monitor_and_never_reaches_underlying_controls()
         local t=setup("screensaver",false,{noOpen=true}); local normal=t.open("top","solar_farm")
         local before=serialize(t.central.server.views[normal]); local left=t.open("left")
@@ -220,6 +233,6 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local model=central.server.monitors["monitor_13:top"]; local labels={}
         assert(model.launcher)
         for _,hit in ipairs(model.menuHits) do if hit.item and hit.item.value then labels[#labels+1]=hit.item.label end end
-        equal(table.concat(labels,","),"Alpha,beta,OS settings,zebra")
+        equal(table.concat(labels,","),"Alpha,beta,Settings,zebra")
     end
 end

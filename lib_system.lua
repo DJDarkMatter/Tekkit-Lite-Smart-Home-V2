@@ -227,7 +227,9 @@ function app.handleTouch(x,y,w,h,state,api,context)
         local action,value=hit.action,hit.value
         if action=="page" then view.pages[value.key]=value.page
         elseif action=="client" and value then view.clientId,view.screen,view.clientBack=value,"client",view.screen or "clients"
-        elseif action=="path" then view.clientId,view.screen,view.pages.path=value,"path",1
+        elseif action=="path" then
+            if value then view.clientId,view.pages.path=value,1 end
+            view.screen="path"
         elseif action=="pathClient" then view.screen,view.clientBack="client","path"
         elseif action=="settingsHome" then view.exit=true
         elseif action=="target" and value then view.target,view.screen=value,"target"
