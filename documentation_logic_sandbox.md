@@ -16,9 +16,11 @@ Create a circuit and use **+ Add** to add nodes. Rename nodes so you can recogni
 | Output target | A named redstone destination that Set output blocks can reuse |
 | Wait | Pauses a rule for the configured time |
 | Set output | Sends ON or OFF to its selected output target |
-| Alarm | Shows a popup with the name of the alarm block |
+| Alarm | An If / Then action that shows an Alarm popup using its Name or the circuit name |
 
-Enabled circuits show **1** for on, **0** for off and **?** for unknown. **Popup ON** raises an alert when that node becomes true. Acknowledge the popup to clear the alert. The node needs to go false before another true signal raises the next alert.
+The circuit screen has an **OFF - Enable / ON - Disable** control. Rows are numbered by their position in the circuit. Live conditions show **ON**, **OFF** or **Waiting**, rules show **Running** or **Ready**, and actions show **Action** or **Alert** when space permits. Configure an **If / Then** rule to raise an Alarm when its condition goes on. Acknowledge the popup with OK. The condition needs to go false before a fresh true signal starts the rule again.
+
+**Setup tips** appears when connections need attention. **Menu → Check setup** opens the same check at any time. Select a tip to read the missing step, then tap **Edit** to open that block. The check covers missing IO, missing ME item settings, gate inputs, rule conditions, empty action lists, missing output targets and actions outside rules. Client availability is shown by the live reading status.
 
 ## Item amount
 
@@ -26,11 +28,15 @@ Enabled circuits show **1** for on, **0** for off and **?** for unknown. **Popup
 2. Select an AE sensor client, its card side and the target on the ME network you want to read.
 3. Choose an item. Use **Find** to search by item name or RawName. For an item that has yet to arrive, use **Find → Manual item** and enter its RawName and damage value.
 4. Select **Under**, **Over** or **Exactly**, enter the level, and **Save**.
-5. Choose that node as a source for a gate or Output. Enable the circuit.
+5. Choose that node as a source for a gate, Output or **If / Then → When**. Enable the circuit.
 
 Under 64 is true at 63 and false at 64. A complete inventory with the item absent gives a count of zero. An offline or unpowered ME system gives **?**. A NOT gate keeps an unknown input unknown, and an Output with an unknown result goes off. Enabled circuits run with their windows closed and resume from saved configuration after restart.
 
-Use **Level Emitter** for quick standalone stock alarms with pulse timing, hold and rearm settings. Use the **Item amount** node when a stock condition needs to interact with other signals.
+The saved Item amount editor keeps its count live while visible, including when the circuit is disabled. It shows a source diagnostic when the count is unavailable. Circuit actions run while enabled. The item picker and background evaluation use the same selected AE source and item identity.
+
+For a stock alarm, add **If / Then**, set **When** to the Item amount node, then open **Then blocks → + Block → + Alarm**. The Item amount editor contains the stock condition. Existing enabled Item amount popup settings are migrated to an If / Then rule with an Alarm action, retaining pending alert identity.
+
+Select the Alarm block and tap **Name** to edit the popup message. Saving an empty name restores the circuit-name fallback. The popup title is **Alarm**, with the chosen message below it. Other signal nodes retain their existing optional popup controls.
 
 ## Timing
 
@@ -68,7 +74,7 @@ flowchart TD
 
 | Goal | Set up |
 | --- | --- |
-| Alert when either material runs low | Put two Item amount nodes into an OR gate. Enable **Popup ON** on the OR gate. |
+| Alert when either material runs low | Put two Item amount nodes into an OR gate. Use that OR gate as **When** in an If / Then rule with an Alarm block. |
 | Detect whether two levers disagree | Put the two redstone Inputs into an XOR gate. Feed the XOR gate to an indicator Output. |
 | Signal that a buffer is empty | Set an Item amount node to **Exactly 0**. Connect it directly to the Output. |
 

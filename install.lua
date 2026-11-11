@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v43
+-- SmartHome OS installer: bundled-v44
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -5229,7 +5229,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v43: starting")
+console.log("SmartHome OS v44: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -6566,7 +6566,7 @@ workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v43")
+print("SmartHome installer: bundled-v44")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")

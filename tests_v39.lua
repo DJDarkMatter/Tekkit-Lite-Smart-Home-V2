@@ -335,6 +335,184 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(id, "use")
     end
 
+    local function logicRoute(t, id, side, color)
+        if not t.server.dialogs[id] then t.click(id, "route") end
+        t.click(id, "select", "io_11"); t.click(id, "select", side); t.click(id, "select", color); t.click(id, "use")
+    end
+    local function logicSource(t, id, port, source)
+        t.click(id, "source", port); t.click(id, "assignSource", source)
+    end
+    local function logicTime(t, id, value)
+        while #t.server.views[id].time.draft > 0 do t.click(id, "digit", "Del") end
+        for digit in value:gmatch(".") do t.click(id, "digit", digit) end
+        t.click(id, "setNumber")
+    end
+    local function logicInput(t, mask)
+        t.bridge.bundledInputs.top = mask
+        t.bus.queue(t.bridge, {"redstone"}); t.bus.pump()
+    end
+
+    function tests.v44_logic_saved_item_editor_reads_live_stock_while_the_circuit_is_disabled()
+        local t = setup({logic_sandbox = true})
+        local sensor, data, iron = logicAE(t)
+        local id = t.open("logic_sandbox", "top", 50, 22, 1, 1)
+        t.click(id, "newCircuit"); t.click(id, "saveText")
+        t.click(id, "addNode"); t.click(id, "createNode", "Item amount"); t.click(id, "editAmount")
+        selectLogicME(t, id); t.bus.advance(3)
+        t.click(id, "amountList"); t.click(id, "amountItem", function(item) return item.raw == iron.RawName end)
+        t.click(id, "saveAmount"); t.bus.advance(6)
+        local circuit = t.state.appStates.logic_sandbox.circuits[1]
+        equal(circuit.enabled, false)
+        assert(table.concat(t.lines(id), "\n"):find("Count 64", 1, true), "Saved Item amount editor lost its live ME reading")
+        iron.Size = 512; t.bus.advance(3)
+        assert(table.concat(t.lines(id), "\n"):find("Count 512", 1, true))
+        equal(#sensor.client.watches, 1)
+        data.Powered = false; t.bus.advance(3)
+        assert(table.concat(t.lines(id), "\n"):find("unpowered", 1, true), "Unavailable counts need a source diagnostic")
+    end
+
+    function tests.v44_logic_item_amount_runs_a_named_alarm_through_if_then_and_rearms_after_acknowledgement()
+        local t = setup({logic_sandbox = true})
+        local sensor, data, iron = logicAE(t)
+        local id = t.open("logic_sandbox", "top", 50, 22, 1, 1)
+        t.click(id, "newCircuit"); t.click(id, "saveText")
+        t.click(id, "addNode"); t.click(id, "createNode", "Item amount"); t.click(id, "editAmount")
+        selectLogicME(t, id); t.bus.advance(3)
+        t.click(id, "amountList"); t.click(id, "amountItem", function(item) return item.raw == iron.RawName end)
+        t.click(id, "saveAmount")
+        for _, hit in ipairs(t.lines(id).hits) do assert(hit.action ~= "popup") end
+        t.click(id, "circuit"); t.click(id, "addNode"); t.click(id, "createNode", "Sequence")
+        logicSource(t, id, "a", 1)
+        t.click(id, "steps"); t.click(id, "addStep"); t.click(id, "createAction", "Alarm")
+        local circuit = t.state.appStates.logic_sandbox.circuits[1]
+        equal(#circuit.nodes, 3); equal(circuit.nodes[2].a, circuit.nodes[1].id)
+        equal(circuit.nodes[2].steps[1], circuit.nodes[3].id)
+        t.click(id, "renameAlarm")
+        for char in ("low stock"):gmatch(".") do
+            if char == " " then t.click(id, "space") else t.click(id, "key", char) end
+        end
+        t.click(id, "saveText")
+        equal(circuit.nodes[3].alarmName, "low stock")
+        iron.Size = 63; t.bus.advance(2)
+        equal(t.server.monitors[topId].notification, nil, "A disabled circuit must not raise its alarm")
+        t.click(id, "returnRule"); t.click(id, "node"); t.click(id, "circuit")
+        t.click(id, "toggleCircuit"); t.bus.advance(3)
+        local entry = assert(t.server.notifications.logic_sandbox[1])
+        equal(entry.title, "Alarm"); equal(entry.message, "low stock")
+        local key = entry.key
+        t.reboot()
+        equal(t.server.notifications.logic_sandbox[1].key, key)
+        equal(t.state.appStates.logic_sandbox.circuits[1].nodes[3].alarmName, "low stock")
+        local popup = assert(t.server.monitors[topId].notification)
+        t.touch("top", popup.ok.x1, popup.ok.y); t.bus.advance(3)
+        equal(t.server.monitors[topId].notification, nil, "Acknowledging a held condition must not immediately ring again")
+        data.Powered = false; t.bus.advance(3)
+        data.Powered = true; t.bus.advance(3)
+        equal(t.server.monitors[topId].notification, nil, "A missing reading must not rearm the alarm")
+        iron.Size = 64; t.bus.advance(3)
+        iron.Size = 63; t.bus.advance(3)
+        assert(t.server.notifications.logic_sandbox[1].key ~= key)
+        equal(t.server.notifications.logic_sandbox[1].message, "low stock")
+    end
+
+    function tests.v44_logic_rule_alarm_uses_the_circuit_name_on_small_windows()
+        local t = setup({logic_sandbox = true}, 15, 10)
+        local id = t.open("logic_sandbox", "top", 14, 8, 1, 1)
+        t.click(id, "newCircuit"); t.click(id, "saveText")
+        t.click(id, "addNode"); t.click(id, "createNode", "Input"); logicRoute(t, id, "top", 1)
+        t.click(id, "circuit"); t.click(id, "addNode"); t.click(id, "createNode", "Sequence")
+        logicSource(t, id, "a", 1)
+        t.click(id, "steps"); t.click(id, "addStep"); t.click(id, "createAction", "Alarm")
+        t.click(id, "renameAlarm")
+        for char in ("cat"):gmatch(".") do t.click(id, "key", char) end
+        t.click(id, "saveText")
+        t.click(id, "renameAlarm"); t.click(id, "clearText"); t.click(id, "saveText")
+        local circuit = t.state.appStates.logic_sandbox.circuits[1]
+        equal(circuit.nodes[3].alarmName, nil)
+        t.click(id, "returnRule"); t.click(id, "node"); t.click(id, "circuit"); t.click(id, "toggleCircuit")
+        logicInput(t, 1); t.bus.advance(2)
+        local entry = assert(t.server.notifications.logic_sandbox[1])
+        equal(entry.title, "Alarm"); equal(entry.message, circuit.name)
+        local popup = assert(t.server.monitors[leftId].notification)
+        t.touch("left", popup.ok.x1, popup.ok.y)
+        t.bus.advance(2); equal(t.server.monitors[leftId].notification, nil)
+    end
+
+    function tests.v44_logic_old_node_popups_migrate_without_duplicating_or_losing_pending_alerts()
+        local t = setup({logic_sandbox = true})
+        local sensor, data, iron = logicAE(t)
+        local id = t.open("logic_sandbox", "top", 50, 22, 1, 1)
+        t.click(id, "newCircuit"); t.click(id, "saveText")
+        t.click(id, "addNode"); t.click(id, "createNode", "Item amount"); t.click(id, "editAmount")
+        selectLogicME(t, id); t.bus.advance(3)
+        t.click(id, "amountList"); t.click(id, "amountItem", function(item) return item.raw == iron.RawName end)
+        t.click(id, "saveAmount"); iron.Size = 63
+        local state = t.state.appStates.logic_sandbox
+        local circuit, node = state.circuits[1], state.circuits[1].nodes[1]
+        node.popup, node.high, node.alert, state.nextAlert = true, true, 1, 2
+        circuit.enabled = true
+        t.api.setNotifications("logic_sandbox", {{key = "logic_1_1", title = "Logic Sandbox", message = "Old alert"}})
+        assert(t.api.save())
+        t.reboot()
+        circuit = t.state.appStates.logic_sandbox.circuits[1]
+        equal(#circuit.nodes, 3); equal(circuit.nodes[1].popup, nil)
+        local rule, alarm = circuit.nodes[2], circuit.nodes[3]
+        equal(rule.kind, "Sequence"); equal(rule.a, 1); equal(rule.steps[1], alarm.id)
+        equal(alarm.kind, "Alarm"); equal(alarm.alert, 1)
+        equal(t.server.notifications.logic_sandbox[1].key, "logic_1_1")
+        local count = 0
+        for _, record in ipairs(t.state.alertHistory) do if record.open then count = count + 1 end end
+        equal(count, 1, "The pending alert keeps its inbox identity")
+        local popup = assert(t.server.monitors[topId].notification)
+        t.touch("top", popup.ok.x1, popup.ok.y); t.bus.advance(2)
+        equal(alarm.alert, nil); equal(alarm.alertNodeId, nil)
+        equal(t.server.monitors[topId].notification, nil)
+        t.reboot()
+        equal(#t.state.appStates.logic_sandbox.circuits[1].nodes, 3)
+    end
+
+    function tests.v44_logic_failed_popup_migration_preserves_saved_rule_and_notification_state()
+        local t = setup({logic_sandbox = true})
+        local state = t.state.appStates.logic_sandbox
+        state.circuits = {{id = 1, name = "Stock warning", enabled = false, nodes = {
+            {id = 1, name = "Stock", kind = "Item amount", popup = true, high = true, alert = 7},
+        }}}
+        state.nextCircuit, state.nextNode, state.nextAlert = 2, 2, 8
+        local before = serialize(state)
+        t.central.disk.failWrite = true
+        local ok = pcall(t.server.apps.logic_sandbox.init, state, t.api, {appName = "logic_sandbox"})
+        equal(ok, false)
+        equal(serialize(state), before)
+        t.central.disk.failWrite = false
+        t.server.apps.logic_sandbox.init(state, t.api, {appName = "logic_sandbox"})
+        equal(#state.circuits[1].nodes, 3)
+        equal(t.server.notifications.logic_sandbox[1].key, "logic_1_7")
+    end
+
+    function tests.v44_logic_numbered_rows_and_setup_tips_explain_an_action_without_a_rule()
+        local t = setup({logic_sandbox = true})
+        local id = t.open("logic_sandbox", "top", 50, 22, 1, 1)
+        t.click(id, "newCircuit"); t.click(id, "saveText")
+        t.click(id, "addNode"); t.click(id, "createNode", "Input"); logicRoute(t, id, "top", 1)
+        t.click(id, "circuit"); t.click(id, "addNode"); t.click(id, "createNode", "Alarm")
+        t.click(id, "circuit")
+        local text = table.concat(t.lines(id), "\n")
+        assert(text:find("1 Input", 1, true)); assert(text:find("2 Alarm", 1, true))
+        assert(text:find("Action", 1, true)); assert(not text:find("B Alarm", 1, true))
+        t.click(id, "setup"); t.click(id, "tip", 2)
+        assert(table.concat(t.lines(id), "\n"):find("Add an If / Then block", 1, true))
+        t.click(id, "editTip", 2)
+        equal(t.server.views[id].nodeId, 2); equal(t.server.views[id].screen, "node")
+        t.click(id, "circuit"); t.click(id, "addNode"); t.click(id, "createNode", "Sequence")
+        logicSource(t, id, "a", 1)
+        t.click(id, "steps"); t.click(id, "addStep"); t.click(id, "useAction", 2)
+        t.click(id, "node"); t.click(id, "circuit"); t.click(id, "circuitMenu"); t.click(id, "setup")
+        assert(table.concat(t.lines(id), "\n"):find("Connections are set", 1, true))
+        t.click(id, "circuit"); t.click(id, "toggleCircuit"); t.bus.advance(1)
+        text = table.concat(t.lines(id), "\n")
+        assert(text:find("1 Input", 1, true)); assert(text:find("OFF", 1, true))
+    end
+
     function tests.v41_logic_item_amount_tracks_live_stock_and_runs_closed_after_reboot()
         local t = setup({logic_sandbox = true})
         local sensor, data, iron = logicAE(t)
@@ -393,23 +571,6 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(id, "cancelAmount"); equal(t.state.appStates.logic_sandbox.circuits[1].nodes[1].amount, rule)
     end
 
-    local function logicRoute(t, id, side, color)
-        if not t.server.dialogs[id] then t.click(id, "route") end
-        t.click(id, "select", "io_11"); t.click(id, "select", side); t.click(id, "select", color); t.click(id, "use")
-    end
-    local function logicSource(t, id, port, source)
-        t.click(id, "source", port); t.click(id, "assignSource", source)
-    end
-    local function logicTime(t, id, value)
-        while #t.server.views[id].time.draft > 0 do t.click(id, "digit", "Del") end
-        for digit in value:gmatch(".") do t.click(id, "digit", digit) end
-        t.click(id, "setNumber")
-    end
-    local function logicInput(t, mask)
-        t.bridge.bundledInputs.top = mask
-        t.bus.queue(t.bridge, {"redstone"}); t.bus.pump()
-    end
-
     function tests.v42_logic_sequence_wires_a_compound_rule_waits_turns_off_and_alarms_with_no_window()
         local t = setup({logic_sandbox = true})
         local id = t.open("logic_sandbox", "top", 58, 24, 1, 1)
@@ -446,10 +607,10 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(id, "node")
         t.click(id, "circuit"); t.click(id, "flow")
         local flow = table.concat(t.lines(id), "\n")
-        assert(flow:find("Input 2 AND Input 3", 1, true))
-        assert(flow:find("Input 1 OR AND 4", 1, true))
+        assert(flow:find("2 Input AND 3 Input", 1, true))
+        assert(flow:find("1 Input OR 4 AND", 1, true))
         assert(flow:find("3. Wait 20.17s", 1, true))
-        assert(flow:find("4. Set Output target 9 OFF", 1, true))
+        assert(flow:find("4. Set 9 Output target OFF", 1, true))
         t.click(id, "circuit"); t.click(id, "circuitMenu"); t.click(id, "toggleCircuit")
         logicInput(t, 2); t.bus.advance(1)
         equal(t.bridge.bundled.front, 0, "Input 2 alone is not enough")
@@ -463,7 +624,8 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local ended = t.bridge.redstoneWrites[#t.bridge.redstoneWrites].time
         assert(math.abs(ended - started - 20.2) < .000001)
         local popup = assert(t.server.monitors[topId].notification)
-        assert(table.concat(t.top.lines, "\n"):find("Alarm " .. alarm, 1, true))
+        equal(t.server.notifications.logic_sandbox[1].title, "Alarm")
+        equal(t.server.notifications.logic_sandbox[1].message, t.state.appStates.logic_sandbox.circuits[1].name)
         t.touch("top", popup.ok.x1, popup.ok.y)
         t.bus.advance(1.5); equal(t.bridge.bundled.front, 0, "A held condition must not trigger a second run")
         logicInput(t, 0); t.bus.advance(.5)

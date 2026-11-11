@@ -41,6 +41,8 @@ local function itemCount(node)
     local rule = node.amount
     return rule and Me.count(stock(rule.sensor), rule.item.key)
 end
+local function alarmName(circuit, node) return node.alarmName or circuit.name end
+local function alertKey(node) return "logic_" .. (node.alertNodeId or node.id) .. "_" .. node.alert end
 local function readAmounts(state, api, now)
     local needed = {}
     local function include(binding)
@@ -174,8 +176,9 @@ local function notifications(state, api)
     for _, circuit in ipairs(state.circuits) do
         for _, node in ipairs(circuit.nodes) do
             if node.alert then
-                entries[#entries + 1] = {key = "logic_" .. node.id .. "_" .. node.alert, title = "Logic Sandbox",
-                    message = circuit.name .. " / " .. node.name .. (node.kind == "Alarm" and "" or " ON")}
+                local message = node.kind == "Alarm" and alarmName(circuit, node)
+                    or circuit.name .. " / " .. node.name .. " ON"
+                entries[#entries + 1] = {key = alertKey(node), title = "Alarm", message = message}
             end
         end
     end
@@ -187,6 +190,29 @@ function app.init(state, api, context)
     appName, last, timing = context.appName, {}, {}
     sources, previews, itemLists, nextWatch, nextRead = {}, {}, {}, 0, 0
     if not state.circuits then state.circuits, state.nextCircuit, state.nextNode, state.nextAlert = {}, 1, 1, 1 end
+    local before, migrated = Me.copy(state), false
+    for _, circuit in ipairs(state.circuits) do
+        local count = #circuit.nodes
+        for index = 1, count do
+            local node = circuit.nodes[index]
+            if node.kind == "Alarm" then
+                if not node.alarmName and node.name ~= "Alarm " .. node.id then
+                    node.alarmName, migrated = node.name, true
+                end
+            elseif node.kind == "Item amount" and (node.popup or node.alert) then
+                local ruleId, alarmId = state.nextNode, state.nextNode + 1
+                circuit.nodes[#circuit.nodes + 1] = {id = ruleId, kind = "Sequence", name = "Rule " .. ruleId,
+                    a = node.id, steps = {alarmId}}
+                circuit.nodes[#circuit.nodes + 1] = {id = alarmId, kind = "Alarm", name = "Alarm " .. alarmId,
+                    alarmName = circuit.name .. " / " .. node.name .. " ON", alert = node.alert,
+                    alertNodeId = node.alert and node.id or nil}
+                timing[ruleId] = {revision = 0, high = node.high}
+                state.nextNode = alarmId + 1
+                node.popup, node.high, node.alert = nil, nil, nil
+                migrated = true
+            end
+        end
+    end
     local mapped, changes = {}, {}
     for _, item in ipairs(api.getOutputs()) do mapped[item.name] = item end
     for _, circuit in ipairs(state.circuits) do
@@ -209,7 +235,11 @@ function app.init(state, api, context)
             end
         end
     end
-    if #changes > 0 then assert(api.updateOutputs(changes)) end
+    if #changes > 0 or migrated then
+        local ok, err
+        if #changes > 0 then ok, err = api.updateOutputs(changes) else ok, err = api.save() end
+        if not ok then Me.restore(state, before); error(err, 0) end
+    end
     notifications(state, api)
 end
 function app.ioRoutes(state)
@@ -286,11 +316,11 @@ end
 function app.handleNotification(key, state, api)
     for _, circuit in ipairs(state.circuits) do
         for _, node in ipairs(circuit.nodes) do
-            if node.alert and key == "logic_" .. node.id .. "_" .. node.alert then
-                local previous = node.alert
-                node.alert = nil
+            if node.alert and key == alertKey(node) then
+                local previous, previousNode = node.alert, node.alertNodeId
+                node.alert, node.alertNodeId = nil, nil
                 local ok, err = api.save()
-                if not ok then node.alert = previous; return false, err end
+                if not ok then node.alert, node.alertNodeId = previous, previousNode; return false, err end
                 notifications(state, api)
                 return true
             end
@@ -384,8 +414,52 @@ local function drawItems(ui, w, h, view, id, api)
     end
     ui.footer({{"Back", "amountEdit"}, {"Find", "amountFind"}})
 end
-local function nodeLabel(node)
-    return node and node.name or "Unwired"
+local function nodeLabel(node, index)
+    if not node then return "Unwired" end
+    local generated = node.kind == "Sequence" and "Rule" or node.kind
+    local label = node.name
+    if label == generated .. " " .. node.id then label = node.kind == "Sequence" and "If / Then" or node.kind
+    elseif node.kind == "Alarm" then label = "Alarm - " .. label end
+    return (index or node.id) .. " " .. label
+end
+local function setupTips(circuit, api)
+    local nodes, actions, tips, hasRule = {}, {}, {}, false
+    for _, node in ipairs(circuit.nodes) do
+        nodes[node.id] = node
+        if node.kind == "Sequence" then
+            hasRule = true
+            for _, id in ipairs(node.steps or {}) do actions[id] = true end
+        end
+    end
+    for index, node in ipairs(circuit.nodes) do
+        local title, message
+        if node.kind == "Item amount" and (not node.amount or not validAmount(node.amount)) then
+            title, message = "Choose ME item", "Open Set item count. Select the ME source, item, comparison and level, then Save."
+        elseif node.kind == "Input" and not node.route then
+            title, message = "Choose input", "Use Select redstone to choose the IO client, side and wire for this input."
+        elseif node.kind == "Sequence" and not nodes[node.a] then
+            title, message = "Choose When", "Open When and select the condition that should start this If / Then rule."
+        elseif node.kind == "Sequence" and #(node.steps or {}) == 0 then
+            title, message = "Add Then blocks", "Open Then blocks and + Block to add the actions this rule should run."
+        elseif actionKinds[node.kind] and not actions[node.id] then
+            if hasRule then
+                title, message = "Add action to rule", "This action runs inside If / Then. Open that rule's Then blocks, tap + Block, and select this action."
+            else
+                title, message = "Add If / Then", "Add an If / Then block. Choose its When condition, then put this action in Then blocks."
+            end
+        elseif node.kind == "Set output" and not (nodes[node.targetId] and nodes[node.targetId].kind == "Output target") then
+            title, message = "Choose target", "Use Choose target to select or create the output target this action will set."
+        elseif isOutput(node) and not node.route then
+            title, message = "Choose output", "Use Select redstone to choose the IO client, side and wire for this output."
+        elseif (node.kind == "Output" or node.kind == "Delay" or node.kind == "NOT") and not nodes[node.a] then
+            title, message = "Choose source", "Select the source under From, When or A to connect this block to a condition."
+        elseif (node.kind == "AND" or node.kind == "OR" or node.kind == "XOR") and (not nodes[node.a] or not nodes[node.b]) then
+            title, message = "Connect A and B", "Select both A and B sources so this gate can combine their conditions."
+        end
+        if title then tips[#tips + 1] = {id = node.id, label = index .. " " .. title, message = message} end
+        api.cooperate(24)
+    end
+    return tips
 end
 local function routeLabel(api, route)
     if not route then return "Select redstone" end
@@ -398,11 +472,12 @@ local function actionLabel(api, circuit, block)
     if block.kind == "Set output" then
         return "Set " .. nodeLabel(find(circuit.nodes, block.targetId)) .. (block.on and " ON" or " OFF")
     end
+    if block.kind == "Alarm" then return "Alarm / " .. alarmName(circuit, block) end
     return block.name
 end
 local function flowLines(circuit, api)
     local rows = {}
-    for _, node in ipairs(circuit.nodes) do
+    for index, node in ipairs(circuit.nodes) do
         local a, b = nodeLabel(find(circuit.nodes, node.a)), nodeLabel(find(circuit.nodes, node.b))
         local kind, detail = node.kind
         if kind == "Input" then detail = routeLabel(api, node.route)
@@ -414,7 +489,7 @@ local function flowLines(circuit, api)
         elseif kind == "Output target" then detail = routeLabel(api, node.route)
         elseif actionKinds[kind] then detail = actionLabel(api, circuit, node)
         else detail = a .. " " .. kind .. " " .. b end
-        rows[#rows + 1] = node.name .. " = " .. detail
+        rows[#rows + 1] = nodeLabel(node, index) .. " = " .. detail
         if kind == "Sequence" then
             for index, id in ipairs(node.steps) do
                 rows[#rows + 1] = index .. ". " .. actionLabel(api, circuit, find(circuit.nodes, id))
@@ -441,7 +516,7 @@ local function build(w, h, state, api, context)
     local node = find(circuit and circuit.nodes, view.nodeId)
     local k = view.keyboard
     if screen == "keyboard" and (not k or type(k.purpose) ~= "string" or (k.purpose == "renameCircuit" and not circuit)
-        or (k.purpose == "renameNode" and not node)) then
+        or ((k.purpose == "renameNode" or k.purpose == "renameAlarm") and not node)) then
         screen, view.keyboard = circuit and "circuit" or "home", nil
     end
     if amountScreens[screen] or (screen == "keyboard" and k.purpose:sub(1, 6) == "amount") then
@@ -470,34 +545,58 @@ local function build(w, h, state, api, context)
     if not circuit and screen == "circuit" then screen = "home" end
     if screen == "sources" and view.port ~= "a" and view.port ~= "b" then screen = "node" end
     view.screen = screen
+    local tips = circuit and setupTips(circuit, api) or {}
     local rule = view.amountDraft
     local binding = rule and rule.sensor
-    if amountScreens[screen] and binding then
-        previews[id] = {binding = binding, expires = os.clock() + 4}
+    local previewBinding = amountScreens[screen] and binding
+        or screen == "node" and node.kind == "Item amount" and node.amount and node.amount.sensor
+    if previewBinding then
+        previews[id] = {binding = previewBinding, expires = os.clock() + 4}
     else previews[id] = nil end
     if screen == "home" then
         local rows = {{"+ New circuit", "newCircuit", nil, #state.circuits < 24}}
         for _, item in ipairs(state.circuits) do
-            rows[#rows + 1] = {(item.enabled and "+ " or "- ") .. item.name, "open", item.id}
+            rows[#rows + 1] = {item.name .. (item.enabled and " [ON]" or " [OFF]"), "open", item.id}
         end
         ui.menu("Logic Sandbox", rows, "circuits", {{"Close", "close"}})
     elseif screen == "circuit" then
         local values, rows = circuit.enabled and evaluate(circuit, api) or {}, {}
-        for _, item in ipairs(circuit.nodes) do
+        rows[1] = {circuit.enabled and "ON - Disable" or "OFF - Enable", "toggleCircuit"}
+        if #tips > 0 then rows[#rows + 1] = {"Setup tips (" .. #tips .. ")", "setup"} end
+        for index, item in ipairs(circuit.nodes) do
             local value = values[item.id]
-            local badge = actionKinds[item.kind] and "B " or not circuit.enabled and "- " or value == nil and "? " or value and "1 " or "0 "
-            rows[#rows + 1] = {badge .. item.name, "selectNode", item.id}
+            local label, status = nodeLabel(item, index), ""
+            if actionKinds[item.kind] then status = item.alert and "Alert" or "Action"
+            elseif circuit.enabled then
+                if item.kind == "Sequence" then status = value == nil and "Waiting" or value and "Running" or "Ready"
+                else status = value == nil and "Waiting" or value and "ON" or "OFF" end
+            end
+            local gap = w - #label - #status
+            if status ~= "" and gap >= 2 then label = label .. string.rep(" ", gap) .. status end
+            if #label < w then label = label .. string.rep(" ", w - #label) end
+            rows[#rows + 1] = {label, "selectNode", item.id}
         end
-        if #rows == 0 then rows[1] = {"Add a node", nil, nil, false} end
+        if #circuit.nodes == 0 then rows[#rows + 1] = {"Add a node", nil, nil, false} end
         local footer = {{"Back", "home"}, {"+ Add", "addNode", nil, #circuit.nodes < 48}}
         if w >= 24 then footer[#footer + 1] = {"Flow", "flow"} end
         footer[#footer + 1] = {"Menu", "circuitMenu"}
         ui.menu(circuit.name, rows, "nodes", footer)
     elseif screen == "circuitMenu" then
         local rows = {{circuit.enabled and "Disable circuit" or "Enable circuit", "toggleCircuit"},
-            {"Rename circuit", "renameCircuit"}, {"Delete circuit", "deleteCircuit"}}
+            {"Check setup", "setup"}, {"Rename circuit", "renameCircuit"}, {"Delete circuit", "deleteCircuit"}}
         if w < 24 then table.insert(rows, 1, {"View flow", "flow"}) end
         ui.menu(circuit.name, rows, "circuitMenu", {{"Back", "circuit"}})
+    elseif screen == "setup" then
+        local rows = {}
+        for _, tip in ipairs(tips) do rows[#rows + 1] = {tip.label, "tip", tip.id} end
+        if #rows > 0 then ui.menu("Setup tips", rows, "setup", {{"Back", "circuit"}})
+        else ui.info("Check setup", {"Connections are set. Live readings still depend on the selected clients."}, "setup", "circuit") end
+    elseif screen == "tip" then
+        local tip = find(tips, view.tipNode)
+        if tip then
+            ui.info("Setup tip", {nodeLabel(find(circuit.nodes, tip.id)), tip.message}, "tip", "setup")
+            ui.footer({{"Back", "setup"}, {"Edit", "editTip", tip.id}})
+        else ui.info("Check setup", {"This connection is now set."}, "tip", "setup") end
     elseif screen == "flow" then ui.info("Circuit flow", flowLines(circuit, api), "flow", "circuit")
     elseif screen == "addNode" then
         local rows = {}
@@ -519,6 +618,10 @@ local function build(w, h, state, api, context)
             if configured then
                 rows[#rows + 1] = {configured.item.name .. " " .. amountCaption(configured), nil, nil, false}
                 rows[#rows + 1] = {"Count " .. Me.amount(itemCount(node)), nil, nil, false}
+                local snapshot = stock(configured.sensor)
+                if not snapshot or snapshot.status ~= "ok" then
+                    rows[#rows + 1] = {snapshot and (snapshot.error or snapshot.status) or "Waiting for ME", nil, nil, false}
+                end
             end
         elseif node.kind ~= "Input" and node.kind ~= "Output target" and not actionKinds[node.kind] then
             local label = timedKinds[node.kind] and "When " or node.kind == "Output" and "From " or "A "
@@ -538,10 +641,14 @@ local function build(w, h, state, api, context)
             if target then rows[#rows + 1] = {routeLabel(api, target.route), "routeTarget"} end
         end
         if node.kind == "Delay" then rows[#rows + 1] = {"+ Link output", "addLinkedOutput", nil, #circuit.nodes < 48} end
-        if not actionKinds[node.kind] and node.kind ~= "Output target" then
+        if not actionKinds[node.kind] and node.kind ~= "Output target" and node.kind ~= "Item amount" then
             rows[#rows + 1] = {node.popup and "Popup ON" or "Popup OFF", "popup"}
         end
-        rows[#rows + 1] = {"Rename node", "renameNode"}
+        if node.kind == "Alarm" then rows[#rows + 1] = {"Name " .. alarmName(circuit, node), "renameAlarm"}
+        else rows[#rows + 1] = {"Rename node", "renameNode"} end
+        if (node.kind == "Alarm" or node.kind == "Item amount") and find(tips, node.id) then
+            rows[#rows + 1] = {"Setup tip", "tip", node.id}
+        end
         rows[#rows + 1] = {"Delete node", "deleteNode"}
         local title = node.kind == "Sequence" and "If / Then" or node.kind
         if node.name ~= title then title = title .. " / " .. node.name end
@@ -549,9 +656,9 @@ local function build(w, h, state, api, context)
         ui.menu(title, rows, "node", {{rule and "Rule" or "Back", rule and "returnRule" or "circuit"}})
     elseif screen == "sources" then
         local rows = {{"Unwired", "assignSource", 0}}
-        for _, item in ipairs(circuit.nodes) do
+        for index, item in ipairs(circuit.nodes) do
             if not isOutput(item) and not actionKinds[item.kind] and not wouldCycle(circuit, item.id, node.id) then
-                rows[#rows + 1] = {item.name .. " / " .. item.kind, "assignSource", item.id}
+                rows[#rows + 1] = {nodeLabel(item, index), "assignSource", item.id}
             end
         end
         ui.menu(node.name .. " / " .. view.port:upper(), rows, "sources", {{"Back", "node"}})
@@ -666,6 +773,8 @@ function app.handleTouch(x, y, w, h, state, api, context)
     local circuit, circuitIndex = find(state.circuits, view.circuitId)
     local node, nodeIndex = find(circuit and circuit.nodes, view.nodeId)
     if action == "page" then view.pages[value.key] = value.page
+    elseif action == "tip" then view.tipNode, view.screen, view.pages.tip = value, "tip", 1
+    elseif action == "editTip" then view.nodeId, view.screen, view.ruleId, view.pages.node = value, "node", nil, 1
     elseif action == "close" then return api.closeWindow(context.windowId)
     elseif action == "open" then view.circuitId, view.screen, view.pages, view.ruleId = value, "circuit", {}, nil
     elseif action == "addNode" then view.pages.nodeKinds, view.screen = 1, "addNode"
@@ -674,6 +783,7 @@ function app.handleTouch(x, y, w, h, state, api, context)
     elseif action == "newCircuit" then keyboard(view, action, "Circuit " .. state.nextCircuit, "home")
     elseif action == "renameCircuit" then keyboard(view, action, circuit.name, "circuitMenu")
     elseif action == "renameNode" then keyboard(view, action, node.name, "node")
+    elseif action == "renameAlarm" then keyboard(view, action, node.alarmName or "", "node")
     elseif action == "editTime" then
         local field = node.kind == "Delay" and "delayHundredths" or "waitHundredths"
         editTime(view, api, node, node[field] or 50, field)
@@ -772,6 +882,11 @@ function app.handleTouch(x, y, w, h, state, api, context)
             itemLists[context.windowId] = nil
         elseif k.purpose == "amountManualText" then
             view.manualItem[k.field], view.screen = text, k.back
+        elseif k.purpose == "renameAlarm" or k.purpose == "renameNode" and node.kind == "Alarm" then
+            if commit(state, api, view, function()
+                node.alarmName = text ~= "" and text or nil
+                node.name = node.alarmName or "Alarm " .. node.id
+            end) then view.screen = k.back end
         elseif text == "" then return true
         elseif k.purpose == "newCircuit" and #state.circuits < 24 then
             local id = state.nextCircuit
@@ -791,7 +906,7 @@ function app.handleTouch(x, y, w, h, state, api, context)
         end
         if commit(state, api, view, function()
             circuit.enabled = not circuit.enabled
-            if not circuit.enabled then for _, item in ipairs(circuit.nodes) do item.high, item.alert = nil, nil end end
+            if not circuit.enabled then for _, item in ipairs(circuit.nodes) do item.high, item.alert, item.alertNodeId = nil, nil, nil end end
         end, changes) then
             for _, item in ipairs(circuit.nodes) do timing[item.id] = nil end
             view.screen = "circuit"
@@ -837,7 +952,7 @@ function app.handleTouch(x, y, w, h, state, api, context)
     elseif action == "clearRoute" then
         local changes = isOutput(node) and circuit.enabled and {outputChange(node, true)} or nil
         commit(state, api, view, function() node.route = nil end, changes)
-    elseif action == "popup" then
+    elseif action == "popup" and node.kind ~= "Item amount" then
         commit(state, api, view, function() node.popup, node.high, node.alert = not node.popup, nil, nil end)
     elseif action == "confirmDelete" then
         local whole = view.screen == "deleteCircuit"

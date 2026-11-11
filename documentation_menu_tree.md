@@ -319,6 +319,10 @@ Build circuits from redstone and ME stock, then connect gates, delays and reusab
 
 - [+ New circuit](#shared-dialogs-touch-keyboard) — Enter a name. Set opens a new, disabled circuit.
 - [Circuit]
+  - OFF - Enable / ON - Disable — Toggles the circuit's background evaluation.
+  - <a name="logic-sandbox-setup-tips"></a> Setup tips — Appears when block connections need attention.
+    - [Tip] — Explains the missing step for that block.
+      - Edit / Back — Opens the block editor or returns to the tips.
   - + Add / Add logic node
     - [Redstone input / Input](#logic-sandbox-routing) — Reads a redstone wire.
     - [Item amount](#logic-sandbox-stock) — Compares an item count from the selected ME network.
@@ -332,13 +336,14 @@ Build circuits from redstone and ME stock, then connect gates, delays and reusab
   - Menu
     - [View flow](#logic-sandbox-flow) — Available here when Flow does not fit the circuit footer.
     - Enable circuit / Disable circuit — Turns background evaluation on or off.
+    - [Check setup](#logic-sandbox-setup-tips) — Checks connections and explains missing steps.
     - [Rename circuit](#shared-dialogs-touch-keyboard) — Touch keyboard.
     - Delete circuit
       - Delete? — Delete or Cancel.
-  - [Node] — Select a node to edit it. Its row shows 1, 0, ?, disabled, or B for an action block.
+  - [Node] — Numbered rows identify blocks. Roomy windows show ON, OFF, Waiting, Running, Ready, Action or Alert separately.
     - <a name="logic-sandbox-routing"></a> [Select redstone](#shared-dialogs-redstone-picker) — Input, Output and Output target. A saved route shows its address.
     - Clear routing — Available when one of those nodes has an assigned route.
-    - <a name="logic-sandbox-stock"></a> Set item count / Edit count — Item amount only. The node editor shows the comparison and current count.
+    - <a name="logic-sandbox-stock"></a> Set item count / Edit count — Item amount only. Visible saved counts stay live while the circuit is disabled. Source errors explain an unavailable count.
       - [ME / Select ME](#shared-dialogs-sensor-picker) — Select an AE sensor, side and target.
       - Select item — Live item names and amounts. Select a row to use its identity.
         - Find / Find item
@@ -375,10 +380,12 @@ Build circuits from redstone and ME stock, then connect gates, delays and reusab
           - [+ New target](#logic-sandbox-target) — Creates a target and opens the redstone picker.
         - Set ON / Set OFF — Changes the value this block sends.
         - [Select redstone / saved route](#shared-dialogs-redstone-picker) — Sets or changes the chosen target's wire.
-      - Alarm — Uses the block's name for its alert. Rename node edits the message name.
+      - Alarm — Runs as an action in If / Then. Popup title is Alarm.
+        - [Name](#shared-dialogs-touch-keyboard) — Enter the popup cause. An empty name uses the circuit name.
     - <a name="logic-sandbox-target"></a> Output target editor — Choose or clear a wire using the routing controls above.
-    - Popup ON / OFF — Toggle a rising-edge alert for signal nodes.
-    - [Rename node](#shared-dialogs-touch-keyboard) — Touch keyboard.
+    - Popup ON / OFF — Optional alert for other signal nodes. Item amount uses an If / Then Alarm action.
+    - [Rename node](#shared-dialogs-touch-keyboard) — Other nodes. Alarm uses its Name control above.
+    - [Setup tip](#logic-sandbox-setup-tips) — Item amount or Alarm editors with a missing connection.
     - Delete node
       - Delete? — Delete or Cancel.
 - [[Node / Alarm block popup]](#alert-inbox) — OK acknowledges the alert.
