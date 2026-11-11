@@ -193,7 +193,7 @@ V42 IO clients advertise `buttonMinHundredths`, the shortest supported timed pre
 
 `api.wakeAt(uptime)` lets an app's background tick request an earlier next OS tick at an `os.clock()` deadline. Logic Sandbox uses it for Delay and Wait blocks.
 
-Logic Sandbox retains live `ae_items` subscriptions for visible saved Item amount editors as well as enabled circuits. Its Item amount popup flags migrate into If / Then rules with Alarm actions. Alarm actions publish a fixed `Alarm` title and their optional `alarmName`, falling back to the circuit name. Pending migrated notifications retain their original keys until acknowledged.
+Logic Sandbox uses saved Sequence and Output nodes as rules with separate IF and THEN editors. It retains live `ae_items` subscriptions for visible Item count conditions as well as enabled circuits. Its Item amount popup flags migrate into If / Then rules with Alarm actions. Alarm actions publish a fixed `Alarm` title and their optional `alarmName`, falling back to the circuit name. Pending migrated notifications retain their original keys until acknowledged.
 
 An IO snapshot looks like:
 

@@ -311,83 +311,112 @@ Item-count rules with hold, rearm and optional signal outputs.
 
 ### Logic Sandbox
 
-Build circuits from redstone and ME stock, then connect gates, delays and reusable actions.
+Build rules by choosing an IF condition and arranging the THEN actions.
 
 **Path** Desktop → Start → Logic Sandbox
 
 **Source** [apps_logic_sandbox.lua](apps_logic_sandbox.lua), [documentation_logic_sandbox.md](documentation_logic_sandbox.md)
 
-- [+ New circuit](#shared-dialogs-touch-keyboard) — Enter a name. Set opens a new, disabled circuit.
-- [Circuit]
-  - OFF - Enable / ON - Disable — Toggles the circuit's background evaluation.
-  - <a name="logic-sandbox-setup-tips"></a> Setup tips — Appears when block connections need attention.
-    - [Tip] — Explains the missing step for that block.
-      - Edit / Back — Opens the block editor or returns to the tips.
-  - + Add / Add logic node
-    - [Redstone input / Input](#logic-sandbox-routing) — Reads a redstone wire.
-    - [Item amount](#logic-sandbox-stock) — Compares an item count from the selected ME network.
-    - [AND / OR / NOT / XOR](#logic-sandbox-gates) — Combines or inverts signals.
-    - [Delay](#logic-sandbox-delay) — Waits for a source to stay on.
-    - [If / Then](#logic-sandbox-rule) — Runs action blocks in order on a rising condition.
-    - [Redstone output / Output](#logic-sandbox-output) — Routes a signal to a wire.
-    - [Wait / Set output / Alarm](#logic-sandbox-actions) — Reusable blocks for rules.
-    - [Output target](#logic-sandbox-target) — A named wire destination for Set output blocks.
-  - <a name="logic-sandbox-flow"></a> Flow / Circuit flow — Paged text view of conditions, routes and actions. Back returns to the circuit.
-  - Menu
-    - [View flow](#logic-sandbox-flow) — Available here when Flow does not fit the circuit footer.
-    - Enable circuit / Disable circuit — Turns background evaluation on or off.
-    - [Check setup](#logic-sandbox-setup-tips) — Checks connections and explains missing steps.
-    - [Rename circuit](#shared-dialogs-touch-keyboard) — Touch keyboard.
-    - Delete circuit
-      - Delete? — Delete or Cancel.
-  - [Node] — Numbered rows identify blocks. Roomy windows show ON, OFF, Waiting, Running, Ready, Action or Alert separately.
-    - <a name="logic-sandbox-routing"></a> [Select redstone](#shared-dialogs-redstone-picker) — Input, Output and Output target. A saved route shows its address.
-    - Clear routing — Available when one of those nodes has an assigned route.
-    - <a name="logic-sandbox-stock"></a> Set item count / Edit count — Item amount only. Visible saved counts stay live while the circuit is disabled. Source errors explain an unavailable count.
-      - [ME / Select ME](#shared-dialogs-sensor-picker) — Select an AE sensor, side and target.
-      - Select item — Live item names and amounts. Select a row to use its identity.
-        - Find / Find item
-          - [Search](#shared-dialogs-touch-keyboard) — Filter by item name or RawName.
-          - Refresh — Rebuilds the item list.
-          - Manual item — Register an item that is absent from the network.
-            - [Name / RawName](#shared-dialogs-touch-keyboard) — Enter display and exact raw names.
-            - [Damage](#shared-dialogs-number-pad) — Enter the item's damage value.
-            - Use / Back — Use the identity or return to Find item.
-      - Compare / Compare count
-        - Under (<) / Over (>) / Exactly (=) — Choose the comparison.
-      - [Level](#shared-dialogs-number-pad) — Enter the item count to compare against.
-      - Save / Cancel — Commit the stock condition or discard the draft.
-    - <a name="logic-sandbox-gates"></a> A / B — A for all gates. B for AND, OR and XOR. Pick Unwired or a compatible source node.
-    - <a name="logic-sandbox-output"></a> From — The source for a Redstone output. Choose Unwired or a compatible node.
-    - <a name="logic-sandbox-delay"></a> Delay editor
-      - When — Choose the signal that must stay on.
-      - [Wait](#shared-dialogs-decimal-pad) — Set seconds with up to two decimal places.
-      - [+ Link output](#shared-dialogs-redstone-picker) — Creates and routes an Output fed by this Delay.
-    - <a name="logic-sandbox-rule"></a> If / Then editor
-      - When — Pick the triggering node. The rule's signal is on while it runs.
-      - Then blocks — View the ordered steps for this rule.
-        - + Block / Then add block
-          - [+ Wait / + Set output / + Alarm](#logic-sandbox-actions) — Create and edit a reusable block.
-          - [Existing block] — Reuse a named block here or in another rule.
-        - [Step]
-          - [Edit block](#logic-sandbox-actions) — Edit the shared block. Rule returns to the steps.
-          - Move earlier / Move later — Reorder this occurrence.
-          - Remove step / Remove from rule? — Remove this occurrence or Cancel.
-    - <a name="logic-sandbox-actions"></a> Action block editors
-      - [Wait](#shared-dialogs-decimal-pad) — Pause this rule for the entered decimal seconds.
-      - Set output
-        - Choose target / Target — Pick an existing named Output target.
-          - [+ New target](#logic-sandbox-target) — Creates a target and opens the redstone picker.
-        - Set ON / Set OFF — Changes the value this block sends.
-        - [Select redstone / saved route](#shared-dialogs-redstone-picker) — Sets or changes the chosen target's wire.
-      - Alarm — Runs as an action in If / Then. Popup title is Alarm.
-        - [Name](#shared-dialogs-touch-keyboard) — Enter the popup cause. An empty name uses the circuit name.
-    - <a name="logic-sandbox-target"></a> Output target editor — Choose or clear a wire using the routing controls above.
-    - Popup ON / OFF — Optional alert for other signal nodes. Item amount uses an If / Then Alarm action.
-    - [Rename node](#shared-dialogs-touch-keyboard) — Other nodes. Alarm uses its Name control above.
-    - [Setup tip](#logic-sandbox-setup-tips) — Item amount or Alarm editors with a missing connection.
-    - Delete node
-      - Delete? — Delete or Cancel.
+- + New rule — Opens a disabled rule for setup.
+- [Saved rule] — Opens the condition and action summary. A circuit with several rules opens a list.
+  - IF / Choose condition
+    - [Redstone](#shared-dialogs-redstone-picker) — Pick a wire. Tap When ON or When OFF to change the match.
+    - [Item count](#logic-sandbox-stock) — Select the ME and item, choose Below, Above or Exactly, set Level and Save.
+    - Combine / Combine IF
+      - All true / Any true / Exactly one — Pick both conditions. Each can open another group.
+      - Invert — Pick the condition to reverse.
+      - [Hold true](#shared-dialogs-decimal-pad) — Pick the condition and hold time.
+    - Change / Change IF — Choose a type, wrap in Combine or Clear the condition.
+  - THEN — Opens the list of actions in execution order.
+    - + Add / Add action
+      - Alarm
+        - [Name](#shared-dialogs-touch-keyboard) — Sets the popup message. Empty uses the circuit name.
+      - [Set redstone](#shared-dialogs-redstone-picker) — Pick an output and set ON or OFF.
+      - [Wait](#shared-dialogs-decimal-pad) — Enter the pause in seconds.
+    - [Action] — Edit the selected action.
+      - Order — Move earlier, move later or remove that action.
+  - Set up IF / Set up THEN — Opens the section that needs configuration.
+  - Turn on / Turn off — Controls background execution.
+  - More
+    - [Rename](#shared-dialogs-touch-keyboard) — Change the rule name.
+    - [Wiring](#logic-sandbox-wiring) — Edit the circuit connections.
+    - Delete / Delete? — Delete the circuit or cancel.
+- More
+  - New output — Opens the same IF editor.
+    - [THEN](#shared-dialogs-redstone-picker) — Select the wire that follows the condition.
+  - [Wiring](#logic-sandbox-wiring) — Opens the circuit list.
+- <a name="logic-sandbox-wiring"></a> Wiring
+  - [+ New circuit](#shared-dialogs-touch-keyboard) — Enter a name. Set opens a new, disabled circuit.
+  - [Circuit]
+    - OFF - Enable / ON - Disable — Toggles the circuit's background evaluation.
+    - <a name="logic-sandbox-setup-tips"></a> Setup tips — Appears when block connections need attention.
+      - [Tip] — Explains the missing step for that block.
+        - Edit / Back — Opens the block editor or returns to the tips.
+    - + Add / Add logic node
+      - [Redstone input / Input](#logic-sandbox-routing) — Reads a redstone wire.
+      - [Item amount](#logic-sandbox-stock) — Compares an item count from the selected ME network.
+      - [AND / OR / NOT / XOR](#logic-sandbox-gates) — Combines or inverts signals.
+      - [Delay](#logic-sandbox-delay) — Waits for a source to stay on.
+      - [If / Then](#logic-sandbox-rule) — Runs action blocks in order on a rising condition.
+      - [Redstone output / Output](#logic-sandbox-output) — Routes a signal to a wire.
+      - [Wait / Set output / Alarm](#logic-sandbox-actions) — Reusable blocks for rules.
+      - [Output target](#logic-sandbox-target) — A named wire destination for Set output blocks.
+    - <a name="logic-sandbox-flow"></a> Flow / Circuit flow — Paged text view of conditions, routes and actions. Back returns to the circuit.
+    - Menu
+      - [View flow](#logic-sandbox-flow) — Available here when Flow does not fit the circuit footer.
+      - Enable circuit / Disable circuit — Turns background evaluation on or off.
+      - [Check setup](#logic-sandbox-setup-tips) — Checks connections and explains missing steps.
+      - [Rename circuit](#shared-dialogs-touch-keyboard) — Touch keyboard.
+      - Delete circuit
+        - Delete? — Delete or Cancel.
+    - [Node] — Numbered rows identify blocks. Roomy windows show ON, OFF, Waiting, Running, Ready, Action or Alert separately.
+      - <a name="logic-sandbox-routing"></a> [Select redstone](#shared-dialogs-redstone-picker) — Input, Output and Output target. A saved route shows its address.
+      - Clear routing — Available when one of those nodes has an assigned route.
+      - <a name="logic-sandbox-stock"></a> Set item count / Edit count — Item amount only. Visible saved counts stay live while the circuit is disabled. Source errors explain an unavailable count.
+        - [ME / Select ME](#shared-dialogs-sensor-picker) — Select an AE sensor, side and target.
+        - Select item — Live item names and amounts. Select a row to use its identity.
+          - Find / Find item
+            - [Search](#shared-dialogs-touch-keyboard) — Filter by item name or RawName.
+            - Refresh — Rebuilds the item list.
+            - Manual item — Register an item that is absent from the network.
+              - [Name / RawName](#shared-dialogs-touch-keyboard) — Enter display and exact raw names.
+              - [Damage](#shared-dialogs-number-pad) — Enter the item's damage value.
+              - Use / Back — Use the identity or return to Find item.
+        - Compare / Compare count
+          - Under (<) / Over (>) / Exactly (=) — Choose the comparison.
+        - [Level](#shared-dialogs-number-pad) — Enter the item count to compare against.
+        - Save / Cancel — Commit the stock condition or discard the draft.
+      - <a name="logic-sandbox-gates"></a> A / B — A for all gates. B for AND, OR and XOR. Pick Unwired or a compatible source node.
+      - <a name="logic-sandbox-output"></a> From — The source for a Redstone output. Choose Unwired or a compatible node.
+      - <a name="logic-sandbox-delay"></a> Delay editor
+        - When — Choose the signal that must stay on.
+        - [Wait](#shared-dialogs-decimal-pad) — Set seconds with up to two decimal places.
+        - [+ Link output](#shared-dialogs-redstone-picker) — Creates and routes an Output fed by this Delay.
+      - <a name="logic-sandbox-rule"></a> If / Then editor
+        - When — Pick the triggering node. The rule's signal is on while it runs.
+        - Then blocks — View the ordered steps for this rule.
+          - + Block / Then add block
+            - [+ Wait / + Set output / + Alarm](#logic-sandbox-actions) — Create and edit a reusable block.
+            - [Existing block] — Reuse a named block here or in another rule.
+          - [Step]
+            - [Edit block](#logic-sandbox-actions) — Edit the shared block. Rule returns to the steps.
+            - Move earlier / Move later — Reorder this occurrence.
+            - Remove step / Remove from rule? — Remove this occurrence or Cancel.
+      - <a name="logic-sandbox-actions"></a> Action block editors
+        - [Wait](#shared-dialogs-decimal-pad) — Pause this rule for the entered decimal seconds.
+        - Set output
+          - Choose target / Target — Pick an existing named Output target.
+            - [+ New target](#logic-sandbox-target) — Creates a target and opens the redstone picker.
+          - Set ON / Set OFF — Changes the value this block sends.
+          - [Select redstone / saved route](#shared-dialogs-redstone-picker) — Sets or changes the chosen target's wire.
+        - Alarm — Runs as an action in If / Then. Popup title is Alarm.
+          - [Name](#shared-dialogs-touch-keyboard) — Enter the popup cause. An empty name uses the circuit name.
+      - <a name="logic-sandbox-target"></a> Output target editor — Choose or clear a wire using the routing controls above.
+      - Popup ON / OFF — Optional alert for other signal nodes. Item amount uses an If / Then Alarm action.
+      - [Rename node](#shared-dialogs-touch-keyboard) — Other nodes. Alarm uses its Name control above.
+      - [Setup tip](#logic-sandbox-setup-tips) — Item amount or Alarm editors with a missing connection.
+      - Delete node
+        - Delete? — Delete or Cancel.
 - [[Node / Alarm block popup]](#alert-inbox) — OK acknowledges the alert.
 - Close — Closes the current window.
 
@@ -566,14 +595,15 @@ Reactor sensor readings and separate redstone control per reactor.
 
 ### Solar farm
 
-Farm stock and net rates, main-ME HV tracking and item pins.
+Finished HV arrivals, panel equivalents and production-sorted farm stock.
 
 **Path** Desktop → Start → Solar farm
 
 **Source** [apps_solar_farm.lua](apps_solar_farm.lua), [documentation_solar_farm.md](documentation_solar_farm.md)
 
+- HV output — Shows completed observation minutes and rates per minute and per hour. Tap for details.
 - [Item / Amount header] — Where visible, touch to sort. Touch again to reverse.
-- [Item row] / Item overview — Amount, learned average, recent change, valid time and ignored withdrawals.
+- [Item row] / Item overview — Amount, change, rate and observed time. HV also shows farm panel equivalents and combined net equivalents.
   - Pin item / Edit pin
     - [Name](#shared-dialogs-touch-keyboard) — Touch keyboard.
     - Stick — Keeps the pinned row above the sorted list.
@@ -604,7 +634,7 @@ Farm stock and net rates, main-ME HV tracking and item pins.
   - Graph/change — Cycles 5, 15 and 60 minutes.
   - Rate unit — Cycles per hour, per minute and per second.
   - List sorting / Overview order
-    - Pinned first (default)
+    - Production order — Pins come first. Other items group by production stage and recent activity.
     - Item A-Z / Item Z-A
     - Amount high-low / Amount low-high
   - Reset rate learning / Restart learned rates
@@ -619,7 +649,7 @@ Farm stock and net rates, main-ME HV tracking and item pins.
     - [Percent](#shared-dialogs-number-pad) — Global percentage threshold.
   - [UI color](#shared-dialogs-os-color-palette) — Standard OS palette.
   - Source status — Farm/Main health, age, learning time and HV selection.
-  - About net rates — Explains stock changes, averages and sampling.
+  - About rates — Explains finished HV arrivals, panel equivalents and observation gaps.
 
 ## Utilities
 

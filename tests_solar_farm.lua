@@ -217,9 +217,9 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
     end
     function tests.solar_large_dashboard_shows_farm_totals_direction_changes_bytes_and_hv_history()
         local t=setup("solar_farm",true,{width=80,height=30}); t.data.farm.UsedBytes=256; t.data.farm.FreeBytes=768; t.configure()
-        for _=1,12 do t.main[2].Size=t.main[2].Size+8; t.farm[1].Size=t.farm[1].Size-10; t.farm[2].Size=t.farm[2].Size+2; t.advance(2) end
+        for _=1,36 do t.main[2].Size=t.main[2].Size+8; t.farm[1].Size=t.farm[1].Size-10; t.farm[2].Size=t.farm[2].Size+2; t.advance(2) end
         local text=t.text(); assert(text:find("HV OUTPUT",1,true)); assert(text:find("FARM STOCK",1,true)); assert(text:find("FARM MOVEMENT",1,true))
-        assert(text:find("1 rising / 1 falling",1,true)); assert(text:find("Bytes 25%",1,true)); assert(text:find("Change 15m",1,true)); assert(text:find("HV average",1,true))
+        assert(text:find("1 rising / 1 falling",1,true)); assert(text:find("Bytes 25%",1,true)); assert(text:find("Change 15m",1,true)); assert(text:find("HV production",1,true))
         local lime=false; for _,style in ipairs(t.content().styles) do if style.y>=9 and style.y<=11 and style.fg==32 then lime=true end end; assert(lime)
         assert(not text:find("Iron Ingot",1,true)); assert(not text:find("[Ee][+-]%d"))
         t.view().screen="menu"; t.click("period"); t.view().screen="home"; assert(t.text():find("/m",1,true))
@@ -286,6 +286,8 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         t.offline=true; t.advance(20); t.main[2].Size=50000; t.offline=false; t.advance(2)
         delta,seconds=learning(t); equal(delta,10); equal(seconds,2)
         t.main[2].Size=50004; t.advance(2); delta,seconds=learning(t); equal(delta,14); equal(seconds,4)
+        for _=1,30 do t.advance(2) end
+        t.offline=true; t.advance(2)
         local gap=false; for _,point in ipairs(t.state.hvTrace.points) do if point[2]==false then gap=true end end; assert(gap)
     end
     function tests.solar_learning_survives_reboot_and_explicit_reset_preserves_sources_pins_and_recent_changes()
@@ -320,11 +322,65 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         end
         for level=1,6 do assert(heights[level],"Missing virtual height "..level) end
         restartLearning(t); t.state.settings.window=300
-        for i=1,50 do t.main[2].Size=t.main[2].Size+1; t.advance(2) end
-        equal(#t.state.hvTrace.points,50); local previous=t.state.hvTrace.points[49]; local latest=t.state.hvTrace.points[50]; equal(latest[1]-previous[1],2)
+        for i=1,100 do t.main[2].Size=t.main[2].Size+1; t.advance(2) end
+        equal(#t.state.hvTrace.points,71); local previous=t.state.hvTrace.points[70]; local latest=t.state.hvTrace.points[71]; equal(latest[1]-previous[1],2)
         lines=t.content(); local columns=0
         for x=1,80 do for y=9,11 do if lines[y]:sub(x,x)=="|" or lines[y]:sub(x,x)=="." then columns=columns+1; break end end end
         assert(columns>20,"Graph must be finer than minute-wide buckets")
+    end
+    function tests.v45_solar_hv_production_waits_for_full_minutes_and_ignores_partial_minute_spikes()
+        local t=setup("solar_farm",true,{width=80,height=30}); t.configure(); restartLearning(t)
+        local craftAt={[2]=true,[9]=true,[17]=true,[24]=true}
+        for minute=1,6 do
+            for sample=1,30 do
+                if craftAt[sample] then t.main[2].Size=t.main[2].Size+1 end
+                t.advance(2)
+                if minute==1 and sample<30 then
+                    assert(t.text():find("Collecting",1,true))
+                    equal(#t.state.production.hv,0)
+                elseif minute>1 then assert(t.text():find("4.0/min  240.0/h",1,true)) end
+            end
+        end
+        equal(#t.state.production.hv,5)
+        for _,bucket in ipairs(t.state.production.hv) do equal(bucket.count,4); equal(bucket.seconds,60) end
+        t.main[2].Size=t.main[2].Size-200; t.advance(2)
+        for _=2,30 do t.advance(2) end
+        equal(t.state.production.hv[5].count,0)
+        assert(t.text():find("3.2/min  192.0/h",1,true))
+    end
+    function tests.v45_solar_combined_equivalents_balance_farm_conversion_with_hv_delivery()
+        local t=setup("solar_farm",true); t.configure(); restartLearning(t)
+        t.farm[2].Size=0; t.advance(2) -- 64 LV panels leave the farm.
+        t.main[2].Size=t.main[2].Size+1; t.advance(2) -- The resulting HV arrives at the main ME later.
+        t.main[3].Size=t.main[3].Size+1200 -- Main ME LV must be excluded.
+        t.farm[4]={Name="Solar Panel",RawName="solar.basic",DamageValue=0,Size=8}
+        for _=3,30 do t.advance(2) end
+        equal(t.state.production.hv[1].count,1)
+        equal(t.state.production.equivalents[1].count,8)
+        t.offline=true; t.advance(2)
+        t.main[2].Size=t.main[2].Size+1000; t.offline=false; t.advance(2)
+        for _=1,30 do t.advance(2) end
+        equal(t.state.production.hv[2].count,0,"A recovery snapshot is a baseline")
+        equal(t.state.production.equivalents[2].count,0)
+    end
+    function tests.v45_solar_default_order_prioritizes_production_tiers_and_recent_activity()
+        local t=setup("solar_farm",true); t.configure()
+        local generator={Name="Generator",RawName="ic2.generator",DamageValue=0,Size=1}
+        t.farm[4]=generator; t.farm[1].Size=t.farm[1].Size+80; t.advance(2)
+        local rows=tableRows(t)
+        equal(rows[1],"hv")
+        equal(rows[2],Me.itemKey("solar.lv",0,"LV Solar"))
+        equal(rows[3],Me.itemKey(generator.RawName,0,generator.Name))
+        equal(rows[4],Me.itemKey("ic2.matter",0,"UU Matter"))
+        local nameColors={}
+        for _,style in ipairs(t.content().styles) do
+            if style.x==2 and style.y>=3 then nameColors[style.y]=style.fg end
+        end
+        local generatorColor
+        for _,hit in ipairs(t.content().hits) do
+            if hit.action=="item" and hit.value.key==rows[3] then generatorColor=nameColors[hit.y1] end
+        end
+        equal(generatorColor,2)
     end
     function tests.solar_large_learning_counts_and_fractional_time_remain_precise_across_legacy_checkpoints()
         local t=setup("solar_farm",true); t.configure(); restartLearning(t)

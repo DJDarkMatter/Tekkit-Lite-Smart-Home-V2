@@ -6,6 +6,12 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
+## Updating to v45
+
+Logic Sandbox starts with **+ New rule**, an **IF** condition editor and an ordered **THEN** action list. Solar farm shows finished HV arrivals from complete observation minutes and groups farm stock by production stage and activity.
+
+On a central computer already using v44, upload the full release to GitHub, then run `inst app logic_sandbox`, `inst app solar_farm` and `reboot`. See [the v45 update and changed files](documentation_update_v45.md). The [portrait menu tree](documentation_menu_tree.pdf) includes both redesigned apps.
+
 ## Updating to v44
 
 Logic Sandbox keeps visible saved item counts live while the circuit is disabled and reports unavailable ME sources. The circuit screen has a direct ON/OFF control, numbered block rows, readable states and setup tips. Item amount conditions feed **If / Then**, whose **Then blocks** can contain an **Alarm** with an optional Name. Its popup has **Alarm** as the title and the chosen name or circuit name below it. Existing Item amount popups migrate into that rule structure.
@@ -70,7 +76,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v44`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v45`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
