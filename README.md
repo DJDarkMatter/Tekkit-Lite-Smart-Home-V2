@@ -6,6 +6,12 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
+## Updating to v46
+
+Solar Farm fits one item per row on compact windows with at least 22 content columns. Counts and rates use brighter foreground colors. The whole-number and decimal keypads fill the space between the value display and the footer, including in Clock.
+
+Level Emitter is retired. The central OS saves its old rules, archives their routes and stops running the app. Logic Sandbox supports new item-count rules. See [the v46 install commands and files to remove](documentation_update_v46.md).
+
 ## Updating to v45
 
 Logic Sandbox starts with **+ New rule**, an **IF** condition editor and an ordered **THEN** action list. Solar farm shows finished HV arrivals from complete observation minutes and groups farm stock by production stage and activity.
@@ -22,7 +28,7 @@ On a central computer already using v43, upload the full release to GitHub, run 
 
 The central OS can yield when the legacy watchdog rejects its software wake-up event. Modem bursts use a bounded receive buffer, with shorter work slices and a shared native timer fallback. Update the central computer using **bundled-v43** and run `inst server`, then `reboot`. See the [v43 install instructions and changed files](documentation_update_v43.md).
 
-The [clickable portrait menu tree](documentation_menu_tree.pdf) covers Settings, desktop controls, shared dialogs and all 13 optional apps. Its [editable source](documentation_menu_tree.md) stays with the repository and full releases.
+The [clickable portrait menu tree](documentation_menu_tree.pdf) covers Settings, desktop controls, shared dialogs and all 12 optional apps. Its [editable source](documentation_menu_tree.md) stays with the repository and full releases.
 
 ## Updating to v42
 
@@ -76,7 +82,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v45`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v46`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -169,7 +175,7 @@ The central core update is required because the faulty matcher was in `lib_me.lu
 
 [Solar farm](documentation_solar_farm.md) now shows farm amounts and farm net rates together in one paginated list. Only HV solar uses the main ME. It starts pinned with Stick enabled; every pin can toggle Stick or be unpinned. Pin item and Menu share the footer with page arrows when needed. The menu contains the ME sources and rate/display settings.
 
-Item alarms are now the separate [Level emitter](documentation_level_emitter.md) app: select any ME item, Under/Over/Exactly, a level and optional hold/reset, then popup/output/dismiss-input settings. Existing Solar rules, pending alerts and output routes migrate automatically. The manual [Screensaver](documentation_screensaver.md) app offers fifteen animated designs, always fullscreen: top-left selects the previous design, top-right the next, and every other touch closes it. Alarm popups stay above it. It rotates designs on each opening and never auto-opens after reboot. Start sorts apps and OS settings alphabetically by their displayed names.
+At v30, item alarms moved to the separate Level Emitter app, which was retired in v46. It offered selectable ME items, thresholds, popup alarms, and output and dismiss-input settings. Existing Solar rules, pending alerts and output routes migrate automatically. The manual [Screensaver](documentation_screensaver.md) app offers fifteen animated designs, always fullscreen: top-left selects the previous design, top-right the next, and every other touch closes it. Alarm popups stay above it. It rotates designs on each opening and never auto-opens after reboot. Start sorts apps and OS settings alphabetically by their displayed names.
 
 Upload the full v30 package to GitHub and replace/download your single installer paste with the new `install.lua` (**bundled-v30**). Stop the central OS with Ctrl+T and run:
 

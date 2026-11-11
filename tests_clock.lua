@@ -86,6 +86,21 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         equal(t.view(t.id).screen, "alarms")
         assert(table.concat(t.content(t.id), "\n"):find("No alarms", 1, true))
     end
+    function tests.v46_clock_number_pad_accepts_touches_at_the_bottom_of_a_key()
+        local t=setup()
+        t.click(t.id,"timers"); t.click(t.id,"new","timer"); t.click(t.id,"field","duration")
+        t.click(t.id,"digit","Clr")
+        local key
+        for _,hit in ipairs(t.content(t.id).hits) do
+            if hit.action=="digit" and hit.value=="9" then key=hit end
+        end
+        assert(key and key.y2>key.y)
+        local win=t.central.server.state.windows[t.id]
+        t.bus.queue(t.display,{"monitor_touch","top",win.x+key.x2,win.y+key.y2}); t.bus.pump()
+        equal(t.view(t.id).number.draft,"9")
+        t.click(t.id,"setNumber")
+        equal(t.view(t.id).draft.duration,9)
+    end
 
     function tests.clock_timers_trigger_pulses_in_background_and_resume_from_checkpoints_without_counting_downtime()
         local t=setup()

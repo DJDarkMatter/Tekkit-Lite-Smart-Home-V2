@@ -14,8 +14,8 @@ The large display graphs the published HV rate across the selected **Graph/chang
 
 ## List and pins
 
-**Production order** groups panels, components and materials. Recent activity determines order within each group, with item names breaking ties. The name colors match those groups. Stock amounts are lime, and positive or negative changes are green or red. Tap **Item** or **Amount** to sort directly. Tap the heading again to reverse it. The same choices are in **Menu → List sorting** on compact windows.
+**Production order** groups panels, components and materials. Recent activity determines order within each group, with item names breaking ties. The name colors match those groups. Counts use a high-contrast foreground. On dark rows, gains are lime and losses are pink. Compact windows with at least 22 content columns show the item, amount and rate on one line. Large values can use short units to fit. Tap a row to see its full name and values. Tap **Item** or **Amount** to sort directly. Tap the heading again to reverse it. The same choices are in **Menu → List sorting** on compact windows.
 
 The default HV pin sits first. **Pin item** adds a shortcut for a farm item. Open **Edit pin** to rename it, change its color, customize its withdrawal filter, enable **Stick** or unpin it. Stick places a pin above the sorted rows. A saved pin can represent an absent item using **Find → Register absent item**.
 
-Tracking continues while the window is closed. **Reset rate learning** resets observations for the selected source and keeps source and pin settings. The app starts a new HV rate history on upgrade and retains the saved farm stock history. Level emitter handles stock alarms.
+Tracking continues while the window is closed. **Reset rate learning** resets observations for the selected source and keeps source and pin settings. The app starts a new HV rate history on upgrade and retains the saved farm stock history. Logic Sandbox handles item-count alarms.

@@ -67,10 +67,9 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         for _,hit in ipairs(hits) do assert(hit.id~=99) end
     end
     function tests.screensaver_popups_render_above_fullscreen_and_capture_corner_touches()
-        local t=setup("screensaver"); local level=t.central.server.apps.level_emitter; local state=t.central.server.state.appStates.level_emitter
-        local item={raw="solar.lv",name="LV Solar",damage=0,key=dofile("lib_me.lua").itemKey("solar.lv",0,"LV Solar")}
-        state.rules[1]={id=1,name="Farm alert",sensor={clientId="sensor_14",side="top",target="farm"},item=item,operator="over",threshold=1,reset=0,hold=0,
-            enabled=true,latched=false,revision=1,signal={kind="constant",on=0,off=1,total=0}}; state.nextId=2
+        local t=setup("screensaver"); local state=t.central.server.state.appStates.clock
+        state.timers[1]={id=1,name="Farm alert",duration=1,remaining=1,mode="real",status="running",
+            revision=1,signal={kind="constant",on=0,off=1,total=0}}; state.nextId=2
         t.advance(3); assert(t.popup()); assert(table.concat(t.top.lines,"\n"):find("Farm alert",1,true))
         local design=t.view().design; touch(t,"top",1,1); equal(t.view().design,design)
         touch(t,"top",t.top.width,1); assert(t.window()); assert(t.popup())

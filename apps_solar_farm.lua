@@ -27,7 +27,6 @@ local function remember(state,item)
     for i=1,math.max(0,count-1024) do state.catalog[unused[i]]=nil end
 end
 local function migrate(state)
-    assert(not state.alarms or #state.alarms==0,"Install level_emitter before upgrading Solar farm: it moves your saved stock alarms safely")
     local pins={}; state.hv={pinned=true,stick=true,order=0,name="HV solar"}
     for _,m in ipairs(state.metrics or {}) do
         if Me.isHVSolar(m.item) then
@@ -39,7 +38,7 @@ local function migrate(state)
     state.metrics=pins; state.catalog={}
     state.version,state.history=2,{farm=Me.Rates.new(),main=Me.Rates.new()}
     state.settings.period=3600
-    state.alarms,state.nextAlertId,state.alarmsMovedTo=nil,nil,nil
+    -- Keep older stock alarm records in the save for reference.
 end
 -- Lifetime estimates use all accepted deltas/observed time, independent of the
 -- rolling display window. Split time and large integer strings survive LuaJ's
@@ -404,6 +403,29 @@ end
 local function rateText(state,rate,width)
     local text=Me.rateText(rate,width):gsub("/h$",periods[state.settings.period]); return text
 end
+local function fitNumber(value,width,positiveSign)
+    if value==nil then return "--" end
+    local sign=value<0 and "-" or positiveSign and value>0 and "+" or ""
+    local magnitude=math.abs(value)
+    for _,suffix in ipairs({"","k","M","B","T","P"}) do
+        local whole=sign..Me.digits(positiveSign and math.floor(magnitude+.5) or magnitude)..suffix
+        if #whole<=width then
+            if suffix~="" then
+                local decimal=sign..string.format("%.1f",magnitude)..suffix
+                if #decimal<=width then return decimal end
+            end
+            return whole
+        end
+        magnitude=magnitude/1000
+    end
+    return "--"
+end
+local function fitRate(state,rate,width)
+    local text=rateText(state,rate):gsub(" ","")
+    if #text<=width then return text end
+    local unit=periods[state.settings.period]
+    return fitNumber(rate,width-#unit,true)..unit
+end
 local function hvRateCaption(rate)
     local perMinute=Me.rateText(rate*60):gsub("^%+",""):gsub("/h$","/min")
     local perHour=Me.rateText(rate*3600):gsub("^%+","")
@@ -631,7 +653,12 @@ local function form(w,h,state,api,context)
     local accent=api.getAppColour(name)
     if screen=="home" then
         local rows,s=rowsFor(state,view,context.windowId,"overview",api)
-        local wide=w>=36; local rowH=wide and 1 or 2; local top=dashboard(ui,w,h,state,api)
+        local wide,inline=w>=36,w>=22
+        local rowH=inline and 1 or 2
+        local fields=w>=58 and 3 or 2
+        local col=math.max(9,math.floor(w/(fields+1)))
+        local start=w-fields*col+1
+        local top=dashboard(ui,w,h,state,api)
         local capacity=math.max(1,math.floor((h-top)/rowH))
         local sticky,scroll={},{}
         for _,item in ipairs(rows) do local m=pinFor(state,item)
@@ -653,45 +680,54 @@ local function form(w,h,state,api,context)
             local contrast=api.ui.contrast(bg)
             local function ink(color) return contrast==1 and color or contrast end
             local labelColor=custom and contrast or ink(groupColors[itemGroup(item)])
-            local amountColor=count and ink(32) or ink(256)
-            local function directionColor(value) return ink(value and value>0 and 8192 or value and value<0 and 16384 or 256) end
+            local amountColor=count~=nil and contrast or ink(256)
+            local function directionColor(value) return ink(value and value>0 and 32 or value and value<0 and 64 or 256) end
+            local function write(x,line,value,span,fg,center)
+                ui.put(x,line,value,span,center)
+                ui.style(x,line,span,1,fg,nil)
+            end
             ui.style(1,y,w,rowH,contrast,bg)
             local label=(m and (m.stick and "^ " or "* ") or "")..(m and m.name or hv and state.hv.name or item.name)
             if not hv and state.hv.item and item.key==state.hv.item.key then label=label.." (farm)" end
             if wide then
-                local fields=w>=58 and 3 or 2; local col=math.max(9,math.floor(w/(fields+1)))
-                local start=w-fields*col+1
-                ui.put(2,y,label,start-3)
-                ui.style(2,y,start-3,1,labelColor,nil)
-                ui.put(start,y,Me.amount(count,col),col,true)
-                ui.style(start,y,col,1,amountColor,nil)
+                write(2,y,label,start-3,labelColor)
+                local amount=Me.amount(count,col)
+                write(start,y,#amount<=col and amount or fitNumber(count,col),col,amountColor,true)
                 if fields==3 then
-                    ui.put(start+col,y,(delta and delta>0 and "+" or "")..Me.amount(delta,col),col,true)
-                    ui.style(start+col,y,col,1,directionColor(delta),nil)
+                    local change=(delta and delta>0 and "+" or "")..Me.amount(delta,col-1)
+                    write(start+col,y,#change<=col and change or fitNumber(delta,col,true),col,directionColor(delta),true)
                 end
-                local rateLabel=hv and rate==nil and count~=nil and "Warm "..rateProgress("hv").."s" or rateText(state,rate,col)
-                ui.put(w-col+1,y,rateLabel,col,true)
-                ui.style(w-col+1,y,col,1,directionColor(rate),nil)
+                local rateLabel=hv and rate==nil and count~=nil and "Warm "..rateProgress("hv").."s" or fitRate(state,rate,col)
+                write(w-col+1,y,rateLabel,col,directionColor(rate),true)
+            elseif inline then
+                -- Reserve room for a recognizable name and the two column gaps.
+                local budget=w-8
+                local preferredRate=rateText(state,rate):gsub(" ","")
+                local amount=fitNumber(count,budget-math.min(#preferredRate,7))
+                local rateLabel=fitRate(state,rate,budget-#amount)
+                local rateX=w-#rateLabel+1
+                local countX=rateX-#amount-1
+                write(1,y,label,countX-2,labelColor)
+                write(countX,y,amount,#amount,amountColor)
+                write(rateX,y,rateLabel,#rateLabel,directionColor(rate))
             else
-                local q=Me.amount(count,0)
-                local r=rateText(state,rate):gsub(" ","")
-                if #q+#r+1>w then r=Me.rateText(rate,0):gsub("/h$",periods[state.settings.period]) end
+                local q=fitNumber(count,w)
+                local r=fitRate(state,rate,math.max(5,w-#q-1))
                 if #q+#r+1<=w then
                     local x=1+math.floor((w-#q-#r-1)/2)
-                    ui.put(1,y,label,w,true); ui.style(1,y,w,1,labelColor,nil)
-                    ui.put(x,y+1,q,#q); ui.style(x,y+1,#q,1,amountColor,nil)
-                    ui.put(x+#q+1,y+1,r,#r); ui.style(x+#q+1,y+1,#r,1,directionColor(rate),nil)
+                    write(1,y,label,w,labelColor,true)
+                    write(x,y+1,q,#q,amountColor)
+                    write(x+#q+1,y+1,r,#r,directionColor(rate))
                 else
-                    local span=math.min(#r,math.max(3,w-4))
-                    ui.put(1,y,hv and "HV" or label,w-span-1); ui.style(1,y,w-span-1,1,labelColor,nil)
-                    ui.put(w-span+1,y,r,span); ui.style(w-span+1,y,span,1,directionColor(rate),nil)
-                    ui.put(1,y+1,Me.amount(count,w),w,true); ui.style(1,y+1,w,1,amountColor,nil)
+                    r=fitRate(state,rate,w-4)
+                    write(1,y,hv and "HV" or label,w-#r-1,labelColor)
+                    write(w-#r+1,y,r,#r,directionColor(rate))
+                    write(1,y+1,q,w,amountColor,true)
                 end
             end
             ui.hits[#ui.hits+1]={x1=1,x2=w,y1=y,y2=y+rowH-1,action="item",value={key=key,item=hv and state.hv.item and Me.identity(state.hv.item) or not hv and Me.identity(item) or nil}}
         end
         if wide then
-            local fields=w>=58 and 3 or 2; local col=math.max(9,math.floor(w/(fields+1))); local start=w-fields*col+1
             ui.style(1,top-1,w,1,1,128)
             local order=view.overviewSort
             local function indicator(field) return order and order.field==field and (order.descending and " v" or " ^") or "" end
@@ -741,12 +777,13 @@ local function form(w,h,state,api,context)
         local source=state.sources[hv and "main" or "farm"] or {}
         local path=api.ui.breadcrumb({hv and "Main ME" or "Farm ME",source.clientId and api.clientName(source.clientId),source.side,source.target},w,h)
         if path then ui.put(1,2,path,w); ui.style(1,2,w,1,256,32768); start=3 end
-        local rowH=w>=32 and 1 or 2; local slots=math.max(1,math.floor((h-start)/rowH)); if #rows>slots then slots=math.max(1,math.floor((h-start-1)/rowH)) end
+        local rowH=w>=22 and 1 or 2; local slots=math.max(1,math.floor((h-start)/rowH)); if #rows>slots then slots=math.max(1,math.floor((h-start-1)/rowH)) end
         local first=ui.page("items",#rows,slots,h-1)
         for i=1,slots do local item=rows[first+i]; if item then
             local y=start+(i-1)*rowH; local bg=i%2==0 and state.settings.panel or state.settings.background
             ui.style(1,y,w,rowH,api.ui.contrast(bg),bg)
-            local q=Me.amount(Me.count(item.hv and snapshots.main or s,item.key),math.floor(w/2))
+            local count=Me.count(item.hv and snapshots.main or s,item.key)
+            local q=fitNumber(count,math.floor(w/2))
             ui.put(1,y,item.name..(item.hv and " [main]" or ""),rowH==1 and w-#q-1 or w); ui.put(rowH==1 and w-#q+1 or 1,y+rowH-1,q,rowH==1 and #q or w,rowH>1)
             local value=Me.identity(item); value.hv=item.hv
             ui.hits[#ui.hits+1]={x1=1,x2=w,y1=y,y2=y+rowH-1,action="selectItem",value=value}

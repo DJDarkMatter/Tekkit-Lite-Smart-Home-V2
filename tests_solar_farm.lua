@@ -109,12 +109,14 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         t.view().screen="menu"; t.failSave=true; t.click("period"); equal(t.state.settings.period,before.settings.period); equal(t.state.elapsed,before.elapsed); equal(t.state.hv.item.raw,before.hv.item.raw)
         t.view().screen="home"; t.click("pin"); t.click("selectItem",function(v) return v.raw=="solar.lv" end); equal(#t.state.metrics,0)
     end
-    function tests.solar_schema_upgrade_preserves_bindings_and_requires_alarm_migration_first()
+    function tests.solar_schema_upgrade_preserves_bindings_and_legacy_alarm_data()
         local item={raw="solar.hv",name="HV Solar",damage=0,key=Me.itemKey("solar.hv",0,"HV Solar")}
         local old={version=1,sources={},metrics={{id=1,name="HV",item=item,colour=32,history={}}},catalog={},alarms={},nextId=2,nextAlertId=1,elapsed=10,
             settings={dropCount=64,dropPercent=5,window=900,background=32768,panel=128}}
         local t=setup("solar_farm",true,{state=Me.copy(old)}); equal(t.state.version,2); equal(t.state.hv.item.raw,"solar.hv"); equal(#t.state.metrics,0)
-        old.alarms={{id=1}}; local ok,err=pcall(setup,"solar_farm",true,{state=old}); equal(ok,false); assert(tostring(err):find("level_emitter",1,true)); equal(old.version,1); equal(#old.alarms,1)
+        old.alarms={{id=1,name="Saved stock alarm"}}
+        local upgraded=setup("solar_farm",true,{state=old})
+        equal(upgraded.state.version,2); equal(upgraded.state.alarms[1].name,"Saved stock alarm")
     end
     function tests.solar_overview_adds_new_farm_items_and_keeps_hv_sources_separate()
         local t=setup("solar_farm",true); t.configure(); t.content()
@@ -124,7 +126,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         local found={}; for _,hit in ipairs(t.content().hits) do if hit.action=="item" and hit.value.item and hit.value.item.raw=="solar.hv" then found[hit.value.key]=true end end
         assert(found.hv and found[Me.itemKey("solar.hv",0,"HV Solar")])
     end
-    function tests.v30_installer_fetches_three_real_apps_via_github_api_without_bundling_or_autostarting_screensaver()
+    function tests.v46_installer_fetches_active_apps_and_refuses_to_download_the_retired_app()
         local bus=newBus(); local central=bus.computer(10,"server")
         central.env.shell={dir=function() return "" end}
         local install=assert(central.env.loadfile("install.lua")); install("server","--startup")
@@ -136,11 +138,14 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
             local file=assert(io.open(appName,"r")); local body=file:read("*a"); file:close()
             return {readAll=function() return githubFile(appName,body) end,close=function() end}
         end}
-        for _,appName in ipairs({"level_emitter","solar_farm","screensaver"}) do
+        local ok,why=pcall(install,"app","level_emitter")
+        equal(ok,false); assert(why:find("retired",1,true)); equal(downloads,0)
+        equal(central.disk.files["apps_level_emitter.lua"],nil)
+        for _,appName in ipairs({"solar_farm","screensaver"}) do
             equal(central.disk.files["apps_"..appName..".lua"],nil); install("app",appName)
         end
-        equal(downloads,3); central:start(); bus.advance(1)
-        equal(central.server.running.level_emitter,true); equal(central.server.running.solar_farm,true); equal(central.server.running.screensaver,nil)
+        equal(downloads,2); central:start(); bus.advance(1)
+        equal(central.server.running.solar_farm,true); equal(central.server.running.screensaver,nil)
         equal(next(central.server.state.windows),nil)
     end
     function tests.solar_hv_stick_can_be_disabled_unpinned_and_repinned_without_reverting_to_farm_measurements()
@@ -381,6 +386,36 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
             if hit.action=="item" and hit.value.key==rows[3] then generatorColor=nameColors[hit.y1] end
         end
         equal(generatorColor,2)
+    end
+    function tests.v46_solar_compact_list_has_full_width_single_line_rows_with_bright_rates()
+        local t=setup("solar_farm",true,{width=28,height=10}); t.configure()
+        for i=1,10 do t.farm[#t.farm+1]={Name="Ingredient "..i,RawName="test.item."..i,DamageValue=0,Size=1} end
+        t.farm[2].Size=72; t.advance(2)
+        local lvKey=Me.itemKey("solar.lv",0,"LV Solar")
+        local lines=t.content()
+        local visible, lvRow=0
+        for _,hit in ipairs(lines.hits) do
+            if hit.action=="item" then
+                visible=visible+1
+                equal(hit.x1,1); equal(hit.x2,28); equal(hit.y1,hit.y2)
+                if hit.value.key==lvKey then lvRow=hit.y1 end
+            end
+        end
+        equal(visible,8)
+        equal(lvRow,3)
+        assert(lines[lvRow]:find("LV Solar",1,true) and lines[lvRow]:find("72",1,true))
+        equal(lines[lvRow]:sub(-2),"/h")
+        local brightRate, whiteCount=false,false
+        for _,style in ipairs(lines.styles) do
+            if style.y==lvRow then
+                assert(style.fg~=8192,"Dark green is unreadable on the gray row")
+                if style.fg==32 and style.x+style.width-1==28 then brightRate=true end
+                if style.fg==1 and lines[lvRow]:sub(style.x,style.x+style.width-1)=="72" then whiteCount=true end
+            end
+        end
+        assert(brightRate and whiteCount)
+        t.click("item",function(value) return value.key==lvKey end)
+        assert(t.text():find("Amount: 72",1,true))
     end
     function tests.solar_large_learning_counts_and_fractional_time_remain_precise_across_legacy_checkpoints()
         local t=setup("solar_farm",true); t.configure(); restartLearning(t)

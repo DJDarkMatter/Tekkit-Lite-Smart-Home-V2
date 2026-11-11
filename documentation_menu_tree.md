@@ -122,7 +122,7 @@ Recent alert history and the separate acknowledgment popup.
   - [Alert] / Details — Time, message and Active or Closed status. Back returns to the list.
   - Back — Closes the inbox.
 - [Active popup] — Separate modal shown above the desktop and fullscreen apps.
-  - OK — Acknowledges through the originating app. Clock and Level emitter can also use a configured dismiss input.
+  - OK — Acknowledges through the originating app. Clock can also use a configured dismiss input.
 
 ### Shared dialogs
 
@@ -157,10 +157,10 @@ Reusable picker and editor flows linked from their calling menus.
   - Set / Save / Find — Apply the draft using the calling screen's action.
   - Clr / Back — Clear the draft or return.
 - <a name="shared-dialogs-number-pad"></a> Number pad
-  - [Digits / Clr / Del] — Enter a whole number. Clock's world-time editor uses HHMM.
+  - [Digits / Clr / Del] — Full-size tiles fill the space below the draft. Clock uses HHMM for world time.
   - Set / Back — Apply the draft or return. The caller validates the value.
 - <a name="shared-dialogs-decimal-pad"></a> Decimal number pad
-  - [Digits / . / Del] — Enter decimal seconds for a Switchboard button or Logic Sandbox Wait.
+  - [Digits / . / Del] — Full-size tiles enter decimal seconds for a Switchboard button or Logic Sandbox Wait.
   - Set / Back — Apply the draft or return. The caller checks precision and range.
 
 ## Automation
@@ -256,58 +256,6 @@ Harvest countdown, player input, output routing and counters.
       - Reset timer? — Confirm or Cancel. Confirm starts a fresh countdown.
     - Import save
       - Import save? — Confirm or Cancel. Reads countdown_state.txt and imports paused.
-
-### Level emitter
-
-Item-count rules with hold, rearm and optional signal outputs.
-
-**Path** Desktop → Start → Level emitter
-
-**Source** [apps_level_emitter.lua](apps_level_emitter.lua), [documentation_level_emitter.md](documentation_level_emitter.md)
-
-- + Add — Select an AE sensor, then choose an item.
-  - [[AE sensor picker]](#shared-dialogs-sensor-picker) — Select a sensor client, AE card side and target.
-    - [Select item](#level-emitter-item) — After accepting the sensor.
-      - [Level rule](#level-emitter-edit-rule) — After choosing an item.
-- [Rule]
-  - Enable / Disable — Toggles evaluation of the rule.
-  - <a name="level-emitter-edit-rule"></a> Edit rule / Level rule — Editing is unavailable while its alert is pending.
-    - [Name](#shared-dialogs-touch-keyboard) — Touch keyboard.
-    - <a name="level-emitter-item"></a> Item / Select item
-      - [Item] — Uses the selected identity and returns to the rule editor.
-      - Find / Item list
-        - [Search](#shared-dialogs-touch-keyboard) — Touch keyboard.
-        - Sort / Order — Name or amount, ascending or descending.
-        - Refresh — Rebuilds the item list.
-        - Manual item / Register absent item
-          - [Name / RawName](#shared-dialogs-touch-keyboard) — Enter the display name and exact raw item name.
-          - [Damage](#shared-dialogs-number-pad) — Enter the item's damage value.
-          - Use item — Uses the manual identity.
-    - [ME / Select ME](#shared-dialogs-sensor-picker) — Changes the rule's AE sensor.
-    - Condition / Compare item count
-      - Under (<)
-      - Over (>)
-      - Exactly (=) — Rearms when the count differs.
-    - [Level](#shared-dialogs-number-pad) — Target item count.
-    - [Hold](#shared-dialogs-number-pad) — Required matching duration in seconds.
-    - Enabled — Yes or No.
-    - [Rearm](#shared-dialogs-number-pad) — Count at which an Under/Over rule can rearm.
-    - [Select output (optional)](#shared-dialogs-redstone-picker) — Bind a redstone output.
-    - [Select dismiss input](#shared-dialogs-redstone-picker) — Bind an acknowledgment input.
-    - Signal — Cycles Constant and Pattern.
-    - [Length](#shared-dialogs-number-pad) — Constant only. Zero means Until OK.
-    - [On / Off / Total](#shared-dialogs-number-pad) — Pattern only. Total zero means Until OK.
-    - Disconnect output — Clears the draft's existing output.
-    - Clear dismiss input — Clears the draft's existing input.
-    - Save / Cancel — Save the rule or discard the draft.
-  - Item and IO details — Identity, sensor, thresholds, routes and source status.
-  - Delete rule
-    - Delete level rule? — Delete or Cancel.
-- Menu
-  - [UI color](#shared-dialogs-os-color-palette) — Standard OS palette.
-  - About / alarm behavior — Threshold, signal, latching and acknowledgment rules.
-  - Imported Solar rules — Read-only migration count.
-- [[Rule alert popup]](#alert-inbox) — OK or the configured dismiss input acknowledges it.
 
 ### Logic Sandbox
 
@@ -603,7 +551,7 @@ Finished HV arrivals, panel equivalents and production-sorted farm stock.
 
 - HV output — Shows completed observation minutes and rates per minute and per hour. Tap for details.
 - [Item / Amount header] — Where visible, touch to sort. Touch again to reverse.
-- [Item row] / Item overview — Amount, change, rate and observed time. HV also shows farm panel equivalents and combined net equivalents.
+- [Item row] / Item overview — A single line holds the item, amount and rate when it fits. HV also shows farm panel equivalents and combined net equivalents.
   - Pin item / Edit pin
     - [Name](#shared-dialogs-touch-keyboard) — Touch keyboard.
     - Stick — Keeps the pinned row above the sorted list.

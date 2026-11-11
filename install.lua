@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v45
+-- SmartHome OS installer: bundled-v46
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -823,9 +823,19 @@ function Gui.form(width,height,view,accent,background,panel)
     end
     function ui.numberPad(title,draft,back,decimal)
         ui.heading(title,accent); ui.put(1,2,draft=="" and "0" or draft,width,true)
-        for i,key in ipairs({"1","2","3","4","5","6","7","8","9",decimal and "." or "Clr","0","Del"}) do
-            local col,row=(i-1)%4,math.floor((i-1)/4)
-            ui.action(3+row,key,"digit",key,1+math.floor(col*width/4),math.floor((col+1)*width/4),true,accent)
+        local keyHeight = height - 3
+        local primary = accent or 2048
+        local alternate = panel == primary and (primary == 128 and 256 or 128) or panel
+        local keys = {"1", "2", "3", "4", "5", "6", "7", "8", "9", decimal and "." or "Clr", "0", "Del"}
+        for i, key in ipairs(keys) do
+            local column, row = (i - 1) % 4, math.floor((i - 1) / 4)
+            local x1, x2 = 1 + math.floor(column * width / 4), math.floor((column + 1) * width / 4)
+            local y1, y2 = 3 + math.floor(row * keyHeight / 3), 2 + math.floor((row + 1) * keyHeight / 3)
+            local bg = (column + row) % 2 == 0 and primary or alternate
+            ui.style(x1, y1, x2 - x1 + 1, y2 - y1 + 1, Gui.contrast(bg), bg)
+            ui.action(math.floor((y1 + y2) / 2), key, "digit", key, x1, x2, true, bg)
+            local hit = ui.hits[#ui.hits]
+            hit.y1, hit.y2 = y1, y2
         end
         ui.footer({{"Set","setNumber"},{"Back",back}})
     end
@@ -2145,11 +2155,12 @@ local Inbox = dofile("lib_alert_inbox.lua")
 local systemColours = {background = {field = "backgroundColour", title = "Background"},
     windowBorder = {field = "windowBorderColour", title = "Window border"}, taskbar = {field = "taskbarColour", title = "Taskbar"}}
 local defaultAppearance = {backgroundColour = 2048, windowBorderColour = 128, taskbarColour = 128}
+local solarAlarmName = "^solar_farm_alarm_%d+$"
 local legacyOutputNames = {
     {"^coffee_harvest$", "coffee"}, {"^switchboard_switch_%d+$", "switchboard"},
     {"^reactors_switch_%d+$", "reactors"}, {"^clock_alarm_%d+$", "clock"},
     {"^clock_timer_%d+$", "clock"}, {"^level_emitter_rule_%d+$", "level_emitter"},
-    {"^solar_farm_alarm_%d+$", "solar_farm"},
+    {solarAlarmName, "level_emitter"},
 }
 local sideSet = {top = true, bottom = true, left = true, right = true, front = true, back = true}
 local function integer(value, low, high)
@@ -2470,6 +2481,7 @@ function Server.new(net, storage, config, logger)
 
     local function isService(app) return app.backgroundService == true or app.render == nil end
     local function loadApp(name)
+        if name == "level_emitter" then return false end
         local chunk, err = loadfile("apps_" .. name .. ".lua")
         local ok, app = false, err
         if chunk then ok, app = Work.call(chunk) end
@@ -3367,8 +3379,10 @@ function Server.new(net, storage, config, logger)
         end
         for name, mapping in pairs(state.outputMap) do
             local owner = type(mapping.owner) == "string" and mapping.owner or nil
-            -- Imported Solar farm rules keep their old logical output names.
-            if aliases[name] == "level_emitter" and owner == "solar_farm" then owner = "level_emitter" end
+            -- Retire the old Solar stock alarms, including aliases imported by Level Emitter.
+            if owner == "solar_farm" and (aliases[name] == "level_emitter" or name:match(solarAlarmName)) then
+                owner = "level_emitter"
+            end
             owner = owner or aliases[name]
             if not owner then
                 for _, legacy in ipairs(legacyOutputNames) do
@@ -3405,10 +3419,8 @@ function Server.new(net, storage, config, logger)
         local coffee = state.appStates.coffee or {}
         add(coffee.playerInput, "input", "coffee")
         local clock = state.appStates.clock or {}
-        local emitter = state.appStates.level_emitter or {}
         for _, item in ipairs(clock.alarms or {}) do add(item.dismissInput, "input", "clock") end
         for _, item in ipairs(clock.timers or {}) do add(item.dismissInput, "input", "clock") end
-        for _, item in ipairs(emitter.rules or {}) do add(item.dismissInput, "input", "level_emitter") end
         for _, name in ipairs(sortedKeys(server.apps)) do
             local ok, routes = appCall(name, "ioRoutes", state.appStates[name])
             if ok and type(routes) == "table" then
@@ -3543,7 +3555,7 @@ function Server.new(net, storage, config, logger)
     local function uninstallPath(name) return "uninstall_" .. name .. ".lua" end
     local function appTitle(name)
         local app = definition(name)
-        return app and app.title or name
+        return app and app.title or name == "level_emitter" and "Level Emitter (retired)" or name
     end
     local function installedTargets()
         local result = {}
@@ -3564,6 +3576,30 @@ function Server.new(net, storage, config, logger)
         clearNotifications(name)
     end
 
+    local function archiveAppRoutesAndWindows(name, ifActive)
+        local previousWindows, previousArchive = state.windows, state.archivedRoutes
+        local routes, removals, windows, closed = copy(previousArchive[name] or {}), {}, {}, {}
+        for logical, owner in pairs(savedOutputOwners()) do
+            if owner == name then
+                routes[logical] = copy(state.outputMap[logical])
+                removals[#removals + 1] = {name = logical, remove = true}
+            end
+        end
+        for id, win in pairs(previousWindows) do
+            if win.appName == name then closed[#closed + 1] = win else windows[id] = win end
+        end
+        if ifActive and #removals == 0 and #closed == 0 then return true end
+        state.windows, state.archivedRoutes = windows, copy(previousArchive)
+        state.archivedRoutes[name] = routes
+        local ok, err = checkpointOutputs(removals, true)
+        if not ok then
+            state.windows, state.archivedRoutes = previousWindows, previousArchive
+            return false, err
+        end
+        for _, win in ipairs(closed) do releaseWindow(win, state.appStates[name]) end
+        return true, err, true
+    end
+
     local function uninstallApp(name)
         if not installedApps[name] or not fs.exists(appPath(name)) then return false, "App file is unavailable" end
         local path, staged = appPath(name), uninstallPath(name)
@@ -3571,26 +3607,11 @@ function Server.new(net, storage, config, logger)
         -- executable. A boot after it completes the deletion.
         local ok, err = pcall(fs.move, path, staged)
         if not ok then return false, err end
-        local previousWindows, previousArchive = state.windows, state.archivedRoutes
-        local routes, removals, windows = {}, {}, {}
-        for logical, owner in pairs(savedOutputOwners()) do
-            if owner == name then
-                routes[logical] = copy(state.outputMap[logical])
-                removals[#removals + 1] = {name = logical, remove = true}
-            end
-        end
-        for id, win in pairs(previousWindows) do if win.appName ~= name then windows[id] = win end end
-        state.windows, state.archivedRoutes = windows, copy(previousArchive)
-        state.archivedRoutes[name] = routes
-        ok, err = checkpointOutputs(removals, true)
+        ok, err = archiveAppRoutesAndWindows(name)
         if not ok then
-            state.windows, state.archivedRoutes = previousWindows, previousArchive
             local restored, why = pcall(fs.move, staged, path)
             if not restored then log("App file recovery pending: " .. tostring(why)) end
             return false, err
-        end
-        for id, win in pairs(previousWindows) do
-            if not windows[id] then releaseWindow(win, state.appStates[name]) end
         end
         stopForDataChange(name, state.appStates[name])
         server.apps[name], installedApps[name] = nil, nil
@@ -4452,7 +4473,9 @@ function Server.new(net, storage, config, logger)
     function server.start()
         logUptime(tostring(net.id), "os", true, os.clock())
         -- A persisted boot generation prevents stale output commands after an OS reboot.
-        assert(server.save(), "Cannot checkpoint OS startup")
+        local ok, err, archived = archiveAppRoutesAndWindows("level_emitter", true)
+        assert(ok, err)
+        if not archived then assert(server.save(), "Cannot checkpoint OS startup") end
         for _, file in ipairs(fs.list("")) do
             local name = file:match("^uninstall_([%w_-]+)%.lua$")
             if name and not fs.isDir(file) then
@@ -5229,7 +5252,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v45: starting")
+console.log("SmartHome OS v46: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -6566,7 +6589,7 @@ workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v45")
+print("SmartHome installer: bundled-v46")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
@@ -6582,6 +6605,7 @@ if role == "app" then
         or (source == "--file" or source == "--ref") and args[4] and not args[5]
         or source and source:match("^%w+$") and not args[4], appUsage)
     assert(name ~= "system", "System Overview is built into Settings")
+    assert(name ~= "level_emitter", "Level Emitter has been retired. Use Logic Sandbox for item rules.")
     local github = source == nil or source == "--ref"
     local ref = source == "--ref" and args[4] or "main"
     assert(not github or ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)
@@ -6780,7 +6804,7 @@ if role ~= "app" then
             if migrated then
                 assert(settings.enabledApps == nil or type(settings.enabledApps) == "table", "Invalid enabledApps setting")
                 for name, enabled in pairs(settings.enabledApps or {}) do
-                    if enabled == true and name ~= "system" then
+                    if enabled == true and name ~= "system" and name ~= "level_emitter" then
                         assert(type(name) == "string" and name:match("^[%w_-]+$"), "Invalid enabled app name")
                         local path, oldPath = "apps_" .. name .. ".lua", "Apps/" .. name .. ".lua"
                         if not fs.exists(path) and fs.exists(oldPath) then

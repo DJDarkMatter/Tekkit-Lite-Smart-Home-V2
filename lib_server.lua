@@ -12,11 +12,12 @@ local Inbox = dofile("lib_alert_inbox.lua")
 local systemColours = {background = {field = "backgroundColour", title = "Background"},
     windowBorder = {field = "windowBorderColour", title = "Window border"}, taskbar = {field = "taskbarColour", title = "Taskbar"}}
 local defaultAppearance = {backgroundColour = 2048, windowBorderColour = 128, taskbarColour = 128}
+local solarAlarmName = "^solar_farm_alarm_%d+$"
 local legacyOutputNames = {
     {"^coffee_harvest$", "coffee"}, {"^switchboard_switch_%d+$", "switchboard"},
     {"^reactors_switch_%d+$", "reactors"}, {"^clock_alarm_%d+$", "clock"},
     {"^clock_timer_%d+$", "clock"}, {"^level_emitter_rule_%d+$", "level_emitter"},
-    {"^solar_farm_alarm_%d+$", "solar_farm"},
+    {solarAlarmName, "level_emitter"},
 }
 local sideSet = {top = true, bottom = true, left = true, right = true, front = true, back = true}
 local function integer(value, low, high)
@@ -337,6 +338,7 @@ function Server.new(net, storage, config, logger)
 
     local function isService(app) return app.backgroundService == true or app.render == nil end
     local function loadApp(name)
+        if name == "level_emitter" then return false end
         local chunk, err = loadfile("apps_" .. name .. ".lua")
         local ok, app = false, err
         if chunk then ok, app = Work.call(chunk) end
@@ -1234,8 +1236,10 @@ function Server.new(net, storage, config, logger)
         end
         for name, mapping in pairs(state.outputMap) do
             local owner = type(mapping.owner) == "string" and mapping.owner or nil
-            -- Imported Solar farm rules keep their old logical output names.
-            if aliases[name] == "level_emitter" and owner == "solar_farm" then owner = "level_emitter" end
+            -- Retire the old Solar stock alarms, including aliases imported by Level Emitter.
+            if owner == "solar_farm" and (aliases[name] == "level_emitter" or name:match(solarAlarmName)) then
+                owner = "level_emitter"
+            end
             owner = owner or aliases[name]
             if not owner then
                 for _, legacy in ipairs(legacyOutputNames) do
@@ -1272,10 +1276,8 @@ function Server.new(net, storage, config, logger)
         local coffee = state.appStates.coffee or {}
         add(coffee.playerInput, "input", "coffee")
         local clock = state.appStates.clock or {}
-        local emitter = state.appStates.level_emitter or {}
         for _, item in ipairs(clock.alarms or {}) do add(item.dismissInput, "input", "clock") end
         for _, item in ipairs(clock.timers or {}) do add(item.dismissInput, "input", "clock") end
-        for _, item in ipairs(emitter.rules or {}) do add(item.dismissInput, "input", "level_emitter") end
         for _, name in ipairs(sortedKeys(server.apps)) do
             local ok, routes = appCall(name, "ioRoutes", state.appStates[name])
             if ok and type(routes) == "table" then
@@ -1410,7 +1412,7 @@ function Server.new(net, storage, config, logger)
     local function uninstallPath(name) return "uninstall_" .. name .. ".lua" end
     local function appTitle(name)
         local app = definition(name)
-        return app and app.title or name
+        return app and app.title or name == "level_emitter" and "Level Emitter (retired)" or name
     end
     local function installedTargets()
         local result = {}
@@ -1431,6 +1433,30 @@ function Server.new(net, storage, config, logger)
         clearNotifications(name)
     end
 
+    local function archiveAppRoutesAndWindows(name, ifActive)
+        local previousWindows, previousArchive = state.windows, state.archivedRoutes
+        local routes, removals, windows, closed = copy(previousArchive[name] or {}), {}, {}, {}
+        for logical, owner in pairs(savedOutputOwners()) do
+            if owner == name then
+                routes[logical] = copy(state.outputMap[logical])
+                removals[#removals + 1] = {name = logical, remove = true}
+            end
+        end
+        for id, win in pairs(previousWindows) do
+            if win.appName == name then closed[#closed + 1] = win else windows[id] = win end
+        end
+        if ifActive and #removals == 0 and #closed == 0 then return true end
+        state.windows, state.archivedRoutes = windows, copy(previousArchive)
+        state.archivedRoutes[name] = routes
+        local ok, err = checkpointOutputs(removals, true)
+        if not ok then
+            state.windows, state.archivedRoutes = previousWindows, previousArchive
+            return false, err
+        end
+        for _, win in ipairs(closed) do releaseWindow(win, state.appStates[name]) end
+        return true, err, true
+    end
+
     local function uninstallApp(name)
         if not installedApps[name] or not fs.exists(appPath(name)) then return false, "App file is unavailable" end
         local path, staged = appPath(name), uninstallPath(name)
@@ -1438,26 +1464,11 @@ function Server.new(net, storage, config, logger)
         -- executable. A boot after it completes the deletion.
         local ok, err = pcall(fs.move, path, staged)
         if not ok then return false, err end
-        local previousWindows, previousArchive = state.windows, state.archivedRoutes
-        local routes, removals, windows = {}, {}, {}
-        for logical, owner in pairs(savedOutputOwners()) do
-            if owner == name then
-                routes[logical] = copy(state.outputMap[logical])
-                removals[#removals + 1] = {name = logical, remove = true}
-            end
-        end
-        for id, win in pairs(previousWindows) do if win.appName ~= name then windows[id] = win end end
-        state.windows, state.archivedRoutes = windows, copy(previousArchive)
-        state.archivedRoutes[name] = routes
-        ok, err = checkpointOutputs(removals, true)
+        ok, err = archiveAppRoutesAndWindows(name)
         if not ok then
-            state.windows, state.archivedRoutes = previousWindows, previousArchive
             local restored, why = pcall(fs.move, staged, path)
             if not restored then log("App file recovery pending: " .. tostring(why)) end
             return false, err
-        end
-        for id, win in pairs(previousWindows) do
-            if not windows[id] then releaseWindow(win, state.appStates[name]) end
         end
         stopForDataChange(name, state.appStates[name])
         server.apps[name], installedApps[name] = nil, nil
@@ -2319,7 +2330,9 @@ function Server.new(net, storage, config, logger)
     function server.start()
         logUptime(tostring(net.id), "os", true, os.clock())
         -- A persisted boot generation prevents stale output commands after an OS reboot.
-        assert(server.save(), "Cannot checkpoint OS startup")
+        local ok, err, archived = archiveAppRoutesAndWindows("level_emitter", true)
+        assert(ok, err)
+        if not archived then assert(server.save(), "Cannot checkpoint OS startup") end
         for _, file in ipairs(fs.list("")) do
             local name = file:match("^uninstall_([%w_-]+)%.lua$")
             if name and not fs.isDir(file) then

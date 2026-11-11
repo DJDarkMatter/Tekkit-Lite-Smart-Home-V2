@@ -215,7 +215,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     end
 
     function tests.v41_all_apps_open_on_compact_and_large_monitors_in_one_os()
-        local names = {"clock", "coffee", "io_scope", "level_emitter", "logic_sandbox", "me_monitor", "me_storage",
+        local names = {"clock", "coffee", "io_scope", "logic_sandbox", "me_monitor", "me_storage",
             "notes", "reactors", "screensaver", "solar_farm", "switchboard", "window_presets"}
         local enabled = {}
         for _, name in ipairs(names) do enabled[name] = true end

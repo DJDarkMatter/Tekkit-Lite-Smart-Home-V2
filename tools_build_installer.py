@@ -16,7 +16,7 @@ def lua_string(value):
         equals += "="
     return "[" + equals + "[" + value + "]" + equals + "]"
 
-header = '''-- SmartHome OS installer: bundled-v45
+header = '''-- SmartHome OS installer: bundled-v46
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -33,7 +33,7 @@ workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v45")
+print("SmartHome installer: bundled-v46")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 if not entry[role] and role ~= "app" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
@@ -49,6 +49,7 @@ if role == "app" then
         or (source == "--file" or source == "--ref") and args[4] and not args[5]
         or source and source:match("^%w+$") and not args[4], appUsage)
     assert(name ~= "system", "System Overview is built into Settings")
+    assert(name ~= "level_emitter", "Level Emitter has been retired. Use Logic Sandbox for item rules.")
     local github = source == nil or source == "--ref"
     local ref = source == "--ref" and args[4] or "main"
     assert(not github or ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)
@@ -247,7 +248,7 @@ if role ~= "app" then
             if migrated then
                 assert(settings.enabledApps == nil or type(settings.enabledApps) == "table", "Invalid enabledApps setting")
                 for name, enabled in pairs(settings.enabledApps or {}) do
-                    if enabled == true and name ~= "system" then
+                    if enabled == true and name ~= "system" and name ~= "level_emitter" then
                         assert(type(name) == "string" and name:match("^[%w_-]+$"), "Invalid enabled app name")
                         local path, oldPath = "apps_" .. name .. ".lua", "Apps/" .. name .. ".lua"
                         if not fs.exists(path) and fs.exists(oldPath) then

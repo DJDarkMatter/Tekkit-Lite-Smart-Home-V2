@@ -302,7 +302,14 @@ local function build(width,height,state,api,context)
         screen=kind=="alarm" and "alarms" or "timers"; view.screen=screen
     end
     if (screen=="edit" or screen=="number" or screen=="keyboard") and not view.draft then screen,view.screen="home","home" end
-    local ui,accent=api.ui.content(width,height),api.getAppColour(context.appName or appName)
+    local accent=api.getAppColour(context.appName or appName)
+    if screen=="number" then
+        local field=view.number
+        local pad=api.ui.form(width,height,view,accent)
+        pad.numberPad(field.key=="minute" and "World time HHMM" or field.key.." (seconds)",field.draft,"edit")
+        return pad.lines,pad.hits
+    end
+    local ui=api.ui.content(width,height)
     ui.style(1,1,width,height,1,32768)
     local function button(y,label,action,value,x1,x2,enabled,bg) ui.button(y,label,action,x1,x2,enabled,bg or 128,nil,value) end
     local function footer(items)
@@ -410,16 +417,6 @@ local function build(width,height,state,api,context)
         end
         menu(draft.kind=="alarm" and "Alarm settings" or "Timer settings",rows,"edit",height-1,
             {{draft.id and "Save" or draft.kind=="timer" and "Start" or "Save","saveDraft"},{"Cancel","cancelDraft"}})
-    elseif screen=="number" then
-        local field=view.number
-        ui.heading(field.key=="minute" and "World time HHMM" or field.key.." (seconds)",accent)
-        ui.text(2,field.draft=="" and "0" or field.draft,true)
-        local labels={"1","2","3","4","5","6","7","8","9","Clr","0","Del"}
-        for i,label in ipairs(labels) do
-            local col,row=(i-1)%4,math.floor((i-1)/4)
-            button(3+row,label,"digit",label,1+math.floor(col*width/4),math.floor((col+1)*width/4),true,accent)
-        end
-        footer({{"Set","setNumber"},{"Back","edit"}})
     elseif screen=="keyboard" then
         local keyboard = view.keyboard
         api.ui.keyboard(ui, width, height, keyboard, accent,

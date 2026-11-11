@@ -14,7 +14,7 @@ return function(newBus,monitor,serialize,unserialize,equal)
         t.data={main={Powered=true,Items=t.main},farm={Powered=true,Items=t.farm}}
         t.width,t.height=options.width or 54,options.height or 20
         local sources={}
-        for _,name in ipairs({"solar_farm","level_emitter","screensaver"}) do sources["apps_"..name..".lua"]=read("apps_"..name..".lua") end
+        for _,name in ipairs({"solar_farm","clock","screensaver"}) do sources["apps_"..name..".lua"]=read("apps_"..name..".lua") end
         if unit then
             local env=setmetatable({os={clock=function() return t.now end}},{__index=_G})
             t.app=assert(loadstring(sources["apps_"..which..".lua"])); setfenv(t.app,env); t.app=t.app()

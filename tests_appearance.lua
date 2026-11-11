@@ -98,6 +98,41 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             Gui.editText(k, "bank", nil, 32); assert(draw("ABC").q)
         end
     end
+    function tests.v46_number_pad_covers_every_cell_between_display_and_footer()
+        local Gui = dofile("lib_gui.lua")
+        for _, size in ipairs({{12,6}, {27,15}, {40,20}}) do
+            local width, height = unpack(size)
+            for _, decimal in ipairs({false, true}) do
+                local ui = Gui.form(width, height, {}, 2048)
+                ui.numberPad("Level", "201000", "edit", decimal)
+                local coverage, digits = {}, 0
+                for _, hit in ipairs(ui.hits) do
+                    if hit.action == "digit" then
+                        digits = digits + 1
+                        assert(hit.y1 >= 3 and hit.y2 < height and hit.x1 >= 1 and hit.x2 <= width)
+                        equal(ui.lines[hit.y]:sub(hit.x1, hit.x2):match("%S+"), hit.value)
+                        for y = hit.y1, hit.y2 do
+                            for x = hit.x1, hit.x2 do
+                                local cell = (y - 3) * width + x
+                                assert(not coverage[cell])
+                                coverage[cell] = true
+                            end
+                        end
+                        local action, value = Gui.actionAt(ui.hits, hit.x2, hit.y2)
+                        equal(action, "digit"); equal(value, hit.value)
+                    end
+                end
+                equal(digits, 12)
+                for cell = 1, (height - 3) * width do assert(coverage[cell], "Gap between keypad tiles") end
+                local _, firstBottomKey = Gui.actionAt(ui.hits, 1, height - 1)
+                equal(firstBottomKey, "9")
+                local _, secondBottomKey = Gui.actionAt(ui.hits, math.floor(width / 4) + 1, height - 1)
+                equal(secondBottomKey, decimal and "." or "Clr")
+                equal(Gui.actionAt(ui.hits, 1, height), "setNumber")
+                equal(Gui.actionAt(ui.hits, width, height), "edit")
+            end
+        end
+    end
     function tests.appearance_route_selectors_keep_previous_choices_visible_and_preserve_compact_paging()
         local Gui=dofile("lib_gui.lua"); local IO=dofile("lib_io_picker.lua"); local Sensor=dofile("lib_sensor_picker.lua")
         local io=IO.new("route","output",{clientId="io_12345",side="bottom"})
@@ -592,6 +627,73 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(id, "commit")
         equal(state.appStates.level_emitter, nil)
         equal(state.outputMap.solar_farm_alarm_1, nil)
+    end
+
+    function tests.v46_retired_level_emitter_keeps_rules_and_releases_only_its_wires()
+        local t = setup(false)
+        local bridge = t.bus.computer(11, "io", {modemSide = "right"}):start()
+        t.bus.advance(2)
+        local state = t.central.server.state
+        local rules = {{name = "Old level rule", outputName = "solar_farm_alarm_1",
+            dismissInput = {clientId = "io_11", side = "left", color = 1}}}
+        state.appStates.level_emitter = {rules = rules}
+        for _, route in ipairs({{"level_emitter_rule_1",1}, {"solar_farm_alarm_1",2},
+            {"level_emitter_rule_2",4}, {"unrelated",4}}) do
+            assert(t.api.mapOutput(route[1], "io_11", "front", route[2], true))
+        end
+        state.outputMap.level_emitter_rule_1.owner = nil
+        state.outputMap.level_emitter_rule_2.owner = "level_emitter"
+        state.outputMap.solar_farm_alarm_1.owner = "solar_farm"
+        local id = t.open("@settings", "top", 1, 1, 46, 18)
+        state.windows[50] = {id = 50, appName = "level_emitter", monitorId = "monitor_13:left",
+            x = 1, y = 1, width = 32, height = 12, order = 50}
+        local config = unserialize(t.central.disk.files["configs_os.txt"])
+        config.enabledApps.level_emitter = true
+        t.central.disk.files["configs_os.txt"] = serialize(config)
+        t.central.disk.files["apps_level_emitter.lua"] = "error('retired app was loaded')"
+        assert(t.api.save())
+        t.bus.advance(2)
+        equal(bridge.bundled.front, 7)
+        t.reboot()
+        state = t.central.server.state
+        equal(t.central.server.apps.level_emitter, nil)
+        equal(t.central.server.running.level_emitter, nil)
+        equal(t.window(50), nil)
+        equal(t.window(id).appName, "@settings")
+        assert(not table.concat(t.central.log, "\n"):find("retired app was loaded", 1, true))
+        equal(state.appStates.level_emitter.rules[1].name, rules[1].name)
+        equal(bridge.bundled.front, 4)
+        for _, name in ipairs({"level_emitter_rule_1", "level_emitter_rule_2", "solar_farm_alarm_1"}) do
+            equal(state.outputMap[name], nil)
+            assert(state.archivedRoutes.level_emitter[name])
+        end
+        local used = t.api.getUsedIO()
+        equal(#used, 1); equal(used[1].color, 4)
+        t.click(id, "data"); t.click(id, "deleteApps")
+        t.click(id, "selectScope", function(item) return item.id == "level_emitter" end)
+        t.click(id, "commit")
+        equal(t.central.disk.files["apps_level_emitter.lua"], nil)
+        assert(state.archivedRoutes.level_emitter.solar_farm_alarm_1)
+        t.reboot()
+        equal(t.central.server.state.appStates.level_emitter.rules[1].name, rules[1].name)
+        equal(bridge.bundled.front, 4)
+    end
+
+    function tests.appearance_app_state_migration_preserves_live_tables_and_rolls_back_failed_saves()
+        local t = setup({["apps_fixture.lua"] = "return {title='Fixture'}"})
+        local state = t.central.server.state
+        local source, target = {sentinel = 42}, state.appStates.fixture
+        state.appStates.source = source
+        local before = serialize(target)
+        local function migrate(a, b) a.sentinel, b.sentinel = nil, 9; return true end
+        t.central.disk.failWrite = true
+        equal(t.api.migrateAppState("source", "fixture", migrate), false)
+        equal(source.sentinel, 42); equal(state.appStates.fixture, target); equal(serialize(target), before)
+        t.central.disk.failWrite = false
+        assert(t.api.migrateAppState("source", "fixture", migrate))
+        equal(source.sentinel, nil); equal(target.sentinel, 9)
+        local detached = t.api.getAppData("fixture"); detached.sentinel = 77
+        equal(target.sentinel, 9)
     end
 
     function tests.appearance_reset_os_settings_clears_desktop_and_os_routes_but_keeps_app_data_and_legacy_routes()

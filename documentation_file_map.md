@@ -6,6 +6,8 @@ All distributed files have unique filenames and live in the repository root. Run
 
 The [menu tree PDF](documentation_menu_tree.pdf), [editable menu source](documentation_menu_tree.md), and `tools_build_menu_tree.py` also live in the root. Full releases include all three. The PDF contains the menu hub, a complete overview, and linked detail pages. System overview is a Settings submenu.
 
+See [v46 files and deletions](documentation_update_v46.md) for the compact Solar Farm, shared keypads and Level Emitter retirement.
+
 | Previous path | New root filename |
 | --- | --- |
 | `main_os.lua` | `main_os.lua` |

@@ -253,9 +253,19 @@ function Gui.form(width,height,view,accent,background,panel)
     end
     function ui.numberPad(title,draft,back,decimal)
         ui.heading(title,accent); ui.put(1,2,draft=="" and "0" or draft,width,true)
-        for i,key in ipairs({"1","2","3","4","5","6","7","8","9",decimal and "." or "Clr","0","Del"}) do
-            local col,row=(i-1)%4,math.floor((i-1)/4)
-            ui.action(3+row,key,"digit",key,1+math.floor(col*width/4),math.floor((col+1)*width/4),true,accent)
+        local keyHeight = height - 3
+        local primary = accent or 2048
+        local alternate = panel == primary and (primary == 128 and 256 or 128) or panel
+        local keys = {"1", "2", "3", "4", "5", "6", "7", "8", "9", decimal and "." or "Clr", "0", "Del"}
+        for i, key in ipairs(keys) do
+            local column, row = (i - 1) % 4, math.floor((i - 1) / 4)
+            local x1, x2 = 1 + math.floor(column * width / 4), math.floor((column + 1) * width / 4)
+            local y1, y2 = 3 + math.floor(row * keyHeight / 3), 2 + math.floor((row + 1) * keyHeight / 3)
+            local bg = (column + row) % 2 == 0 and primary or alternate
+            ui.style(x1, y1, x2 - x1 + 1, y2 - y1 + 1, Gui.contrast(bg), bg)
+            ui.action(math.floor((y1 + y2) / 2), key, "digit", key, x1, x2, true, bg)
+            local hit = ui.hits[#ui.hits]
+            hit.y1, hit.y2 = y1, y2
         end
         ui.footer({{"Set","setNumber"},{"Back",back}})
     end
