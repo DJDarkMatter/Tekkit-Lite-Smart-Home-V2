@@ -77,14 +77,221 @@ end
 function Gui.hit(hit, x, y)
     return x >= hit.x1 and x <= hit.x2 and y >= (hit.y1 or hit.y) and y <= (hit.y2 or hit.y)
 end
+
+function Gui.controlHeight(height)
+    return height < 9 and 1 or math.min(6, math.max(2, math.floor(height / 5)))
+end
+
+-- Give the same space to a row of controls, including its touch regions.
+-- Rows with graphs, artwork or multi-row tiles retain their internal geometry.
+local function expandRows(lines, hits, width, height)
+    local target = Gui.controlHeight(height)
+    if target == 1 then return end
+    target = math.max(target, math.min(8, math.floor(height / 4)))
+    local occupied, locked, controls, sizes = {}, {}, {}, {}
+    for y = 1, height do occupied[y] = lines[y] and lines[y]:find("%S") ~= nil end
+    for _, paint in ipairs(lines.styles) do
+        if paint.y ~= 1 or paint.height ~= height or paint.width ~= width then
+            for y = paint.y, math.min(height, paint.y + (paint.height or 1) - 1) do occupied[y] = true end
+        end
+    end
+    for _, hit in ipairs(hits) do
+        local first, last = hit.y1 or hit.y, hit.y2 or hit.y
+        for y = first, last do
+            occupied[y] = true
+            if last > first then locked[y] = true end
+        end
+        if first == last and hit.paint then controls[first] = true end
+    end
+    local free = height
+    for y = 1, height do
+        sizes[y] = occupied[y] and 1 or 0
+        free = free - sizes[y]
+    end
+    if free == 0 then return end
+    local remaining = free
+    -- Upgrade the footer first when there is only a little spare room.
+    for depth = 2, target do
+        for y = height, 1, -1 do
+            if remaining > 0 and controls[y] and not locked[y] then
+                sizes[y], remaining = depth, remaining - 1
+            end
+        end
+    end
+    if remaining == free then return end
+    local first, last, centre, rows = {}, {}, {}, {}
+    local row, blanks = 1, 0
+    local empty = string.rep(" ", width)
+    for y = 1, height do
+        local size = sizes[y]
+        if not occupied[y] then
+            size = math.floor((blanks + 1) * remaining / free) - math.floor(blanks * remaining / free)
+            blanks = blanks + 1
+        end
+        first[y], last[y] = row, row + size - 1
+        centre[y] = row + math.floor((size - 1) / 2)
+        for out = first[y], last[y] do rows[out] = out == centre[y] and lines[y] or empty end
+        row = row + size
+    end
+    for y = 1, height do lines[y] = rows[y] or empty end
+    for _, paint in ipairs(lines.styles) do
+        local bottom = math.min(height, paint.y + (paint.height or 1) - 1)
+        if first[paint.y] and last[bottom] then
+            paint.y, paint.height = first[paint.y], last[bottom] - first[paint.y] + 1
+        end
+    end
+    for _, hit in ipairs(hits) do
+        local top, bottom = hit.y1 or hit.y, hit.y2 or hit.y
+        hit.y1, hit.y2 = first[top], last[bottom]
+        if hit.y then hit.y = centre[hit.y] end
+    end
+    Work.check(height * 4 + #lines.styles * 4 + #hits * 4)
+end
+
+local function labelAt(lines, x1, x2, y, label)
+    local span = x2 - x1 + 1
+    label = label:sub(1, span)
+    local inset = math.floor((span - #label) / 2)
+    lines[y] = lines[y]:sub(1, x1 - 1) .. string.rep(" ", inset) .. label
+        .. string.rep(" ", span - inset - #label) .. lines[y]:sub(x2 + 1)
+end
+
+local function splitLine(value, width)
+    local cut = #value > width and value:sub(1, width):match("^.*()%s")
+    if cut and cut > 1 then return value:sub(1, cut - 1), value:sub(cut + 1) end
+    return value:sub(1, width), value:sub(width + 1)
+end
+
+local function wrapButtons(lines, hits)
+    for _, hit in ipairs(hits) do
+        if hit.paint and hit.y2 > hit.y1 and #hit.label > hit.x2 - hit.x1 + 1 then
+            local wrapped, rest = {}, hit.label
+            local span = hit.x2 - hit.x1 + 1
+            for _ = hit.y1, hit.y2 do
+                wrapped[#wrapped+1], rest = splitLine(rest, span)
+                if rest == "" then break end
+            end
+            if rest ~= "" and span >= 4 then wrapped[#wrapped] = wrapped[#wrapped]:sub(1, span - 2) .. ".." end
+            labelAt(lines, hit.x1, hit.x2, hit.y, "")
+            hit.y = hit.y1 + math.floor((hit.y2-hit.y1+1-#wrapped)/2)
+            for i, line in ipairs(wrapped) do labelAt(lines, hit.x1, hit.x2, hit.y + i - 1, line) end
+        end
+    end
+end
+
+-- Use a visible seam for touching controls of the same color. Full-width
+-- neutral rows can alternate fills; other controls keep their assigned color.
+local function separateButtons(lines, hits, height)
+    local starts, ends, empty, striped = {}, {}, {}, {}
+    local function seam(hit, x, y, w, h)
+        lines.styles[#lines.styles + 1] = {x=x,y=y,width=w,height=h,bg=Gui.contrast(hit.paint.bg)}
+    end
+    local function blank(x1, x2, first, last)
+        for y = first, last do
+            if lines[y]:sub(x1, x2):find("%S") then return false end
+        end
+        return true
+    end
+    for _, hit in ipairs(hits) do
+        if hit.paint then
+            local top, bottom = hit.y1 or hit.y, hit.y2 or hit.y
+            starts[top], ends[bottom] = starts[top] or {}, ends[bottom] or {}
+            table.insert(starts[top], hit); table.insert(ends[bottom], hit)
+        end
+    end
+    for y = 1, height do
+        local row = starts[y]
+        if row then
+            table.sort(row, function(a,b) return a.x1 < b.x1 end)
+            for index, hit in ipairs(row) do
+                local paint = hit.paint
+                local left = row[index - 1]
+                local above
+                for _, previous in ipairs(ends[y - 1] or empty) do
+                    if previous.x1 <= hit.x2 and previous.x2 >= hit.x1 and previous.paint.bg == paint.bg then
+                        above = previous
+                        break
+                    end
+                end
+                if above and (paint.bg == 128 or paint.bg == 256) then
+                    paint.bg = paint.bg == 128 and 256 or 128
+                    paint.fg = hit.enabled == false and (paint.bg == 128 and 256 or 128) or Gui.contrast(paint.bg)
+                elseif above then
+                    local x1, x2 = math.max(above.x1, hit.x1), math.min(above.x2, hit.x2)
+                    if blank(x1,x2,y,y) then seam(hit,x1,y,x2-x1+1,1)
+                    elseif blank(x1,x2,y-1,y-1) then seam(above,x1,y-1,x2-x1+1,1)
+                    elseif not striped[above] then
+                        if blank(hit.x1,hit.x1,y,y) then seam(hit,hit.x1,y,1,1) end
+                        if blank(hit.x2,hit.x2,y,y) then seam(hit,hit.x2,y,1,1) end
+                        striped[hit] = true
+                    end
+                end
+                if left and left.x2 + 1 == hit.x1 and left.paint.bg == paint.bg then
+                    local bottom = math.min(left.y2 or left.y, hit.y2 or hit.y)
+                    if blank(hit.x1,hit.x1,y,bottom) then seam(hit,hit.x1,y,1,bottom-y+1)
+                    elseif blank(left.x2,left.x2,y,bottom) then seam(left,left.x2,y,1,bottom-y+1)
+                    elseif paint.bg == 128 or paint.bg == 256 then
+                        paint.bg = paint.bg == 128 and 256 or 128
+                        paint.fg = Gui.contrast(paint.bg)
+                    end
+                end
+            end
+        end
+    end
+end
+
+function Gui.finish(lines, width, height, fixed)
+    local hits = lines.hits or {}
+    lines.touchLayout = true
+    if #hits > 0 then
+        if not fixed then expandRows(lines, hits, width, height) end
+        wrapButtons(lines, hits)
+        separateButtons(lines, hits, height)
+    end
+    return lines, hits
+end
+
+local function sameValue(left, right, depth)
+    if left == right then return true end
+    if depth == 0 or type(left) ~= "table" or type(right) ~= "table" then return false end
+    for key, value in pairs(left) do
+        if not sameValue(value, right[key], depth - 1) then return false end
+    end
+    for key in pairs(right) do if left[key] == nil then return false end end
+    return true
+end
+
+function Gui.sameHits(left, right)
+    if #left ~= #right then return false end
+    for i, hit in ipairs(left) do
+        local other = right[i]
+        if hit.x1 ~= other.x1 or hit.x2 ~= other.x2 or (hit.y1 or hit.y) ~= (other.y1 or other.y)
+            or (hit.y2 or hit.y) ~= (other.y2 or other.y) or hit.action ~= other.action
+            or hit.enabled ~= other.enabled or not sameValue(hit.value, other.value, 8) then return false end
+    end
+    return true
+end
+
+local blockDigits = {
+    ["0"] = {"111","101","101","101","111"}, ["1"] = {"010","110","010","010","111"},
+    ["2"] = {"111","001","111","100","111"}, ["3"] = {"111","001","111","001","111"},
+    ["4"] = {"101","101","111","001","001"}, ["5"] = {"111","100","111","001","111"},
+    ["6"] = {"111","100","111","101","111"}, ["7"] = {"111","001","001","001","001"},
+    ["8"] = {"111","101","111","101","111"}, ["9"] = {"111","101","111","001","111"},
+    [":"] = {"0","1","0","1","0"}, ["."] = {"0","0","0","0","1"},
+    ["d"] = {"001","001","111","101","111"}, [" "] = {"0","0","0","0","0"},
+}
+
 -- App widgets return text plus clipped colour rectangles, sharing geometry with hits.
 function Gui.content(width, height)
     local ui = {lines = {styles = {}}, hits = {}}
     ui.lines.hits = ui.hits
     for y = 1, height do ui.lines[y] = string.rep(" ", width); Work.check(width) end
     function ui.style(x, y, w, h, fg, bg)
-        ui.lines.styles[#ui.lines.styles + 1] = {x = x, y = y, width = w, height = h, fg = fg, bg = bg}
+        local paint = {x = x, y = y, width = w, height = h, fg = fg, bg = bg}
+        ui.lines.styles[#ui.lines.styles + 1] = paint
         Work.check(w * h)
+        return paint
     end
     function ui.text(y, text, centred)
         if y < 1 or y > height then return end
@@ -92,19 +299,49 @@ function Gui.content(width, height)
         local left = centred and math.floor((width - #text) / 2) or 0
         ui.lines[y] = string.rep(" ", left) .. text .. string.rep(" ", width - left - #text)
     end
+    function ui.readout(y, value, available, foreground, background)
+        local glyphs, span = {}, -1
+        for i = 1, #value do
+            local glyph = blockDigits[value:sub(i, i)]
+            if not glyph then return 0 end
+            glyphs[i], span = glyph, span + #glyph[1] + 1
+        end
+        if span < 1 then return 0 end
+        local scale = math.floor(math.min((width - 4) / span, available / 5))
+        if scale < 1 then return 0 end
+        local x = 1 + math.floor((width - span * scale) / 2)
+        ui.style(1, y, width, 5 * scale, nil, background)
+        for _, glyph in ipairs(glyphs) do
+            for row, pixels in ipairs(glyph) do
+                for column = 1, #pixels do
+                    if pixels:sub(column, column) == "1" then
+                        ui.style(x + (column - 1) * scale, y + (row - 1) * scale, scale, scale, nil, foreground)
+                    end
+                end
+            end
+            x = x + (#glyph[1] + 1) * scale
+        end
+        return 5 * scale
+    end
     function ui.heading(text, accent)
         ui.text(1, text)
         ui.style(1, 1, width, 1, Gui.contrast(accent or 128), accent or 128)
     end
-    function ui.button(y, label, action, x1, x2, enabled, bg, fg, value)
+    function ui.button(y, label, action, x1, x2, enabled, bg, fg, value, rows)
         x1, x2 = x1 or 1, x2 or width
-        label = label:sub(1, x2 - x1 + 1)
-        local left = math.floor((x2 - x1 + 1 - #label) / 2)
-        local text = string.rep(" ", left) .. label .. string.rep(" ", x2 - x1 + 1 - left - #label)
-        ui.lines[y] = ui.lines[y]:sub(1, x1 - 1) .. text .. ui.lines[y]:sub(x2 + 1)
+        rows = rows or 1
+        local middle = y + math.floor((rows - 1) / 2)
+        labelAt(ui.lines, x1, x2, middle, label)
         bg = enabled == false and 256 or bg or 128
-        ui.style(x1, y, x2 - x1 + 1, 1, enabled == false and 128 or fg or Gui.contrast(bg), bg)
-        ui.hits[#ui.hits + 1] = {x1 = x1, x2 = x2, y = y, action = action, value = value, enabled = enabled}
+        local paint = ui.style(x1, y, x2 - x1 + 1, rows, enabled == false and 128 or fg or Gui.contrast(bg), bg)
+        local hit = {x1 = x1, x2 = x2, y = middle, y1 = y, y2 = y + rows - 1,
+            action = action, value = value, enabled = enabled, paint = paint, label = label}
+        ui.hits[#ui.hits + 1] = hit
+        return hit
+    end
+    function ui.finish(fixed)
+        ui.lines.hits = ui.hits
+        return Gui.finish(ui.lines, width, height, fixed)
     end
     return ui
 end
@@ -115,12 +352,10 @@ function Gui.menu(width, height, title, items, page, back, accent)
     local pages = math.max(1, math.ceil(#items / slots))
     page = math.max(1, math.min(page or 1, pages))
     ui.heading(title .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), accent)
-    local gap = pages == 1 and height >= #items * 2 + 2 and 2 or 1
-    local first = height >= #items * gap + 3 and pages == 1 and 3 or 2
-    local inset = width >= 18 and math.max(2, math.floor((width - 32) / 2)) or 0
+    local inset = width >= 24 and 1 or 0
     for row = 1, slots do
         local item = items[(page - 1) * slots + row]
-        if item then ui.button(first + (row - 1) * gap, item.label, item.action, 1 + inset, width - inset, item.enabled) end
+        if item then ui.button(row + 1, item.label, item.action, 1 + inset, width - inset, item.enabled) end
     end
     if pages > 1 then
         local half = math.floor(width / 2)
@@ -128,26 +363,41 @@ function Gui.menu(width, height, title, items, page, back, accent)
         ui.button(height - 1, "Next >", "next", half + 1, width, page < pages)
     end
     ui.button(height, "Back", back)
+    ui.finish()
     return ui.lines, ui.hits, page, pages
 end
-function Gui.palette(width, height, current, title)
+function Gui.palette(width, height, current, title, swatchBottom)
     local ui = Gui.content(width, height)
+    ui.style(1, 1, width, height, 1, 32768)
     ui.heading(title or "UI color", 128)
-    local cellWidth, cellHeight = math.floor((width - 3) / 4), math.min(2, math.floor((height - 2) / 4))
+    -- Existing apps may reserve rows 10 and onward for their own previews.
+    local adaptive = swatchBottom ~= nil
+    local footer = adaptive and math.min(Gui.controlHeight(height), height - 5) or 1
+    local bottom = swatchBottom or (adaptive and height - footer or 1 + 4 * math.min(2, math.floor((height-2)/4)))
+    local available = bottom - 1
+    local rowGap = available >= 11 and 1 or 0
+    local rows = available - rowGap * 3
     local short = {"White", "Orange", "Mag.", "Sky", "Yellow", "Lime", "Pink", "Gray", "L.gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
     for index = 0, 15 do
-        local x, y = 1 + index % 4 * (cellWidth + 1), 2 + math.floor(index / 4) * cellHeight
+        local col, row = index % 4, math.floor(index / 4)
+        local x = 1 + math.floor(col * (width + 1) / 4)
+        local right = math.floor((col + 1) * (width + 1) / 4) - 1
+        local y = 2 + math.floor(row * rows / 4) + row * rowGap
+        local depth = math.floor((row + 1) * rows / 4) - math.floor(row * rows / 4)
         local colour = 2 ^ index
-        ui.style(x, y, cellWidth, cellHeight, Gui.contrast(colour), colour)
-        local label = colour == current and "*" or cellWidth >= 6 and short[index + 1] or ""
-        local left = math.floor((cellWidth - #label) / 2)
-        local row = ui.lines[y]
-        ui.lines[y] = row:sub(1, x - 1) .. string.rep(" ", left) .. label
-            .. string.rep(" ", cellWidth - left - #label) .. row:sub(x + cellWidth)
-        ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + cellWidth - 1, y = y, y1 = y,
-            y2 = y + cellHeight - 1, action = "colour", value = colour}
+        local label = colour == current and "*" or right - x >= 5 and short[index + 1] or ""
+        local hit = ui.button(y, label, "colour", x, right, true, colour, nil, colour, depth)
+        -- A black swatch needs a visible edge against the palette background.
+        if colour == 32768 then
+            ui.style(x, y, 1, depth, nil, 128)
+            ui.style(right, y, 1, depth, nil, 128)
+        end
+        hit.paint = nil
     end
-    ui.button(height, "Back", "cancel")
+    if not swatchBottom then
+        ui.button(height - footer + 1, "Back", "cancel", nil, nil, nil, nil, nil, nil, footer)
+        return ui.finish(true)
+    end
     return ui.lines, ui.hits
 end
 local letterRows = {"qwertyuiop", "asdfghjkl", "zxcvbnm"}
@@ -160,8 +410,9 @@ function Gui.keyboard(ui, width, height, k, accent, footer)
     k.page, k.pages = math.max(1, math.min(k.page or 1, pages)), pages
     ui.heading(k.draft == "" and "Type here" or k.draft:sub(-width), accent)
     local keyWidth = math.floor(width / columns)
-    local gap, rowGap = width >= 30 and 1 or 0, height >= 10 and 1 or 0
-    local available = height - 3 + rowGap
+    local controlRows = math.min(Gui.controlHeight(height), math.max(1, math.floor((height - 4) / 4)))
+    local gap, rowGap = width >= 30 and 1 or 0, height - 2 * controlRows >= 8 and 1 or 0
+    local available = height - 1 - 2 * controlRows + rowGap
     for row = 1, 3 do
         local start = (k.page - 1) * columns + 1
         local keys = letterRows[row]:sub(start, start + columns - 1)
@@ -178,23 +429,20 @@ function Gui.keyboard(ui, width, height, k, accent, footer)
             local span = keyWidth - gap
             local key = keys:sub(column, column)
             local bg = (row + column) % 2 == 0 and 128 or 256
-            ui.style(x1, y1, span, y2 - y1 + 1, Gui.contrast(bg), bg)
-            ui.button(math.floor((y1 + y2) / 2), key, "key", x1, x1 + span - 1, true, bg, nil, key)
-            local hit = ui.hits[#ui.hits]
-            hit.y1, hit.y2 = y1, y2
+            ui.button(y1, key, "key", x1, x1 + span - 1, true, bg, nil, key, y2 - y1 + 1)
         end
     end
     local controls = {{bankName[nextBank[k.bank]] or "ABC", "bank"},
         {width >= 20 and "Space" or "Sp", "space"}, {"Del", "backspace"}}
     if pages > 1 then controls[4] = {k.page .. "/" .. pages, "keyPage"} end
     for index, row in ipairs(controls) do
-        ui.button(height - 1, row[1], row[2], 1 + math.floor((index - 1) * width / #controls),
-            math.floor(index * width / #controls), true, row[2] == "bank" and accent or nil)
+        ui.button(height - 2 * controlRows + 1, row[1], row[2], 1 + math.floor((index - 1) * width / #controls),
+            math.floor(index * width / #controls), true, row[2] == "bank" and accent or nil, nil, nil, controlRows)
     end
     footer = footer or {{"Set", "saveText"}, {"Clr", "clearText"}, {"Back", k.back}}
     for index, row in ipairs(footer) do
-        ui.button(height, row[1], row[2], 1 + math.floor((index - 1) * width / #footer),
-            math.floor(index * width / #footer), row[4], index == 1 and accent or nil, nil, row[3])
+        ui.button(height - controlRows + 1, row[1], row[2], 1 + math.floor((index - 1) * width / #footer),
+            math.floor(index * width / #footer), row[4], index == 1 and accent or nil, nil, row[3], controlRows)
     end
 end
 
@@ -212,10 +460,13 @@ function Gui.form(width,height,view,accent,background,panel)
     function ui.action(y,text,action,value,x1,x2,enabled,bg)
         ui.button(y,text,action,x1,x2,enabled,bg or panel,nil,value)
     end
-    function ui.footer(rows)
+    function ui.footer(rows, depth)
         -- A screen can replace the default Back footer supplied by info().
-        for i=#ui.hits,1,-1 do if ui.hits[i].y==height then table.remove(ui.hits,i) end end
-        for i,row in ipairs(rows) do ui.action(height,row[1],row[2],row[3],1+math.floor((i-1)*width/#rows),math.floor(i*width/#rows),row[4],row[5]) end
+        for i=#ui.hits,1,-1 do if (ui.hits[i].y2 or ui.hits[i].y)==height then table.remove(ui.hits,i) end end
+        depth=depth or 1
+        for i,row in ipairs(rows) do
+            ui.button(height-depth+1,row[1],row[2],1+math.floor((i-1)*width/#rows),math.floor(i*width/#rows),row[4],row[5] or panel,nil,row[3],depth)
+        end
     end
     function ui.page(key,count,slots,y,draw)
         local pages=math.max(1,math.ceil(count/slots))
@@ -236,24 +487,43 @@ function Gui.form(width,height,view,accent,background,panel)
         ui.footer(footer or {{"Back","home"}})
     end
     function ui.info(title,lines,key,back)
+        local columns=1
+        local half=math.floor((width-1)/2)
+        if width>=50 and height>=12 and #lines>=6 then
+            columns=2
+            for _, line in ipairs(lines) do
+                if #tostring(line)>half then columns=1; break end
+            end
+        end
+        local span=columns==2 and half or width
         local wrapped={}
         for _,line in ipairs(lines) do
             line=tostring(line):gsub("[%c]"," ")
             repeat
-                local cut=#line>width and line:sub(1,width):match("^.*()%s")
-                if cut and cut>1 then wrapped[#wrapped+1],line=line:sub(1,cut-1),line:sub(cut+1)
-                else wrapped[#wrapped+1],line=line:sub(1,width),line:sub(width+1) end
+                wrapped[#wrapped+1],line=splitLine(line,span)
             until line==""
         end
         ui.heading(title,accent)
-        local slots=#wrapped<=height-2 and height-2 or height-3
+        local room=#wrapped<=(height-2)*columns and height-2 or height-3
+        local slots=room*columns
         local first=ui.page(key,#wrapped,slots,height-1)
-        for i=1,slots do ui.put(1,i+1,wrapped[first+i] or "",width) end
+        local count=math.min(slots,#wrapped-first)
+        local rows=math.ceil(count/columns)
+        local step=rows>0 and math.min(3,math.floor(room/rows)) or 1
+        for i=1,count do
+            local col,row=math.floor((i-1)/rows),(i-1)%rows
+            local x,y=1+col*(span+1),2+row*step
+            if step>1 and row%2==0 then ui.style(x,y,span,step,Gui.contrast(panel),panel) end
+            local line=wrapped[first+i]
+            local inset=width>=24 and step>1 and #line<span and 1 or 0
+            ui.put(x+inset,y+math.floor((step-1)/2),line,span-inset)
+        end
         ui.footer({{"Back",back}})
     end
     function ui.numberPad(title,draft,back,decimal)
         ui.heading(title,accent); ui.put(1,2,draft=="" and "0" or draft,width,true)
-        local keyHeight = height - 3
+        local footer = math.min(Gui.controlHeight(height), math.max(1, math.floor((height - 3) / 4)))
+        local keyHeight = height - 2 - footer
         local primary = accent or 2048
         local alternate = panel == primary and (primary == 128 and 256 or 128) or panel
         local keys = {"1", "2", "3", "4", "5", "6", "7", "8", "9", decimal and "." or "Clr", "0", "Del"}
@@ -262,12 +532,9 @@ function Gui.form(width,height,view,accent,background,panel)
             local x1, x2 = 1 + math.floor(column * width / 4), math.floor((column + 1) * width / 4)
             local y1, y2 = 3 + math.floor(row * keyHeight / 3), 2 + math.floor((row + 1) * keyHeight / 3)
             local bg = (column + row) % 2 == 0 and primary or alternate
-            ui.style(x1, y1, x2 - x1 + 1, y2 - y1 + 1, Gui.contrast(bg), bg)
-            ui.action(math.floor((y1 + y2) / 2), key, "digit", key, x1, x2, true, bg)
-            local hit = ui.hits[#ui.hits]
-            hit.y1, hit.y2 = y1, y2
+            ui.button(y1, key, "digit", x1, x2, true, bg, nil, key, y2 - y1 + 1)
         end
-        ui.footer({{"Set","setNumber"},{"Back",back}})
+        ui.footer({{"Set","setNumber"},{"Back",back}}, footer)
     end
     function ui.keyboard(k)
         Gui.keyboard(ui, width, height, k, accent)

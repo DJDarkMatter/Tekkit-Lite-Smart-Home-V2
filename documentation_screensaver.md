@@ -23,7 +23,7 @@ The screensaver adds no taskbar entry on other monitors. Other windows, app back
 | 6 | Silk Waves | Interlaced ribbons |
 | 7 | Kaleidoscope | Rotating symmetric waves |
 | 8 | Life Garden | Reseeded cellular patterns |
-| 9 | Nyan Cat | Cat and rainbow animation with wrapping stars and the full outline on all twelve frames |
+| 9 | Nyan Cat | Cat and rainbow animation with wrapping stars and visible eyes, cheeks, smile, and chin across all twelve frames |
 | 10 | Starflight | Stars approaching from a central vanishing point |
 | 11 | Northern Lights | Green, cyan and purple curtains |
 | 12 | Lava Lamp | Moving blobs that merge into bright cores |
@@ -37,7 +37,7 @@ The screensaver adds no taskbar entry on other monitors. Other windows, app back
 | 20 | Orbit Parade | Alternating rings of colorful orbiting segments |
 | 21 | DVD Bounce | Color-changing DVD badge that bounces off the edges |
 | 22 | Pac-Man Chase | Pac-Man and two ghosts looping through a pellet tunnel |
-| 23 | Tetris Rain | Seven familiar block shapes falling in colored lanes |
+| 23 | Tetris Rain | Seven familiar block shapes falling in colored lanes. Compact displays keep whole pieces in view. |
 | 24 | Rainbow Road | Scrolling rainbow track bending into a starry horizon |
 | 25 | Among Us Drift | Crewmate drifting through space and changing suit colors |
 
@@ -45,4 +45,4 @@ Both `ConvertToScreenSaverLater` files in [DJDarkMatter/TekkitSwitchBoard](https
 
 ## Legacy monitor limits
 
-All designs use CC1.5 character cells and its 16 colors with existing `write`/color APIs, not custom glyphs or CC:Tweaked features. The monitor's text scale is unchanged. Small monitors retain cell-level detail; large pattern screens group color runs to keep complete frames below the legacy modem packet limit, including maximum-size 256×128 displays. The Nyan sprite retains cell detail and merges adjacent color spans, so large monitors do not flatten the cat. Matrix wall samples falling sources at eight steps per second, as in the supplied Felix Maxwell reference. A trail character stays fixed until it expires or another source overwrites it; the whole alphabet does not flicker on every update. All native columns can contain sources. Density scales with screen width, and expired glyphs leave small black gaps. Normal screens retain independent per-cell colors; maximum-size frames can share neighboring color runs while preserving every glyph and gap. A bounded recent-source calculation handles long pauses without replaying every missed frame. Animations request a 0.1-second server tick only while a screensaver is visible; otherwise the configured tick interval resumes. Network/sensor/IO handling remains in the normal OS event loop.
+All designs use CC1.5 character cells and its 16 colors with existing `write`/color APIs, not custom glyphs or CC:Tweaked features. The monitor's text scale is unchanged. Small monitors retain cell-level detail; large pattern screens group color runs to keep complete frames below the legacy modem packet limit, including maximum-size 256×128 displays. The Nyan sprite retains cell detail and merges adjacent color spans. The compact renderer uses more of the display height for the original frames. When the sprite must shrink, it retains separate eye, cheek, mouth, and chin rows where they fit. The rainbow joins the sprite at the left edge. Compact Tetris lays out whole lanes and gives the falling pieces space from the edges. Matrix wall samples falling sources at eight steps per second, as in the supplied Felix Maxwell reference. A trail character stays fixed until it expires or another source overwrites it; the whole alphabet does not flicker on every update. All native columns can contain sources. Density scales with screen width, and expired glyphs leave small black gaps. Normal screens retain independent per-cell colors; maximum-size frames can share neighboring color runs while preserving every glyph and gap. A bounded recent-source calculation handles long pauses without replaying every missed frame. Animations request a 0.1-second server tick only while a screensaver is visible; otherwise the configured tick interval resumes. Network/sensor/IO handling remains in the normal OS event loop.

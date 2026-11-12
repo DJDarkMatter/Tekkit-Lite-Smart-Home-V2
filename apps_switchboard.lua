@@ -244,14 +244,21 @@ local function build(width, height, state, api, context)
         local slots = columns * rows
         local pages = math.max(1, math.ceil(count / slots))
         local page = getPage(key, pages)
+        if key=="home" then
+            local visible=math.min(slots,count-(page-1)*slots)
+            columns=math.min(columns,visible)
+            rows=math.ceil(visible/columns)
+        end
+        local gapX=width>=columns*minWidth+columns-1 and 1 or gap
+        local gapY=bottom-1>=rows*minHeight+rows-1 and 1 or gap
         for slot = 1, slots do
             local index = (page - 1) * slots + slot
             if index <= count then
                 local column, row = (slot - 1) % columns, math.floor((slot - 1) / columns)
-                local x1 = 1 + math.floor(column * (width + gap) / columns)
-                local x2 = math.floor((column + 1) * (width + gap) / columns) - gap
-                local y1 = 2 + math.floor(row * (bottom - 1 + gap) / rows)
-                local y2 = 1 + math.floor((row + 1) * (bottom - 1 + gap) / rows) - gap
+                local x1 = 1 + math.floor(column * (width + gapX) / columns)
+                local x2 = math.floor((column + 1) * (width + gapX) / columns) - gapX
+                local y1 = 2 + math.floor(row * (bottom - 1 + gapY) / rows)
+                local y2 = 1 + math.floor((row + 1) * (bottom - 1 + gapY) / rows) - gapY
                 draw(index, {x = x1, y = y1, w = x2 - x1 + 1, h = y2 - y1 + 1})
             end
         end
@@ -261,11 +268,13 @@ local function build(width, height, state, api, context)
     if screen == "home" then
         ui.heading("Views", accent)
         local all = outputs(api)
+        local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-3)/5)))
+        local footerY=height-depth+1
         if #state.boards == 0 then
-            tile({x = 1, y = 2, w = width, h = height - 2}, "+ Add view", width >= 22 and "IO side or custom grid" or nil,
+            tile({x = 1, y = 2, w = width, h = footerY - 2}, "+ Add view", width >= 22 and "IO side or custom grid" or nil,
                 "add", nil, accent)
         else
-            grid(#state.boards, 3, MAX_VIEWS, "home", height - 2, 12, 3, function(index, rect)
+            grid(#state.boards, 3, MAX_VIEWS, "home", footerY-depth-1, 12, 3, function(index, rect)
                 local item, on = state.boards[index], 0
                 for _, switch in ipairs(item.buttons) do
                     local wire = wireFor(switch, all)
@@ -273,10 +282,10 @@ local function build(width, height, state, api, context)
                 end
                 tile(rect, item.name, on .. " ON / " .. #item.buttons, "open", item.id, accent)
             end)
-            button(height - 1, "+ Add view", "add", nil, nil, nil, #state.boards < MAX_VIEWS, accent)
+            ui.button(footerY-depth, "+ Add view", "add", nil, nil, #state.boards < MAX_VIEWS, accent, nil, nil, depth)
         end
-        button(height, "Scenes", "scenes", nil, 1, math.floor(width / 2))
-        button(height, "Settings", "settings", nil, math.floor(width / 2) + 1, width)
+        ui.button(footerY, "Scenes", "scenes", 1, math.floor(width/2), true, theme.border, nil, nil, depth)
+        ui.button(footerY, "Settings", "settings", math.floor(width/2)+1, width, true, theme.border, nil, nil, depth)
     elseif screen == "sources" then
         local items = {{label = "+ Empty view", action = "empty"}}
         for _, client in ipairs(api.getIOClients()) do
@@ -300,7 +309,9 @@ local function build(width, height, state, api, context)
     elseif screen == "board" or screen == "switches" then
         ui.heading(screen == "switches" and "Edit switches" or board.name, accent)
         local all = outputs(api)
-        grid(#board.buttons, board.columns, board.rows, "switches", height - 1,
+        local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-2)/5)))
+        local y=height-depth+1
+        grid(#board.buttons, board.columns, board.rows, "switches", y-1,
             (width < 20 or theme.density == "compact") and 5 or 7, 2, function(index, rect)
                 local switch = board.buttons[index]
                 local wire = wireFor(switch, all)
@@ -310,7 +321,9 @@ local function build(width, height, state, api, context)
                 tile(rect, switch.name, screen == "switches" and ("#" .. index .. " Edit") or status,
                     screen == "switches" and "editSwitch" or "toggle", switch.id, fill, statusColour)
             end)
-        if screen == "board" then footer("Back", "home", "Edit", "edit") else footer("Back", "edit") end
+        local half=math.floor(width/2)
+        ui.button(y, "Back", screen=="board" and "home" or "edit", 1, screen=="board" and half or width, true, theme.border, nil, nil, depth)
+        if screen=="board" then ui.button(y,"Edit","edit",half+1,width,true,accent,nil,nil,depth) end
     elseif screen == "edit" then
         local _, index = boardById(state, board.id)
         menu("View settings", {{label = "Rename view", action = "renameView"}, {label = "Edit switches", action = "switches"},
@@ -353,7 +366,7 @@ local function build(width, height, state, api, context)
     elseif screen == "pulseLength" then
         local pad = api.ui.form(width, height, {}, accent, theme.background, theme.border)
         pad.numberPad("Length (s)", view.pulseDraft, "behavior", true)
-        return pad.lines, pad.hits
+        return pad.finish()
     elseif screen == "buttonColors" or screen == "viewColors" then
         local scope = screen == "buttonColors" and "button" or "board"
         local target = scope == "button" and buttonById(board, view.buttonId) or board
@@ -416,15 +429,18 @@ local function build(width, height, state, api, context)
             nextTarget.stateColors[view.colourField] = not view.colourAuto and draft or nil
             draft = stateColour(previewSwitch,previewBoard,preview,view.colourField)
         elseif view.colourField ~= "accent" then preview[view.colourField] = draft end
+        local previewRows = width >= 24 and height >= 15 and math.min(7, math.floor(height / 4)) or 0
+        local footerRows = api.ui.controlHeight(height)
+        local py = height - footerRows - previewRows + 1
+        local swatchBottom = previewRows > 0 and py - 2 or height - footerRows
         ui.lines, ui.hits = api.ui.palette(width,height,
             not (isFill and view.colourMode~="fixed" or target and view.colourAuto) and draft or nil,
-            isFill and "Button color" or titles[view.colourField])
-        table.remove(ui.hits)
+            isFill and "Button color" or titles[view.colourField], swatchBottom)
         ui.lines.hits = ui.hits
         local previewAccent = view.colourField == "accent" and draft or accent
         ui.style(1,1,width,1,api.ui.contrast(previewAccent),previewAccent)
-        if width>=24 and height>=15 then
-            local ph=math.min(5,height-12); local py=height-ph-1
+        if previewRows > 0 then
+            local ph=previewRows
             ui.style(1,py-1,width,ph+1,api.ui.contrast(preview.background),preview.background)
             ui.text(py-1,"Preview",true)
             ui.style(2,py-1,width-2,1,api.ui.contrast(previewAccent),previewAccent)
@@ -480,7 +496,7 @@ local function build(width, height, state, api, context)
         pager("message", page, pages, height - 1)
         footer("Back", "messageBack")
     end
-    return ui.lines, ui.hits
+    return ui.finish(screen=="home" or screen=="board" or screen=="switches")
 end
 
 local function sceneById(state, id)
@@ -510,11 +526,12 @@ local function sceneUI(w, h, state, api, view)
         local footer = screen == "sceneListEdit" and {{"Back", "scenes"}} or {{"Back", "home"}, {"Edit", "sceneListEdit"}}
         ui.menu(view.sceneStatus or "Scenes", rows, "scenes", footer)
     end
+    ui.finish()
     return ui
 end
 
-local function sceneTouch(x, y, w, h, state, api, view)
-    local action, value = api.ui.actionAt(sceneUI(w, h, state, api, view).hits, x, y)
+local function sceneTouch(x, y, w, h, state, api, view, hits)
+    local action, value = api.ui.actionAt(hits or sceneUI(w, h, state, api, view).hits, x, y)
     if not action then return false end
     local scene, index = sceneById(state, view.sceneId)
     local keyboard = view.sceneKeyboard
@@ -650,9 +667,10 @@ end
 function app.handleTouch(x, y, width, height, state, api, context)
     if not ready then return false end
     if (context.view.screen or ""):match("^scene") then
-        return sceneTouch(x, y, width, height, state, api, context.view)
+        return sceneTouch(x, y, width, height, state, api, context.view, context.hits)
     end
-    local _, hits = build(width, height, state, api, context)
+    local hits = context.hits
+    if not hits then local _; _, hits = build(width, height, state, api, context) end
     local action, value
     for _, hit in ipairs(hits) do
         if hit.enabled ~= false and api.ui.hit(hit, x, y) then action, value = hit.action, hit.value; break end

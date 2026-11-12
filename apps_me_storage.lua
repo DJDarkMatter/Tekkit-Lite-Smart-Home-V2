@@ -192,10 +192,11 @@ local function build(width, height, state, api, context)
     local function button(y, label, action, value, x1, x2, enabled, bg)
         ui.button(y, label, action, x1, x2, enabled, bg or 128, nil, value)
     end
-    local function footer(labels)
+    local function footer(labels, depth)
+        depth = depth or 1
         for i, item in ipairs(labels) do
-            button(height, item[1], item[2], item[3], 1 + math.floor((i-1)*width/#labels), math.floor(i*width/#labels),
-                item[4], item[5] or (#labels > 1 and i % 2 == 0 and 256 or 128))
+            ui.button(height-depth+1, item[1], item[2], 1 + math.floor((i-1)*width/#labels), math.floor(i*width/#labels),
+                item[4], item[5] or (#labels > 1 and i % 2 == 0 and 256 or 128), nil, item[3], depth)
         end
     end
     local function page(count, slots, row)
@@ -260,8 +261,10 @@ local function build(width, height, state, api, context)
         ui.heading(entry.name, accent)
         ui.text(2, (live and "Usage" or value.error or value.status) .. (value.percent and " "..percent(value.percent).."%" or ""), true)
         ui.style(1,2,width,1, live and 1 or 32768, live and 128 or 2)
-        local cols, cardH = width >= 60 and 3 or width >= 38 and 2 or 1, height >= 10 and 3 or 2
-        local rows = math.max(1, math.floor((height-4)/cardH))
+        local cols, minimum = width >= 60 and 3 or width >= 38 and 2 or 1, height >= 10 and 3 or 2
+        local depth = math.min(api.ui.controlHeight(height), math.max(1, math.floor((height-3)/5)))
+        local bottom = height - depth
+        local rows = math.max(1, math.floor((bottom-2)/minimum))
         local metrics = {{"Bytes used",value.used},{"Bytes free",value.free},
             {"Items stored",value.items},{"Item room*",value.room},{"Item types",value.types},{"Free type slots",value.freeTypes}}
         if rows*cols >= 9 then
@@ -269,29 +272,40 @@ local function build(width, height, state, api, context)
                 {"Items stored",value.items},{"Item room*",value.room},{"Total item storage*",value.totalItems},
                 {"Item types",value.types},{"Free type slots",value.freeTypes},{"Total types*",value.totalTypes}}
         end
-        local first = page(#metrics, rows*cols, height-1)
-        for i = 1, rows*cols do
+        local paging = #metrics > rows*cols
+        if paging then rows = math.max(1, math.floor((bottom-3)/minimum)) end
+        local first = page(#metrics, rows*cols, bottom)
+        local visible = math.min(rows*cols, #metrics-first)
+        local usedRows = math.ceil(visible/cols)
+        local note = #metrics == 9 and bottom-2 >= usedRows*minimum+2
+        local room = bottom-2 - (paging and 1 or 0) - (note and 1 or 0)
+        local gap = room >= usedRows*(minimum+1) and 1 or 0
+        local available = room - (usedRows-1)*gap
+        for i = 1, visible do
             local metric = metrics[first+i]
-            if metric then
-                local col, row = (i-1)%cols, math.floor((i-1)/cols)
-                local x = 1 + math.floor(col*width/cols)
-                local span = math.floor((col+1)*width/cols)-x+1
-                if col > 0 then x,span = x+1,span-1 end
-                local y = 3+row*cardH
-                ui.style(x,y,span,cardH,live and 1 or 256,32768)
-                ui.style(x,y,span,1,api.ui.contrast(accent),accent)
-                put(x,y,metric[1],span); put(x,y+1,short(metric[2],span),span)
-                if cardH == 3 and first+i == 1 and value.percent then
-                    ui.style(x,y+2,span,1,nil,128)
-                    local filled = math.floor(span*value.percent/100+0.5)
-                    if filled > 0 then ui.style(x,y+2,filled,1,nil,live and (value.percent >= 90 and 2 or 32) or 128) end
-                end
+            local col, row = (i-1)%cols, math.floor((i-1)/cols)
+            local columns = math.min(cols, visible-row*cols)
+            local x = 1 + math.floor(col*width/columns) + (col>0 and 1 or 0)
+            local span = math.floor((col+1)*width/columns)-x+1
+            local y = 3+math.floor(row*available/usedRows)+row*gap
+            local cardH = math.floor((row+1)*available/usedRows)-math.floor(row*available/usedRows)
+            local inset = span>=20 and 1 or 0
+            ui.style(x,y,span,cardH,live and 1 or 256,128)
+            ui.style(x,y,span,1,api.ui.contrast(accent),accent)
+            put(x+inset,y,metric[1],span-inset)
+            local meter = cardH>=3 and first+i==1 and value.percent
+            local meterRows = meter and (cardH>=5 and 2 or 1) or 0
+            local middle = y+1+math.floor((cardH-meterRows-2)/2)
+            put(x+inset,middle,short(metric[2],span-inset),span-inset)
+            if meter then
+                local line = y+cardH-meterRows
+                ui.style(x,line,span,meterRows,nil,32768)
+                local filled = math.floor(span*value.percent/100+0.5)
+                if filled > 0 then ui.style(x,line,filled,meterRows,nil,live and (value.percent >= 90 and 2 or 32) or 128) end
             end
         end
-        if #metrics==9 and 2+math.ceil(#metrics/cols)*cardH<height-2 then
-            ui.text(height-2,"* Reported headroom; see Source",true)
-        end
-        footer({{"Back","home"},{width >= 15 and "Cells" or "Cell","cells"},{"Edit","edit"}})
+        if note then ui.text(bottom,"* Reported headroom; see Source",true) end
+        footer({{"Back","home"},{width >= 15 and "Cells" or "Cell","cells"},{"Edit","edit"}},depth)
     elseif screen == "cells" then
         local items = {{label="Cell / drive totals", action="audit"}}
         for i, item in ipairs(entry.drives) do
@@ -363,7 +377,7 @@ local function build(width, height, state, api, context)
         info("Information",{screen == "message" and view.message or
             "AE1: put an Applied Energistics sensor card near a powered ME Wireless Access Point on the selected network. Native fields are UsedBytes, FreeBytes, UsedCount, FreeCount, UsedTypes and FreeTypes. Item room is reported free count; new types consume extra bytes. Eight items use a data byte; type/cell overhead also uses bytes. Unique item types differ from free per-cell type slots. Individual cell counts/sizes need optional Inventory Card targets on ME drives/chests. Only add inventories from this ME system. Cell names identify standard 1k/4k/16k/64k sizes; unknown items stay unknown. Per-cell fill and NBT are not exposed by the native card. Missing/offline data is never zero. Apps can share one sensor target; subscriptions are deduplicated by the OS."},screen == "message" and "messageBack" or "settings")
     end
-    return ui.lines,ui.hits
+    return ui.finish()
 end
 function app.render(width,height,state,api,context)
     if not ready then return {"ME storage blocked","Check OS console"} end
@@ -371,7 +385,8 @@ function app.render(width,height,state,api,context)
 end
 function app.handleTouch(x,y,width,height,state,api,context)
     if not ready then return false end
-    local _,hits=build(width,height,state,api,context)
+    local hits = context.hits
+    if not hits then local _; _, hits = build(width,height, state, api, context) end
     local action,value
     for _,hit in ipairs(hits) do if hit.enabled~=false and api.ui.hit(hit,x,y) then action,value=hit.action,hit.value; break end end
     if not action then return false end

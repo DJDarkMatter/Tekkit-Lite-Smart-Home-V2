@@ -644,7 +644,41 @@ local function drawRule(ui, w, h, view, api, circuit, root)
     local title = #ruleRoots(circuit) == 1 and circuit.name or root.name
     ui.heading(title .. (circuit.enabled and " [ON]" or " [OFF]"))
     local accent = api.getAppColour(appName)
-    if h >= 8 and w >= 19 then
+    if h >= 14 and w >= 24 then
+        local depth = math.min(api.ui.controlHeight(h), math.floor((h-7)/3))
+        local bottom = h-2*depth
+        local firstHeight = math.max(3,math.floor((bottom-2)*.4))
+        local thenY = firstHeight+3
+        local function card(y, last, label, action, lines)
+            local background = 128
+            ui.style(1,y,w,last-y+1,1,background)
+            ui.style(1,y,w,1,api.ui.contrast(accent),accent)
+            ui.put(2,y,label,w-2)
+            for i=1,math.min(#lines,last-y) do ui.put(2,y+i,lines[i],w-2) end
+            ui.hits[#ui.hits+1]={x1=1,x2=w,y1=y,y2=last,action=action}
+        end
+        local conditionLines = {ifText}
+        local count = condition and itemCount(condition)
+        if condition and condition.kind == "Item amount" and condition.amount then
+            conditionLines[2] = "Count " .. Me.amount(count)
+        elseif condition and circuit.enabled then
+            local value = evaluate(circuit,api)[root.a]
+            conditionLines[2] = value==nil and "Waiting for reading" or value and "Condition true" or "Condition false"
+        end
+        card(2,firstHeight+1,"IF","editIF",conditionLines)
+        local thenLines = {thenText}
+        if root.kind=="Sequence" and #root.steps>1 then
+            local slots=bottom-thenY
+            thenLines={}
+            local visible=#root.steps>slots and slots-1 or #root.steps
+            for i=1,visible do thenLines[i]=i..". "..guidedActionCaption(api,circuit,nodes[root.steps[i]]) end
+            if visible<#root.steps then thenLines[#thenLines+1]="+ "..(#root.steps-visible).." more" end
+        end
+        card(thenY,bottom,"THEN","editTHEN",thenLines)
+        ui.button(bottom+1,toggle,toggleAction,nil,nil,true,canIf and canThen and accent or 128,nil,nil,depth)
+        ui.footer({{"Back","ruleBack"},{"More","ruleMenu"}},depth)
+        return
+    elseif h >= 8 and w >= 19 then
         ui.action(2, "IF", "editIF", nil, nil, nil, true, accent)
         ui.action(3, ifText, "editIF")
         local count = condition and itemCount(condition)
@@ -1008,6 +1042,7 @@ local function build(w, h, state, api, context)
         ui.info("Delete?", {target.name}, screen, back)
         ui.footer({{"Cancel", back}, {"Delete", "confirmDelete", nil, true, 16384}})
     else ui.info("Logic Sandbox", {view.message or "Circuit changed"}, "message", view.back or "home") end
+    ui.finish()
     return ui
 end
 function app.render(w, h, state, api, context) return build(w, h, state, api, context).lines end
@@ -1070,7 +1105,7 @@ function app.handleIOSelection(key, address, state, api, context)
 end
 function app.handleTouch(x, y, w, h, state, api, context)
     local view = context.view
-    local action, value = api.ui.actionAt(build(w, h, state, api, context).hits, x, y)
+    local action, value = api.ui.actionAt(context.hits or build(w, h, state, api, context).hits, x, y)
     if not action then return false end
     local circuit, circuitIndex = find(state.circuits, view.circuitId)
     local node, nodeIndex = find(circuit and circuit.nodes, view.nodeId)

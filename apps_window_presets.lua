@@ -75,6 +75,7 @@ local function build(w, h, state, api, view)
         ui.info("Delete preset?", {preset.name}, "delete", "preview")
         ui.footer({{"Cancel", "preview"}, {"Delete", "remove", nil, true, 16384}})
     else ui.info("Window Presets", {view.message}, "message", view.back or "home") end
+    ui.finish()
     return ui
 end
 local function notice(view, message, back)
@@ -83,7 +84,7 @@ end
 function app.render(w, h, state, api, context) return build(w, h, state, api, context.view).lines end
 function app.handleTouch(x, y, w, h, state, api, context)
     local view = context.view
-    local action, value = api.ui.actionAt(build(w, h, state, api, view).hits, x, y)
+    local action, value = api.ui.actionAt(context.hits or build(w, h, state, api, view).hits, x, y)
     if not action then return false end
     local preset, index = find(state.presets, view.presetId)
     if action == "page" then view.pages[value.key] = value.page

@@ -29,6 +29,22 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
             t.id=t.open()
         end
     end
+    function tests.v47_screensaver_calibrated_border_taps_still_reach_both_corners()
+        for _,size in ipairs({{55,23},{92,32}}) do
+            local w,h=unpack(size)
+            local t=setup("screensaver",false,{monitorWidth=w,monitorHeight=h})
+            for _,shift in ipairs({-1,1}) do
+                t.display.client.config.touchOffsets.top={x=shift,y=shift}
+                local current=t.view().design
+                touch(t,"top",1,1)
+                equal(t.view().design,(current+#t.app.screensavers-2)%#t.app.screensavers+1)
+                touch(t,"top",w,1)
+                equal(t.view().design,current)
+            end
+            touch(t,"top",math.floor(w/2),1)
+            equal(t.window(),nil,"A top-edge tap between the corners still exits")
+        end
+    end
     function tests.screensaver_tiny_corner_areas_never_overlap_and_leave_an_exit_row()
         for _,size in ipairs({{2,2},{3,2},{4,2},{4,3},{12,6}}) do
             local t=setup("screensaver",true);assert(t.app.onOpen(t.state,t.api,t.context()))
@@ -213,6 +229,71 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
             equal(row:sub(x-2,x-2),Gui.code(64),"Right cheek in frame "..i)
             equal(row:sub(x,x),Gui.code(32768),"Right outline in frame "..i)
             equal(row:sub(x+1,x+1),Gui.code(2048),"Sky after outline in frame "..i)
+        end
+    end
+    function tests.v47_screensaver_nyan_keeps_both_eyes_and_outline_at_compact_scales()
+        local t=setup("screensaver",true)
+        assert(t.app.onOpen(t.state,t.api,t.context()))
+        t.view().design=9
+        for _,size in ipairs({{15,10},{27,11},{41,16},{49,18},{55,23},{57,23},{64,26}}) do
+            local w,h=unpack(size)
+            for i=1,12 do
+                t.now=(i-.5)/5
+                local _,_,bg=frame(t,w,h)
+                local eyes,cheek=false,false
+                for y=1,h do
+                    local face=bg[y]:sub(math.floor(w/2)+1)
+                    -- White eyes, dark or gray separation, dark outline against the sky.
+                    eyes=eyes or face:find("0+[f8]+0+[f8]*fb")~=nil
+                    cheek=cheek or face:find("6+f+b")~=nil
+                end
+                local label=w.."x"..h.." frame "..i
+                assert(eyes,"Both eyes and their outline must fit at "..label)
+                if w>=27 then assert(cheek,"The right cheek must fit at "..label) end
+            end
+        end
+    end
+
+    function tests.v48_screensaver_nyan_preserves_the_smile_and_chin_on_compact_monitors()
+        local t=setup("screensaver",true)
+        assert(t.app.onOpen(t.state,t.api,t.context()))
+        t.view().design=9
+        for _,size in ipairs({{44,16},{49,18},{51,19},{52,20},{55,23},{57,23},{60,24}}) do
+            local w,h=unpack(size)
+            for i=1,12 do
+                t.now=(i-.5)/5
+                local _,_,bg=frame(t,w,h)
+                local eyes,cheek,mouth,chin
+                for y=1,h do
+                    local face=bg[y]:sub(math.floor(w/2)+1)
+                    if not eyes and face:find("0+[f8]+0+[f8]*fb") then eyes=y
+                    elseif eyes and not cheek and face:find("6+f+b") then cheek=y
+                    elseif cheek and not mouth and face:find("8f+8+f+b") then mouth=y
+                    elseif mouth and face:find("888+f+b") then chin=y; break end
+                end
+                assert(eyes and cheek and mouth and chin, "Nyan face rows at "..w.."x"..h.." frame "..i)
+            end
+        end
+    end
+    function tests.v47_screensaver_tetris_shows_complete_falling_pieces_on_compact_displays()
+        local t=setup("screensaver",true)
+        assert(t.app.onOpen(t.state,t.api,t.context()))
+        t.view().design=23
+        local black=Gui.code(32768)
+        for _,size in ipairs({{2,2},{12,6},{27,11},{55,23},{57,23}}) do
+            local w,h=unpack(size)
+            local tileWidth=w>=20 and 2 or 1
+            local lanes=math.max(1,math.floor((w+tileWidth)/(5*tileWidth)))
+            local first,changed
+            for i=0,12 do
+                t.now=i*.25
+                local _,_,bg=frame(t,w,h)
+                local drawn=table.concat(bg):gsub(black,"")
+                equal(#drawn,lanes*4*tileWidth,"Every lane has a full tetromino")
+                local image=table.concat(bg)
+                if not first then first=image elseif image~=first then changed=true end
+            end
+            assert(changed,"Compact Tetris animates at "..w.."x"..h)
         end
     end
     function tests.screensaver_exit_tap_stays_on_its_monitor_and_never_reaches_underlying_controls()

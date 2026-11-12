@@ -14,7 +14,7 @@ function Settings.new(actions)
     local function overviewContext(context)
         local view = context.view
         view.overview = view.overview or {}
-        return {windowId = context.windowId, monitorId = context.monitorId, view = view.overview}
+        return {windowId = context.windowId, monitorId = context.monitorId, view = view.overview, hits = context.hits}
     end
 
     local function build(w, h, state, api, context)
@@ -100,7 +100,7 @@ function Settings.new(actions)
             local back = (mode == "backup" or mode == "restore") and "backupMenu" or "data"
             ui.menu(view.status or title, rows, section, {{"Back", back}})
         else ui.info(app.title, {view.status or "Select an option"}, "status", view.back or "home") end
-        return ui.lines, ui.hits
+        return ui.finish()
     end
 
     function app.render(w, h, state, api, context) return (build(w, h, state, api, context)) end
@@ -113,7 +113,8 @@ function Settings.new(actions)
             if ctx.view.exit then ctx.view.exit, view.section = nil, "home" end
             return result
         end
-        local _, hits = build(w, h, state, api, context)
+        local hits = context.hits
+        if not hits then local _; _, hits = build(w, h, state, api, context) end
         local action, value = api.ui.actionAt(hits, x, y)
         if not action then return false end
         if action == "page" then view.pages[value.key] = value.page

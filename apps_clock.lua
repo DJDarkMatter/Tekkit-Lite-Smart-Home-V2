@@ -307,13 +307,18 @@ local function build(width,height,state,api,context)
         local field=view.number
         local pad=api.ui.form(width,height,view,accent)
         pad.numberPad(field.key=="minute" and "World time HHMM" or field.key.." (seconds)",field.draft,"edit")
-        return pad.lines,pad.hits
+        return pad.finish()
     end
     local ui=api.ui.content(width,height)
     ui.style(1,1,width,height,1,32768)
-    local function button(y,label,action,value,x1,x2,enabled,bg) ui.button(y,label,action,x1,x2,enabled,bg or 128,nil,value) end
-    local function footer(items)
-        for i,item in ipairs(items) do button(height,item[1],item[2],item[3],1+math.floor((i-1)*width/#items),math.floor(i*width/#items),item[4],i%2==0 and 256 or 128) end
+    local function button(y,label,action,value,x1,x2,enabled,bg,rows)
+        ui.button(y,label,action,x1,x2,enabled,bg or 128,nil,value,rows)
+    end
+    local function footer(items,rows)
+        rows=rows or 1
+        for i,item in ipairs(items) do
+            button(height-rows+1,item[1],item[2],item[3],1+math.floor((i-1)*width/#items),math.floor(i*width/#items),item[4],i%2==0 and 256 or 128,rows)
+        end
     end
     local function page(key,count,slots,row)
         local pages=math.max(1,math.ceil(count/slots))
@@ -355,9 +360,12 @@ local function build(width,height,state,api,context)
     elseif screen=="alarms" or screen=="timers" then
         local list=screen=="alarms" and state.alarms or state.timers
         ui.heading(screen=="alarms" and "World-time alarms" or "Timers / recent",accent)
+        local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-4)/4)))
+        local bottom=height-2*depth
         local rowH=width>=32 and 1 or 2
-        local slots=math.max(1,math.floor((height-4)/rowH))
-        local first=page(screen,#list,slots,height-2)
+        if #list>0 then rowH=math.min(math.max(rowH,depth),math.max(rowH,math.floor((bottom-2)/#list))) end
+        local slots=math.max(1,math.floor((bottom-2)/rowH))
+        local first=page(screen,#list,slots,bottom)
         for i=1,slots do
             local index=first+i
             local row=list[screen=="timers" and (#list-index+1) or index]
@@ -367,17 +375,23 @@ local function build(width,height,state,api,context)
                 local label=screen=="alarms" and alarmTime(row.minute).." "..(row.enabled and "ON" or "OFF")
                     or (row.status=="done" and "Done" or row.status=="cancelled" and "Cancelled" or duration(math.ceil(row.remaining))..(row.status=="paused" and " ||" or ""))
                 ui.style(1,y,width,rowH,api.ui.contrast(bg),bg)
-                if rowH==1 then
-                    local span=math.min(width-2,#label)
-                    local title=row.name:sub(1,width-span-1)
-                    ui.lines[y]=title..string.rep(" ",width-span-#title)..label:sub(1,span)
-                else ui.text(y,row.name); ui.text(y+1,label,true) end
+                local stripe=i%2==0 and 1 or 0
+                if width>=32 then
+                    local span=math.min(width-stripe-2,#label)
+                    local title=row.name:sub(1,width-stripe-span-1)
+                    local middle=y+math.floor((rowH-1)/2)
+                    ui.lines[middle]=title..string.rep(" ",width-stripe-span-#title)..label:sub(1,span)..string.rep(" ",stripe)
+                else ui.text(y,row.name:sub(1,width-stripe)); ui.text(y+1,label:sub(1,width-stripe),true) end
+                if stripe>0 then
+                    -- Keep the state color and give same-state rows a distinct edge.
+                    ui.style(width,y,1,rowH,nil,api.ui.contrast(bg))
+                end
                 ui.hits[#ui.hits+1]={x1=1,x2=width,y1=y,y2=y+rowH-1,action="open",value={kind=screen=="alarms" and "alarm" or "timer",id=row.id}}
             end
         end
         if #list==0 then ui.text(2,screen=="alarms" and "No alarms" or "No timers",true) end
-        button(height-1,screen=="alarms" and "+ Add alarm" or "+ Add timer","new",screen=="alarms" and "alarm" or "timer",nil,nil,#list<64,accent)
-        footer({{"Back","home"}})
+        button(bottom+1,screen=="alarms" and "+ Add alarm" or "+ Add timer","new",screen=="alarms" and "alarm" or "timer",nil,nil,#list<64,accent,depth)
+        footer({{"Back","home"}},depth)
     elseif screen=="detail" then
         local rows={}
         if kind=="alarm" then
@@ -445,21 +459,31 @@ local function build(width,height,state,api,context)
         local sw=state.stopwatch
         ui.heading("Stopwatch / "..(sw.mode=="real" and "Real" or "Game"),accent)
         local label=stopwatchTime(sw.elapsed,sw.mode,width>=12)
-        ui.text(2,label,true); ui.style(1,2,width,1,api.ui.contrast(accent),accent)
-        if height>=8 then ui.text(3,sw.running and (sw.mode=="game" and clockStatus~="World clock ready" and "Waiting for world clock" or "Running") or "Stopped",true) end
-        local start=height>=8 and 4 or 3
-        local available=height-start-1
-        local slots=math.max(1,available-1)
-        local first=page("laps",#sw.laps,slots,height-2)
+        local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-5)/3)))
+        local bottom=height-2*depth
+        local readout=width>=50 and height>=19 and ui.readout(2,label,math.floor((bottom-3)*.6),api.ui.contrast(accent),accent) or 0
+        if readout==0 then ui.text(2,label,true); ui.style(1,2,width,1,api.ui.contrast(accent),accent) end
+        local status=2+math.max(1,readout)
+        if height>=8 then
+            ui.text(status,sw.running and (sw.mode=="game" and clockStatus~="World clock ready" and "Waiting for world clock" or "Running") or "Stopped",true)
+        end
+        local start=status+(height>=8 and 1 or 0)
+        local available=bottom-start+1
+        local slots=math.max(1,#sw.laps<=available and available or available-1)
+        local first=page("laps",#sw.laps,slots,bottom)
         for i=1,slots do
             local lap=sw.laps[#sw.laps-first-i+1]
             if lap then
-                ui.text(start+i-1,"#"..lap.number.." "..stopwatchTime(lap.split,sw.mode,width>=18)..(width>=36 and " / "..stopwatchTime(lap.elapsed,sw.mode,true) or ""))
+                local y=start+i-1
+                ui.text(y,"#"..lap.number.." "..stopwatchTime(lap.split,sw.mode,width>=18)..(width>=36 and " / "..stopwatchTime(lap.elapsed,sw.mode,true) or ""))
+                if i%2==0 then ui.style(1,y,width,1,1,128) end
             end
         end
         local controls={{sw.running and "Stop" or "Start","stopwatchToggle"},{"Lap","lap"},{"Reset","resetStopwatch"}}
-        for i,row in ipairs(controls) do button(height-1,row[1],row[2],nil,1+math.floor((i-1)*width/3),math.floor(i*width/3),row[2]~="lap" or sw.running,accent) end
-        footer({{"Back","home"},{sw.mode=="real" and "Real" or "Game","stopwatchMode",nil,not sw.running and sw.elapsed==0}})
+        for i,row in ipairs(controls) do
+            button(bottom+1,row[1],row[2],nil,1+math.floor((i-1)*width/3),math.floor(i*width/3),row[2]~="lap" or sw.running,i==1 and accent or 128,depth)
+        end
+        footer({{"Back","home"},{sw.mode=="real" and "Real" or "Game","stopwatchMode",nil,not sw.running and sw.elapsed==0}},depth)
     elseif screen=="delete" then
         ui.heading("Delete "..kind.."?",accent); ui.text(2,item.name,true)
         button(height-1,"Delete","confirmDelete",nil,nil,nil,true,16384); footer({{"Cancel","detail"}})
@@ -472,7 +496,7 @@ local function build(width,height,state,api,context)
         info("Clock information",{screen=="message" and view.message or
             "Alarms use world HH:MM and repeat daily or once. Timers and stopwatch choose real computer uptime or sampled game-clock seconds. Every trigger shows an OK popup on all monitors. OK or a fresh selected input press dismisses it everywhere. Constant length 0 or Pattern total 0 runs until dismissed. Pattern ON/OFF use real seconds, at least 1 each. Saves resume countdowns, stopwatch, laps and active patterns from the last checkpoint; no time is counted while the OS is off. Missed alarms during downtime are skipped. Large time-set/sleep jumps rebase without catch-up, and an alarm fires at most once per observed world day. Missing world time pauses game clocks only. Shared output routes are allowed; overlapping Clock signals on one wire are combined. Unrelated apps still share that physical wire. Close stops only this window."},"info",screen=="message" and "messageBack" or "settings")
     end
-    return ui.lines,ui.hits
+    return ui.finish()
 end
 function app.render(w,h,state,api,context)
     if not ready then return {"Clock unavailable","Check OS console"} end
@@ -521,7 +545,8 @@ end
 function app.handleTouch(x,y,w,h,state,api,context)
     if not ready then return false end
     syncStopwatch(state)
-    local _,hits=build(w,h,state,api,context)
+    local hits = context.hits
+    if not hits then local _; _, hits = build(w,h, state, api, context) end
     local action,value
     for _,hit in ipairs(hits) do if hit.enabled~=false and api.ui.hit(hit,x,y) then action,value=hit.action,hit.value; break end end
     if not action then return false end

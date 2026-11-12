@@ -132,28 +132,35 @@ end
 -- from the selected point and never covers the confirmation/taskbar row.
 function Desktop.pointArrows(point, monitor, anchor)
     local area, hits = Desktop.area(monitor), {}
-    anchor = anchor or {x = point.x > area.width / 2 and 1 or area.width - 4,
-        y = point.y > area.height / 2 and 2 or area.height - 2}
-    local function add(x, y, label, dx, dy)
-        hits[#hits + 1] = {x1 = x, x2 = x + #label - 1, y = y, label = label, dx = dx, dy = dy}
+    local depth = area.height >= 14 and 2 or 1
+    local side = area.width >= 22 and 2 or 1
+    local width, height = 2 * side + 3, 3 * depth
+    anchor = anchor or {x = point.x > area.width / 2 and 1 or area.width - width + 1,
+        y = point.y > area.height / 2 and 2 or area.height - height + 1}
+    anchor.width, anchor.height = width, height
+    local function add(x, y, w, label, dx, dy)
+        hits[#hits + 1] = {x1 = x, x2 = x + w - 1, y = y + math.floor((depth-1)/2),
+            y1 = y, y2 = y + depth - 1, label = label, dx = dx, dy = dy}
     end
-    if point.x > 1 then add(anchor.x, anchor.y + 1, "<", -1, 0) end
-    if point.x < area.width then add(anchor.x + 4, anchor.y + 1, ">", 1, 0) end
-    if point.y > 1 then add(anchor.x + 1, anchor.y, " ^ ", 0, -1) end
-    if point.y < area.height then add(anchor.x + 1, anchor.y + 2, " v ", 0, 1) end
+    if point.x > 1 then add(anchor.x, anchor.y + depth, side, "<", -1, 0) end
+    if point.x < area.width then add(anchor.x + width - side, anchor.y + depth, side, ">", 1, 0) end
+    if point.y > 1 then add(anchor.x + side, anchor.y, 3, "^", 0, -1) end
+    if point.y < area.height then add(anchor.x + side, anchor.y + 2*depth, 3, "v", 0, 1) end
     return hits, anchor
 end
 
 function Desktop.moveArrows(rect, monitor)
     local hits, area = {}, Desktop.area(monitor)
     local middleX, middleY = rect.x + math.floor((rect.width - 1) / 2), rect.y + math.floor(rect.height / 2)
+    local depth = rect.height >= 12 and math.min(3, Gui.controlHeight(rect.height)) or 1
     local function add(x, y, label, dx, dy)
-        hits[#hits + 1] = {x1 = x, x2 = x + 2, y = y, label = label, dx = dx, dy = dy}
+        hits[#hits + 1] = {x1 = x, x2 = x + 2, y = y + math.floor((depth-1)/2),
+            y1 = y, y2 = y + depth - 1, label = label, dx = dx, dy = dy}
     end
     if rect.x > 1 then add(rect.x, middleY, " < ", -1, 0) end
     if rect.x + rect.width - 1 < area.width then add(rect.x + rect.width - 3, middleY, " > ", 1, 0) end
     if rect.y > 1 then add(middleX - 1, rect.y, " ^ ", 0, -1) end
-    if rect.y + rect.height - 1 < area.height then add(middleX - 1, rect.y + rect.height - 1, " v ", 0, 1) end
+    if rect.y + rect.height - 1 < area.height then add(middleX - 1, rect.y + rect.height - depth, " v ", 0, 1) end
     return hits
 end
 
@@ -165,12 +172,25 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
         return Desktop.menu(monitor, title or (gridColumns and selectedGrid .. " position" or "Layout"), options, page,
             {x = win.x, y = win.y + 1})
     end
-    local width = math.min(gridColumns and 35 or 43, area.width)
+    local width = math.min(gridColumns and 42 or 52, area.width)
     local columns = width >= 40 and 3 or width >= 27 and 2 or 1
-    local height = math.min(area.height, gridColumns and math.max(9, gridRows * 3 + 4) or 4 + math.ceil(#grids / columns) * 6)
-    local rows = math.max(1, math.floor((height - 4) / 6))
-    if rows * columns < #grids then rows = math.max(1, math.floor((height - 5) / 6)) end
-    local perPage, pages = rows * columns, gridColumns and 1 or math.ceil(#grids / (rows * columns))
+    local buttonRows = area.height >= 32 and 3 or area.height >= 14 and 2 or 1
+    local cardRows = area.height >= 30 and 7 or area.height >= 25 and 6 or 5
+    local height, perPage, pages
+    if gridColumns then
+        height = math.min(area.height, 3 + buttonRows + gridRows * (area.height >= 27 and 5 or 3))
+        perPage, pages = #grids, 1
+    else
+        local allRows = math.ceil(#grids / columns)
+        local rows = math.floor((area.height - 1 - 3 * buttonRows) / cardRows)
+        if rows < allRows then rows = math.floor((area.height - 1 - 4 * buttonRows) / cardRows) end
+        if rows < 1 then
+            return Desktop.menu(monitor, title or "Layout", options, page, {x = win.x, y = win.y + 1})
+        end
+        perPage = math.min(rows, allRows) * columns
+        pages = math.ceil(#grids / perPage)
+        height = 1 + math.min(rows, allRows) * cardRows + (pages > 1 and 4 or 3) * buttonRows
+    end
     page = clamp(page or 1, 1, pages)
     local rect = {x = clamp(win.x + win.width - width, 1, area.width - width + 1),
         y = clamp(win.y + 1, 1, area.height - height + 1), width = width, height = height}
@@ -193,7 +213,7 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
         hit(x, y, w, h, item)
     end
     if gridColumns then
-        local diagramWidth, diagramHeight = width - 2, height - 4
+        local diagramWidth, diagramHeight = width - 2, height - 3 - buttonRows
         local usableWidth, usableHeight = diagramWidth - gridColumns + 1, diagramHeight - gridRows + 1
         for row = 1, gridRows do for column = 1, gridColumns do
             local x = 2 + math.floor((column - 1) * usableWidth / gridColumns) + column - 1
@@ -207,49 +227,54 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
         for slot = 1, perPage do
             local grid = grids[(page - 1) * perPage + slot]
             if grid then
-                local x, y = 2 + (slot - 1) % columns * (cardWidth + 1), 2 + math.floor((slot - 1) / columns) * 6
+                local x, y = 2 + (slot - 1) % columns * (cardWidth + 1), 2 + math.floor((slot - 1) / columns) * cardRows
                 local name = grid[1] .. "x" .. grid[2]
                 local item = byMode[name == "1x1" and Desktop.gridMode(1, 1, 1, 1) or "choose_" .. name]
                 local labelX = x + math.floor((cardWidth - #name) / 2)
                 local line = ui.lines[y]
                 ui.lines[y] = line:sub(1, labelX - 1) .. name .. line:sub(labelX + #name)
-                local usableWidth, usableHeight = cardWidth - grid[1] + 1, 6 - grid[2]
+                local gapY = cardRows >= 6 and 1 or 0
+                local usableWidth = cardWidth - grid[1] + 1
+                local usableHeight = cardRows - 1 - (grid[2] - 1) * gapY
                 for row = 1, grid[2] do for column = 1, grid[1] do
                     local px = x + math.floor((column - 1) * usableWidth / grid[1]) + column - 1
-                    local py = y + 1 + math.floor((row - 1) * usableHeight / grid[2]) + row - 1
+                    local py = y + 1 + math.floor((row - 1) * usableHeight / grid[2]) + (row - 1) * gapY
                     local pw = math.floor(column * usableWidth / grid[1]) - math.floor((column - 1) * usableWidth / grid[1])
                     local ph = math.floor(row * usableHeight / grid[2]) - math.floor((row - 1) * usableHeight / grid[2])
-                    ui.style(px, py, pw, ph, nil, item.enabled and 8 or 128)
+                    ui.style(px, py, pw, ph, nil, item.enabled and (gapY == 0 and (row + column) % 2 == 0 and 2048 or 8) or 128)
                 end end
-                hit(x, y, cardWidth, 6, item)
+                hit(x, y, cardWidth, cardRows, item)
             end
         end
     end
     local half = math.floor(width / 2)
     if pages > 1 then
-        ui.button(height - 3, "< Prev", "previous", 1, half, page > 1)
-        ui.button(height - 3, "Next >", "next", half + 1, width, page < pages)
+        local y = height - 4 * buttonRows + 1
+        ui.button(y, "< Prev", "previous", 1, half, page > 1, nil, nil, nil, buttonRows)
+        ui.button(y, "Next >", "next", half + 1, width, page < pages, nil, nil, nil, buttonRows)
     end
-    local function action(y, x1, x2, mode, label)
-        ui.button(y, label, "item", x1, x2, byMode[mode].enabled)
-        ui.hits[#ui.hits].item = byMode[mode]
+    local function action(fromBottom, x1, x2, mode, label)
+        local hit = ui.button(height - fromBottom * buttonRows + 1, label, "item", x1, x2,
+            byMode[mode].enabled, nil, nil, nil, buttonRows)
+        hit.item = byMode[mode]
     end
     if gridColumns then
-        action(height, 1, half, "back", "Back")
-        action(height, half + 1, width, "cancel", "Cancel")
+        action(1, 1, half, "back", "Back")
+        action(1, half + 1, width, "cancel", "Cancel")
     elseif width < 22 then
-        action(height - 2, 1, width, "fullscreen", "Fullscreen")
-        action(height - 1, 1, half, "restore", "Restore")
-        action(height - 1, half + 1, width, "custom", "Resize")
-        action(height, 1, half, "move", "Move")
-        action(height, half + 1, width, "cancel", "Cancel")
+        action(3, 1, width, "fullscreen", "Fullscreen")
+        action(2, 1, half, "restore", "Restore")
+        action(2, half + 1, width, "custom", "Resize")
+        action(1, 1, half, "move", "Move")
+        action(1, half + 1, width, "cancel", "Cancel")
     else
-        action(height - 2, 1, half, "fullscreen", "Fullscreen")
-        action(height - 2, half + 1, width, "restore", "Restore")
-        action(height - 1, 1, half, "custom", "Resize")
-        action(height - 1, half + 1, width, "move", "Move")
-        action(height, 1, width, "cancel", "Cancel")
+        action(3, 1, half, "fullscreen", "Fullscreen")
+        action(3, half + 1, width, "restore", "Restore")
+        action(2, 1, half, "custom", "Resize")
+        action(2, half + 1, width, "move", "Move")
+        action(1, 1, width, "cancel", "Cancel")
     end
+    ui.finish(true)
     for _, hit in ipairs(ui.hits) do
         hit.x1, hit.x2, hit.y = hit.x1 + rect.x - 1, hit.x2 + rect.x - 1, hit.y + rect.y - 1
         if hit.y1 then hit.y1, hit.y2 = hit.y1 + rect.y - 1, hit.y2 + rect.y - 1 end
@@ -308,35 +333,43 @@ end
 -- Shared paginated popup geometry for the launcher and window layout menus.
 function Desktop.menu(monitor, title, items, page, anchor)
     local area = Desktop.area(monitor)
-    local width = math.min(area.width, 26)
-    local height = math.min(area.height, math.max(4, #items + 3))
-    local slots = math.max(1, height - 3)
+    local columns = not anchor and area.width >= 45 and #items >= 6 and 2 or 1
+    local width = math.min(area.width, columns == 2 and 56 or area.width >= 52 and 32 or 26)
+    local depth = math.min(4, Gui.controlHeight(area.height))
+    local rows = math.max(1, math.floor((area.height - 1) / depth))
+    if #items > rows * columns then rows = math.max(1, rows - 1) end
+    local slots = rows * columns
     local pages = math.max(1, math.ceil(#items / slots))
     page = clamp(page or 1, 1, pages)
+    local height = math.min(area.height, 1 + (math.max(1, math.ceil(math.min(#items, slots) / columns)) + (pages > 1 and 1 or 0)) * depth)
     local rect = {x = clamp(anchor and anchor.x or 1, 1, area.width - width + 1),
         y = clamp(anchor and anchor.y or area.height - height + 1, 1, area.height - height + 1), width = width, height = height}
-    local lines, hits = {}, {}
-    for y = 1, height do lines[y] = string.rep(" ", width) end
-    lines[1] = (" " .. title .. string.rep(" ", width)):sub(1, width)
-    lines[height] = (" " .. page .. "/" .. pages .. string.rep(" ", width)):sub(1, width)
-    for row = 1, slots do
-        local item = items[(page - 1) * slots + row]
+    local ui = Gui.content(width, height)
+    ui.style(1, 1, width, height, 1, 32768)
+    ui.heading(title .. (pages > 1 and " " .. page .. "/" .. pages or ""), 128)
+    for slot = 1, slots do
+        local item = items[(page - 1) * slots + slot]
         if item then
-            local label = (item.enabled == false and "-" or " ") .. item.label
-            lines[row + 1] = " " .. label:sub(1, width - 2) .. string.rep(" ", math.max(0, width - 2 - #label)) .. " "
-            hits[#hits + 1] = {x1 = rect.x + 1, x2 = rect.x + width - 2, y = rect.y + row,
-                action = "item", item = item}
+            local row, column = math.floor((slot-1)/columns), (slot-1)%columns
+            local x1 = 1 + math.floor(column*(width+1)/columns)
+            local x2 = math.floor((column+1)*(width+1)/columns)-1
+            local hit = ui.button(2 + row * depth, item.label, "item", x1, x2,
+                item.enabled, (row+column) % 2 == 0 and 256 or 128, nil, nil, depth)
+            hit.item = item
         end
     end
-    if #items == 0 then lines[2] = (" No apps" .. string.rep(" ", width)):sub(1, width) end
+    if #items == 0 then ui.text(2, "No apps", true) end
     if pages > 1 then
-        local half = math.floor((width - 2) / 2)
-        lines[height - 1] = " " .. ("< Prev" .. string.rep(" ", width)):sub(1, half)
-            .. ("Next >" .. string.rep(" ", width)):sub(1, width - 2 - half) .. " "
-        hits[#hits + 1] = {x1 = rect.x + 1, x2 = rect.x + half, y = rect.y + height - 2, action = "previous"}
-        hits[#hits + 1] = {x1 = rect.x + half + 1, x2 = rect.x + width - 2, y = rect.y + height - 2, action = "next"}
+        local half = math.floor(width / 2)
+        ui.button(height - depth + 1, "< Prev", "previous", 1, half, page > 1, nil, nil, nil, depth)
+        ui.button(height - depth + 1, "Next >", "next", half + 1, width, page < pages, nil, nil, nil, depth)
     end
-    return rect, lines, hits, page, pages
+    ui.finish(true)
+    for _, hit in ipairs(ui.hits) do
+        hit.x1, hit.x2 = hit.x1 + rect.x - 1, hit.x2 + rect.x - 1
+        hit.y, hit.y1, hit.y2 = hit.y + rect.y - 1, hit.y1 + rect.y - 1, hit.y2 + rect.y - 1
+    end
+    return rect, ui.lines, ui.hits, page, pages
 end
 
 return Desktop

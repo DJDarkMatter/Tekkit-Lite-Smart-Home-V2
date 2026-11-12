@@ -124,15 +124,17 @@ local function build(width, height, state, api, context)
         if centre then value = string.rep(" ", math.floor((span - #value) / 2)) .. value end
         ui.lines[y] = ui.lines[y]:sub(1, x - 1) .. value .. ui.lines[y]:sub(x + #value)
     end
-    local function button(row, label, action, value, x1, x2, enabled, bg)
-        ui.button(row, label, action, x1, x2, enabled, bg or 128, nil, value)
+    local function button(row, label, action, value, x1, x2, enabled, bg, depth)
+        ui.button(row, label, action, x1, x2, enabled, bg or 128, nil, value, depth)
     end
-    local function footer(left, action, right, rightAction)
-        if not right then button(height, left, action)
+    local function footer(left, action, right, rightAction, depth)
+        depth=depth or 1
+        local y=height-depth+1
+        if not right then button(y, left, action, nil, nil, nil, true, 128, depth)
         else
             local half = math.floor(width / 2)
-            button(height, left, action, nil, 1, half)
-            button(height, right, rightAction, nil, half + 1, width, true, accent)
+            button(y, left, action, nil, 1, half, true, 128, depth)
+            button(y, right, rightAction, nil, half + 1, width, true, accent, depth)
         end
     end
     local function pages(count, slots, key, row)
@@ -190,24 +192,25 @@ local function build(width, height, state, api, context)
         if result.status == "ok" and not result.reactor then result.status, result.error = "invalid", "Not a reactor reading" end
         return result
     end
-    local function switch(item, row, x1, x2)
+    local function switch(item, row, x1, x2, depth)
         local output = wire(item, api)
         local text = not output and "Set IO" or output.value and "ON" or "OFF"
         if output and (not output.online or not output.confirmed) then text = text .. " ..." end
         button(row, text, output and "toggle" or "output", item.id, x1, x2, true,
-            not output and accent or not output.online and 16384 or not output.confirmed and 2 or output.value and 32 or 128)
+            not output and accent or not output.online and 16384 or not output.confirmed and 2 or output.value and 32 or 128, depth)
     end
     if screen == "home" then
         ui.heading("Reactors", accent)
+        local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-4)/5)))
         local columns = math.max(1, math.min(3, math.floor((width + 1) / 23)))
-        local rows = math.max(1, math.floor((height - 3) / 8))
-        local bottom = height - 2
+        local bottom = height - 2*depth
+        local rows = math.max(1, math.floor((bottom - 1) / 8))
         if #state.reactors > columns * rows then bottom = bottom - 1; rows = math.max(1, math.floor((bottom - 1) / 8)) end
         local slots = rows * columns
         local page = pages(#state.reactors, slots, "home", bottom + 1)
         if #state.reactors == 0 then
-            button(math.max(2, math.floor(height / 2)), "+ Add reactor", "add", nil, nil, nil, true, accent)
-            footer("Settings", "settings")
+            button(math.max(2, math.floor((height-depth)/2)), "+ Add reactor", "add", nil, nil, nil, true, accent, depth)
+            footer("Settings", "settings", nil, nil, depth)
         else
             ui.style(1, 2, width, bottom - 1, 1, 32768)
             local visible=math.min(slots,#state.reactors-(page-1)*slots)
@@ -220,6 +223,8 @@ local function build(width, height, state, api, context)
                     local x1, x2 = 1 + math.floor(col * width / drawColumns) + (col > 0 and 1 or 0), math.floor((col + 1) * width / drawColumns)
                     local y1, y2 = 2 + math.floor(row * (bottom - 1) / drawRows) + (row > 0 and 1 or 0), 1 + math.floor((row + 1) * (bottom - 1) / drawRows)
                     local w, rh = x2 - x1 + 1, y2 - y1 + 1
+                    local controlRows=math.min(depth,math.max(1,rh-2))
+                    local detailEnd=y2-controlRows
                     ui.style(x1, y1, w, rh, contrast, state.panelColour)
                     ui.style(x1, y1, w, 1, api.ui.contrast(accent), accent)
                     put(x1, y1, item.name, w - 4)
@@ -230,17 +235,22 @@ local function build(width, height, state, api, context)
                     ui.style(x2 - 2, y1, 3, 1, 32768, label == "On" and 32 or label == "Off" and 16384 or 2)
                     local values = metrics(status.reactor,w<24)
                     for _,text in ipairs(extraFields(status.data)) do values[#values+1]=text end
-                    for index = 1, math.min(#values, rh - 2) do put(x1, y1 + index, values[index], w) end
+                    for index = 1, math.min(#values, detailEnd-y1) do put(x1, y1 + index, values[index], w) end
                     if status.status ~= "ok" then
-                        put(x1, math.min(y2 - 1, y1 + 1), status.error or "Sensor unavailable", w)
-                        ui.style(x1, y1 + 1, w, math.max(1, rh - 2), 128, state.panelColour)
+                        put(x1, math.min(detailEnd, y1 + 1), status.error or "Sensor unavailable", w)
+                        ui.style(x1, y1 + 1, w, math.max(1, detailEnd-y1), 128, state.panelColour)
+                    elseif status.reactor and status.reactor.percent and detailEnd-y1 > #values+1 then
+                        local y=detailEnd-1
+                        local filled=math.floor(w*math.max(0,math.min(100,status.reactor.percent))/100)
+                        ui.style(x1,y,w,2,1,128)
+                        if filled>0 then ui.style(x1,y,filled,2,1,status.reactor.percent>=85 and 16384 or 8192) end
                     end
-                    ui.hits[#ui.hits + 1] = {x1 = x1, x2 = x2, y1 = y1, y2 = y2 - 1, action = "open", value = item.id}
-                    switch(item, y2, x1, x2)
+                    ui.hits[#ui.hits + 1] = {x1 = x1, x2 = x2, y1 = y1, y2 = detailEnd, action = "open", value = item.id}
+                    switch(item, detailEnd+1, x1, x2, controlRows)
                 end
             end
-            button(height - 1, "+ Add reactor", "add", nil, nil, nil, #state.reactors < 64, accent)
-            footer("Settings", "settings")
+            button(height-2*depth+1, "+ Add reactor", "add", nil, nil, nil, #state.reactors < 64, accent, depth)
+            footer("Settings", "settings", nil, nil, depth)
         end
     elseif screen == "reactor" then
         local status = reading(entry)
@@ -279,27 +289,33 @@ local function build(width, height, state, api, context)
             end
         end
         values = wrapped
-        local statusRow = height >= 9 and height - 2 or nil
-        local barRow = height >= 13 and height - 3 or nil
-        local pagerRow = height - (barRow and 4 or statusRow and 3 or 2)
+        local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-4)/4)))
+        local bottom=height-2*depth
+        local statusRow = height >= 9 and bottom or nil
+        local barRows = height >= 26 and 3 or height >= 18 and 2 or 1
+        local barRow = height >= 13 and bottom-barRows or nil
+        local pagerRow = barRow and barRow-1 or statusRow and statusRow-1 or bottom
         local bodyRows = pagerRow - 2
         local slots = bodyRows * columns
         local page = pages(#values, slots, "metrics", pagerRow)
         local count = math.min(slots, #values - (page - 1) * slots)
         local rows = math.ceil(count / columns)
-        local gap = rows > 1 and math.floor((bodyRows - 1) / (rows - 1)) >= 2 and 2 or 1
         for slot = 1, count do
             local col, row = math.floor((slot - 1) / rows), (slot - 1) % rows
-            put(1 + inset + col * (span + gutter), 2 + row * gap, values[(page - 1) * slots + slot], span)
+            local y=2+math.floor(row*bodyRows/rows)
+            local spanRows=math.floor((row+1)*bodyRows/rows)-math.floor(row*bodyRows/rows)
+            local x=1+inset+col*(span+gutter)
+            if status.status=="ok" and row%2==0 then ui.style(x,y,span,spanRows,1,128) end
+            put(x,y+math.floor((spanRows-1)/2),values[(page-1)*slots+slot],span)
         end
         if barRow then
             local fraction = math.max(0, math.min(1, (value.percent or 0) / 100))
-            ui.style(2, barRow, width - 2, 1, 1, 128)
+            ui.style(2, barRow, width - 2, barRows, 1, 128)
             if value.heat then
                 local filled = math.floor((width - 2) * fraction)
-                if filled > 0 then ui.style(2, barRow, filled, 1, nil,
+                if filled > 0 then ui.style(2, barRow, filled, barRows, nil,
                     status.status ~= "ok" and 128 or value.heat >= value.melting and 16384 or 32) end
-                put(2, barRow, decimal(value.percent, 1) .. "% heat", width - 2, true)
+                put(2, barRow+math.floor((barRows-1)/2), decimal(value.percent, 1) .. "% heat", width - 2, true)
             end
         end
         if status.status ~= "ok" then
@@ -308,8 +324,9 @@ local function build(width, height, state, api, context)
             ui.text(row, status.error or "Sensor unavailable", true)
             ui.style(1, row, width, 1, 1, 16384)
         elseif statusRow then ui.text(statusRow, "Data " .. math.floor(status.age or 0) .. "s old", true) end
-        switch(entry, height - 1)
-        footer("Back", "home", "Edit", "edit")
+        switch(entry, bottom+1, nil, nil, depth)
+        footer("Back", "home", "Edit", "edit", depth)
+        return ui.finish(true)
     elseif screen == "edit" or screen == "settings" then
         local items = screen == "edit" and {{label = "Rename", action = "rename"}, {label = "Sensor target", action = "sensor"},
             {label = "Control output", action = "output", value = entry.id}, {label = "Raw readings", action = "raw"},
@@ -323,14 +340,17 @@ local function build(width, height, state, api, context)
     elseif screen == "palette" then
         local previewAccent = view.colourField == "accent" and view.colourDraft or accent
         local previewPanel = view.colourField == "accent" and state.panelColour or view.colourDraft
-        local lines, hits = api.ui.palette(width, height, view.colourDraft, view.colourField == "accent" and "UI color" or "Panel color")
-        ui.lines, ui.hits = lines, hits; table.remove(ui.hits); ui.lines.hits = ui.hits
+        local footerRows = api.ui.controlHeight(height)
+        local preview = width >= 24 and height >= 15
+        local bottom = height - footerRows - (preview and 4 or 0)
+        local lines, hits = api.ui.palette(width, height, view.colourDraft, view.colourField == "accent" and "UI color" or "Panel color", bottom)
+        ui.lines, ui.hits = lines, hits
         ui.style(1, 1, width, 1, api.ui.contrast(previewAccent), previewAccent)
-        if width >= 24 and height >= 15 then
-            ui.style(1, height - 5, width, 4, api.ui.contrast(previewPanel), previewPanel)
-            ui.style(1, height - 5, width, 1, api.ui.contrast(previewAccent), previewAccent)
-            ui.text(height - 5, "Preview", true); ui.text(height - 4, "Heat: 48 036 / 58 000", true)
-            ui.text(height - 3, "Output: 30 EU/t", true); ui.text(height - 2, "To melting*: 1 264", true)
+        if preview then
+            ui.style(1, bottom + 1, width, 4, api.ui.contrast(previewPanel), previewPanel)
+            ui.style(1, bottom + 1, width, 1, api.ui.contrast(previewAccent), previewAccent)
+            ui.text(bottom + 1, "Preview", true); ui.text(bottom + 2, "Heat: 48 036 / 58 000", true)
+            ui.text(bottom + 3, "Output: 30 EU/t", true); ui.text(bottom + 4, "To melting*: 1 264", true)
         end
         button(height, "Apply", "applyPanel", nil, 1, math.floor(width / 2), true, previewAccent)
         button(height, "Cancel", "settings", nil, math.floor(width / 2) + 1, width)
@@ -379,7 +399,7 @@ local function build(width, height, state, api, context)
         for row = 1, slots do ui.text(row + 1, (lines[(page - 1) * slots + row] or ""):gsub("[%c]", " ")) end
         footer("Back", screen == "raw" and "edit" or screen == "about" and "settings" or "messageBack")
     end
-    return ui.lines, ui.hits
+    return ui.finish()
 end
 function app.render(width, height, state, api, context)
     if not ready then return {"Reactors blocked", "Check OS log"} end
@@ -387,7 +407,8 @@ function app.render(width, height, state, api, context)
 end
 function app.handleTouch(x, y, width, height, state, api, context)
     if not ready then return false end
-    local _, hits = build(width, height, state, api, context)
+    local hits = context.hits
+    if not hits then local _; _, hits = build(width, height, state, api, context) end
     local action, value
     for _, hit in ipairs(hits) do if hit.enabled ~= false and api.ui.hit(hit, x, y) then action, value = hit.action, hit.value; break end end
     if not action then return false end

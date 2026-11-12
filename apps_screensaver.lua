@@ -59,12 +59,95 @@ local nyanFrames={
 local nyanColors={[","]=2048,["."]=1,["'"]=32768,["@"]=16,["$"]=64,["-"]=16384,
     [">"]=16384,["&"]=2,["+"]=16,["#"]=32,["="]=8,[";"]=1024,["*"]=256,["%"]=64}
 local nyanWidth,nyanHeight=#nyanFrames[1][1],#nyanFrames[1]
+local nyanEyeRows={11,11,12,12,12,11,11,11,12,12,12,11}
 local rainbow={16384,2,16,32,8,1024}
+local trailColors={ [">"]=16384,["&"]=2,["+"]=16,["#"]=32,["="]=8,[";"]=1024 }
 local function hash(a,b,c)
     local n=(a*7381+b*19391+c*834927+7919)%104729
     return (n*n*31+n*17+97)%104729
 end
 local function color(v) return palette[math.floor(v*#palette)%#palette+1] end
+-- Reduce the sprite in sections so one-cell features do not fall between samples.
+local function landmarkSamples(size,first,last,landmarks)
+    local samples={}
+    local source,target=first,1
+    landmarks[#landmarks+1]=last
+    for i,point in ipairs(landmarks) do
+        local projected=1+math.floor((point-first)*(size-1)/(last-first)+.5)
+        local stop=math.max(target+1,math.min(size-(#landmarks-i),projected))
+        for cell=target,stop do
+            samples[cell]=source+math.floor((cell-target)*(point-source)/(stop-target)+.5)
+        end
+        source,target=point,stop
+    end
+    return samples
+end
+local function nyanLayout(cols,rows,t)
+    local step=math.floor(t*5)
+    local index=step%#nyanFrames+1
+    local sprite,eyes=nyanFrames[index],nyanEyeRows[index]
+    local width=math.max(2,math.min(math.floor(cols*.73),math.floor(rows*2*nyanWidth/nyanHeight)))
+    local height=math.min(rows,math.max(1,math.floor(width*nyanHeight/(2*nyanWidth)+.5)))
+    local compact=rows<28
+    if compact then
+        local available=math.max(1,rows-(rows>=14 and 2 or rows>=10 and 1 or 0))
+        height=math.min(available,math.max(1,math.floor(width*nyanHeight/(1.4*nyanWidth)+.5)))
+        if width>=nyanWidth and available>=17 then height=math.min(nyanHeight,available) end
+    end
+    local columns,lines={},{}
+    if width>=7 and width<nyanWidth then
+        local eyeLine=sprite[eyes]
+        local firstEye=eyeLine:find(".",1,true)
+        local secondEye=eyeLine:find(".",firstEye+1,true)
+        local outline=eyeLine:sub(-1)=="," and nyanWidth-1 or nyanWidth
+        local landmarks={firstEye,firstEye+2,secondEye,outline-1}
+        if outline<nyanWidth then landmarks[#landmarks+1]=outline end
+        columns=landmarkSamples(width,1,nyanWidth,landmarks)
+    else
+        for x=1,width do columns[x]=1+math.floor((x-1)*(nyanWidth-1)/(width-1)+.5) end
+    end
+    if height>=nyanHeight then
+        for y=1,height do lines[y]=1+math.floor((y-1)*nyanHeight/height) end
+    elseif compact and height>=6 then
+        -- Retain the smile and a separate chin row, as well as eyes and cheeks.
+        local landmarks={eyes,eyes+2,eyes+3}
+        if height>=8 then table.insert(landmarks,eyes+4) end
+        if height>=10 then table.insert(landmarks,1,eyes-5) end
+        if height>=12 then table.insert(landmarks,eyes+5) end
+        lines=landmarkSamples(height,1,nyanHeight,landmarks)
+    elseif height>=3 then
+        local landmarks=height>=4 and {eyes,eyes+2} or {eyes}
+        lines=landmarkSamples(height,eyes-10,eyes+7,landmarks)
+    else
+        lines=height==2 and {eyes-5,eyes} or {eyes}
+    end
+    local trail
+    if compact then
+        trail={}
+        for y,line in ipairs(sprite) do trail[y]=trailColors[line:sub(1,1)] or trailColors[line:sub(2,2)] end
+    end
+    return {sprite=sprite,columns=columns,lines=lines,wave=step%2,eyes=eyes,trail=trail,
+        left=math.max(0,cols-width-math.max(1,math.floor(cols*.05))),top=math.floor((rows-height)/2)}
+end
+local function nyanPixel(layout,x,y,cols,t,seed)
+    local py=layout.lines[y-layout.top]
+    if py then
+        local px=layout.columns[x-layout.left]
+        if px then
+            local key=layout.sprite[py]:sub(px,px)
+            if key~="," and (key~="." or py==layout.eyes) then return " ",1,nyanColors[key] or 2048 end
+            if px==1 and layout.trail and layout.trail[py] then return " ",1,layout.trail[py] end
+        end
+        local wave=layout.wave
+        if x<=layout.left then
+            local colour=layout.trail and layout.trail[py]
+            if not layout.trail and py>=2+wave and py<=13+wave then colour=rainbow[1+math.floor((py-2-wave)/2)] end
+            if colour then return " ",1,colour end
+        end
+    end
+    local star=hash((x+math.floor(t*4))%cols,y,seed)
+    return star%79==0 and "+" or star%47==0 and "." or " ",1,2048
+end
 local function opened(state,api,context,design)
     local view=context.view
     local oldIndex,oldView=state.nextDesign,{}
@@ -265,6 +348,31 @@ local function tetrisRain(x,y,cols,rows,t,seed)
     local spark=hash(x,y+math.floor(t*3),seed)%31==0
     return spark and "." or " ",256,32768
 end
+local function compactTetris(w,h,t,seed,api)
+    local ui=api.ui.content(w,h)
+    ui.style(1,1,w,h,1,32768)
+    local tileWidth=w>=20 and 2 or 1
+    local stride=5*tileWidth
+    local lanes=math.max(1,math.floor((w+tileWidth)/stride))
+    local laneWidth=math.min(w,4*tileWidth)
+    local margin=math.floor((w-((lanes-1)*stride+laneWidth))/2)
+    for lane=0,lanes-1 do
+        local travel=math.floor(t*(4+lane%4))+hash(lane,0,seed)%h
+        local index=(math.floor(travel/h)+lane*3)%#blocks+1
+        local piece=blocks[index]
+        if #piece[1]*tileWidth>laneWidth then piece=blocks[2] end
+        local left=margin+lane*stride+1+math.floor((laneWidth-#piece[1]*tileWidth)/2)
+        local top=math.min(1+travel%h,h-#piece+1)
+        for row,line in ipairs(piece) do
+            for column=1,#line do
+                if line:sub(column,column)=="#" then
+                    ui.style(left+(column-1)*tileWidth,top+row-1,tileWidth,1,1,blockColors[index])
+                end
+            end
+        end
+    end
+    return navigation(ui,w,h)
+end
 local function rainbowRoad(x,y,cols,rows,t,seed)
     local depth=(y-rows*.25)/math.max(1,rows*.75)
     local across=(x-.5)/cols-.5
@@ -319,23 +427,6 @@ local function pattern(design,x,y,cols,rows,t,seed,cells)
     elseif design==8 then
         local age=cells[(y-1)*cols+x]
         return " ",1,age==0 and 32768 or age<3 and 1 or age<6 and 32 or age<14 and 512 or 2048
-    elseif design==9 then
-        local width=math.max(2,math.min(math.floor(cols*.73),math.floor(rows*2*nyanWidth/nyanHeight)))
-        local height=math.min(rows,math.max(1,math.floor(width*nyanHeight/(2*nyanWidth)+.5)))
-        local left,top=math.max(0,cols-width-math.floor(cols*.05)),math.floor((rows-height)/2)
-        local py=1+math.floor((y-top-1)*nyanHeight/height)
-        if x>left and x<=left+width and y>top and y<=top+height then
-            local px=1+math.floor((x-left-1)*(nyanWidth-1)/(width-1)+.5)
-            local key=nyanFrames[math.floor(t*5)%#nyanFrames+1][py]:sub(px,px)
-            if key~="," then return " ",1,nyanColors[key] or 2048 end
-        end
-        local wave=math.floor(t*5)%2
-        if x<=left and py>=2+wave and py<=13+wave then
-            return " ",1,rainbow[math.min(6,1+math.floor((py-2-wave)/2))]
-        end
-        -- The cropped cat retains the original frames; stars wrap independently.
-        local star=hash((x+math.floor(t*4))%cols,y,seed)
-        return star%79==0 and "+" or star%47==0 and "." or " ",1,2048
     elseif design==10 then
         local X,Y=(x-(cols+1)/2)/math.max(1,cols), (y-(rows+1)/2)/math.max(1,rows)
         for i=1,42 do
@@ -458,6 +549,7 @@ function app.render(w,h,state,api,context)
     if not frame then frame={start=os.clock()}; runtime[context.windowId]=frame end
     local t=os.clock()-frame.start; local seed=view.seed or context.windowId
     if design==2 then return renderWall(w,h,matrixWall(frame,w,h,t,seed,api),api) end
+    if design==23 and (w<64 or h<24) then return compactTetris(w,h,t,seed,api) end
     -- Coarse horizontal color runs bound large frames below the legacy modem
     -- packet limit. Tiny screens retain one-cell detail and the same patterns.
     local cellDetail=design==1 or design==9 or design==22 or design==25
@@ -465,6 +557,7 @@ function app.render(w,h,state,api,context)
     local blockY=cellDetail and 1 or math.max(1,math.ceil(h/36))
     local cols,rows=math.ceil(w/blockX),math.ceil(h/blockY)
     local cells=design==8 and life(frame,cols,rows,seed,t)
+    local nyan=design==9 and nyanLayout(cols,rows,t)
     local extra=extraPatterns[design-20]
     local ui=api.ui.content(w,h)
     for by=1,rows do
@@ -473,7 +566,8 @@ function app.render(w,h,state,api,context)
         local height=math.min(blockY,h-y+1)
         for bx=1,cols do
             local char,fg,bg
-            if extra then char,fg,bg=extra(bx,by,cols,rows,t,seed)
+            if nyan then char,fg,bg=nyanPixel(nyan,bx,by,cols,t,seed)
+            elseif extra then char,fg,bg=extra(bx,by,cols,rows,t,seed)
             else char,fg,bg=pattern(design,bx,by,cols,rows,t,seed,cells) end
             local x=(bx-1)*blockX+1
             local width=math.min(blockX,w-x+1)

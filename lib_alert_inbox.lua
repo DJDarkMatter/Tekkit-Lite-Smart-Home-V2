@@ -26,6 +26,7 @@ function Inbox.render(monitor, entries, api)
         if #rows == 0 then rows[1] = {"No alerts yet", nil, nil, false} end
         ui.menu("Alert inbox", rows, "alerts", {{"Back", "close"}})
     end
+    ui.finish()
     return {x = x, width = width, height = height, lines = ui.lines, hits = ui.hits}
 end
 

@@ -298,8 +298,12 @@ local function build(width,height,state,api,context)
     local function button(y,label,action,value,x1,x2,enabled,bg)
         ui.button(y,label,action,x1,x2,enabled,bg or 128,nil,value)
     end
-    local function footer(items)
-        for i,item in ipairs(items) do button(height,item[1],item[2],item[3],1+math.floor((i-1)*width/#items),math.floor(i*width/#items),item[4],item[5] or (#items>1 and i%2==0 and 256 or 128)) end
+    local function footer(items,depth)
+        depth=depth or 1
+        for i,item in ipairs(items) do
+            ui.button(height-depth+1,item[1],item[2],1+math.floor((i-1)*width/#items),math.floor(i*width/#items),item[4],
+                item[5] or (#items>1 and i%2==0 and 256 or 128),nil,item[3],depth)
+        end
     end
     local function page(key,count,slots,row)
         view.pages=view.pages or {}
@@ -347,14 +351,21 @@ local function build(width,height,state,api,context)
         if count>cols*nrows then bottom=bottom-1; nrows=rows(bottom) end
         local slots=cols*nrows
         local first=page(key,count,slots,bottom+1)
+        if key=="home" then
+            local visible=math.min(slots,count-first)
+            cols=math.min(cols,visible)
+            nrows=math.ceil(visible/cols)
+        end
+        local gapX=width>=cols*minWidth+cols-1 and 1 or gap
+        local gapY=bottom-1>=nrows*minHeight+nrows-1 and 1 or gap
         for slot=1,slots do
             local item=first+slot
             if item<=count then
                 local col,row=(slot-1)%cols,math.floor((slot-1)/cols)
-                local x1=1+math.floor(col*(width+gap)/cols)
-                local x2=math.floor((col+1)*(width+gap)/cols)-gap
-                local y1=2+math.floor(row*(bottom-1+gap)/nrows)
-                local y2=1+math.floor((row+1)*(bottom-1+gap)/nrows)-gap
+                local x1=1+math.floor(col*(width+gapX)/cols)
+                local x2=math.floor((col+1)*(width+gapX)/cols)-gapX
+                local y1=2+math.floor(row*(bottom-1+gapY)/nrows)
+                local y2=1+math.floor((row+1)*(bottom-1+gapY)/nrows)-gapY
                 draw(item,{x=x1,y=y1,w=x2-x1+1,h=y2-y1+1})
             end
         end
@@ -371,62 +382,76 @@ local function build(width,height,state,api,context)
         local available=h-(showChange and 1 or 0)
         local nameRows=math.max(1,math.min(2,available-quantityRows))
         for row=1,nameRows do text(x,y+row-1,title:sub((row-1)*w+1,row*w),w,true) end
-        local firstRow=y+math.max(nameRows,available-quantityRows)
+        local firstRow=y+nameRows+math.floor((available-nameRows-quantityRows)/2)
         for row=1,quantityRows do
             text(x,firstRow+row-1,valueText:sub((row-1)*w+1,row*w),w,true)
         end
-        if showChange then text(x,y+h-1,change,w,true) end
+        if showChange then
+            local ink=bg==128 and 32768 or 128
+            ui.style(x,y+h-1,w,1,api.ui.contrast(ink),ink)
+            text(x,y+h-1,change,w,true)
+        end
         ui.hits[#ui.hits+1]={x1=rect.x,x2=rect.x+rect.w-1,y1=rect.y,y2=rect.y+rect.h-1,action=action,value=value}
     end
     if screen=="home" then
         ui.heading("ME monitor views",accent)
+        local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-3)/5)))
+        local y=height-depth+1
         if #state.boards==0 then
-            monitorTile({x=1,y=2,w=width,h=height-2},"+ Add view","","add",nil,"ok")
+            monitorTile({x=1,y=2,w=width,h=y-2},"+ Add view","","add",nil,"ok",accent)
         else
-            grid(#state.boards,width>=32 and 2 or 1,MAX_VIEWS,"home",height-2,12,3,function(index,rect)
+            grid(#state.boards,width>=32 and 2 or 1,MAX_VIEWS,"home",y-depth-1,12,3,function(index,rect)
                 local item=state.boards[index]; local assigned=0
                 for _,cell in ipairs(item.tiles) do if cell.item then assigned=assigned+1 end end
                 monitorTile(rect,item.name,assigned.." / "..#item.tiles,"open",item.id,"ok")
             end)
-            button(height-1,"+ Add view","add",nil,nil,nil,#state.boards<MAX_VIEWS,accent)
+            ui.button(y-depth,"+ Add view","add",nil,nil,#state.boards<MAX_VIEWS,accent,nil,nil,depth)
         end
-        footer({{"Settings","settings"}})
+        footer({{"Settings","settings"}},depth)
     elseif screen=="board" or screen=="tiles" then
         local data=source(board)
         local rates=screen=="board" and board.showRates~=false
+        local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-3)/5)))
+        local bottom=height-depth
         ui.heading(screen=="tiles" and "Choose a tile" or board.name,data.status=="ok" and accent or 2)
         if board.layout=="list" then
-            local rowH=width>=(rates and 48 or 28) and 1 or rates and 3 or 2
-            local slots=math.max(1,math.floor((height-3)/rowH))
-            local first=page("tiles",#board.tiles,slots,height-1)
+            local inline=width>=(rates and 48 or 28)
+            local rowH=inline and 1 or rates and 3 or 2
+            rowH=math.max(rowH,math.min(api.ui.controlHeight(height),math.floor((bottom-2)/#board.tiles)))
+            local slots=math.max(1,math.floor((bottom-2)/rowH))
+            local first=page("tiles",#board.tiles,slots,bottom)
             for i=1,slots do
                 local cell=board.tiles[first+i]
                 if cell then
                     local y=2+(i-1)*rowH
                     local bg=cell.displayColour or (i%2==0 and 128 or 32768)
                     ui.style(1,y,width,rowH,api.ui.contrast(bg),bg)
+                    local stripe=cell.displayColour and i%2==0 and 1 or 0
+                    local span=width-stripe
+                    if stripe>0 then ui.style(width,y,1,rowH,nil,api.ui.contrast(bg)) end
                     local title=cell.item and cell.item.name or "+ Item"
                     local quantity=cell.item and amount(countFor(board,cell),width) or "Select item"
-                    if rowH==1 then
-                        if rates and cell.item then quantity=quantity.."  "..changeLabel(board,cell,width-#quantity-4) end
-                        local n=math.min(#quantity,width-2)
-                        text(1,y,title,math.max(1,width-n-1)); text(width-n+1,y,quantity,n)
+                    if inline then
+                        if rates and cell.item then quantity=quantity.."  "..changeLabel(board,cell,span-#quantity-4) end
+                        local n=math.min(#quantity,span-2)
+                        text(1,y,title,math.max(1,span-n-1)); text(span-n+1,y,quantity,n)
                     else
-                        ui.text(y,title); ui.text(y+1,quantity,true)
-                        if rates and cell.item then ui.text(y+2,changeLabel(board,cell,width),true) end
+                        text(1,y,title,span)
+                        text(1,y+1,quantity,span,true)
+                        if rates and cell.item then text(1,y+2,changeLabel(board,cell,span),span,true) end
                     end
                     ui.hits[#ui.hits+1]={x1=1,x2=width,y1=y,y2=y+rowH-1,action=screen=="tiles" and "chooseTile" or "tile",value=cell.id}
                 end
             end
         else
-            grid(#board.tiles,board.columns,board.rows,"tiles",height-1,8,3,function(index,rect)
+            grid(#board.tiles,board.columns,board.rows,"tiles",bottom,8,3,function(index,rect)
                 local cell=board.tiles[index]
                 monitorTile(rect,cell.item and cell.item.name or "+ Item",cell.item and amount(countFor(board,cell),rect.w) or "Select item",
                     screen=="tiles" and "chooseTile" or "tile",cell.id,data.status,cell.displayColour,
                     rates and cell.item and changeLabel(board,cell,rect.w))
             end)
         end
-        if screen=="tiles" then footer({{"Back","edit"}}) else footer({{"Back","home"},{"Edit","edit"}}) end
+        if screen=="tiles" then footer({{"Back","edit"}},depth) else footer({{"Back","home"},{"Edit","edit"}},depth) end
     elseif screen=="picker" then
         local frozen=picker(view,board,tile,context.windowId)
         local data=source(board)
@@ -520,11 +545,13 @@ local function build(width,height,state,api,context)
         footer({{"Cancel",draft.target=="new" and "home" or "edit"}})
     elseif screen=="colour" then
         local draft=view.colourDraft
-        local lines,hits=api.ui.palette(width,height,draft.auto and nil or draft.value,"Item color")
+        local previewRows = width >= 24 and height >= 14 and math.min(6, math.floor(height / 4)) or 0
+        local footerRows = api.ui.controlHeight(height)
+        local bottom = height - footerRows - previewRows
+        local lines,hits=api.ui.palette(width,height,draft.auto and nil or draft.value,"Item color",bottom)
         ui.lines,ui.hits=lines,hits
-        table.remove(hits) -- Replace the palette's Back row with draft controls.
-        if width>=24 and height>=14 then
-            monitorTile({x=2,y=11,w=width-2,h=height-12},tile.item and tile.item.name or "+ Item",
+        if previewRows > 0 then
+            monitorTile({x=2,y=bottom+1,w=width-2,h=previewRows},tile.item and tile.item.name or "+ Item",
                 tile.item and amount(countFor(board,tile),width-2) or "Select item","preview",nil,"ok",draft.auto and 128 or draft.value)
         end
         footer({{"Apply","applyColour"},{"Auto","autoColour"},{"Back","item"}})
@@ -546,7 +573,7 @@ local function build(width,height,state,api,context)
         info("Information",{screen=="message" and view.message or
             "Each saved view selects an AE1 sensor client, side and ME Wireless Access Point. Choose a 1-16 by 1-16 grid or a list of up to 256 rows, then touch an entry to select an item. Item details offer Color; Auto restores the default tile or alternating list colors. Appearance does not change the item or AE source. Name/Amount and direction sort the picker; Search filters names/raw IDs. Rows keep their positions until Sort, Search or Refresh so live count changes cannot select the wrong item. Counts update about every two seconds. A live complete catalog with no selected item means zero; offline/unpowered/missing data shows --. Counts use plain decimal digits without k/M/E notation. The native card does not expose NBT; indistinguishable raw-name/damage variants are combined. Items are never moved, requested or crafted. Each app configures its own source; the OS shares physical sensor reads."},"info",screen=="message" and "messageBack" or "settings")
     end
-    return ui.lines,ui.hits
+    return ui.finish(screen=="home" or screen=="board" or screen=="tiles")
 end
 local function resize(state,api,view,board)
     local draft=view.gridDraft
@@ -564,7 +591,8 @@ function app.render(width,height,state,api,context)
 end
 function app.handleTouch(x,y,width,height,state,api,context)
     if not ready then return false end
-    local _,hits=build(width,height,state,api,context)
+    local hits = context.hits
+    if not hits then local _; _, hits = build(width,height, state, api, context) end
     local action,value
     for _,hit in ipairs(hits) do if hit.enabled~=false and api.ui.hit(hit,x,y) then action,value=hit.action,hit.value; break end end
     if not action then return false end

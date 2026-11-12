@@ -595,9 +595,11 @@ local function dashboard(ui,w,h,state,api)
     local cards=w>=42 and h>=14
     local plot=cards and w>=56 and h>=24
     local half=math.floor(w/2)
+    local cardRows=math.min(7,4+math.max(0,math.floor((h-25)/5)))
     local short={ok="OK",unconfigured="SET",waiting="WAIT",offline="OFF",unpowered="PWR",unsupported="DATA",stale="OLD",error="ERR"}
     for i,role in ipairs({"farm","main"}) do
-        local left=i==1 and 1 or half+1; local width=i==1 and half or w-half
+        local gutter=w>=22 and 1 or 0
+        local left=i==1 and 1 or half+1+gutter; local width=i==1 and half or w-half-gutter
         local bg=source(role).status=="ok" and 8192 or 2
         ui.style(left,1,width,1,api.ui.contrast(bg),bg)
         local label=w>=24 and (role=="farm" and "Farm: " or "Main: ")..status(role)
@@ -611,41 +613,46 @@ local function dashboard(ui,w,h,state,api)
     local farm=source("farm"); local farmLive=farm.status=="ok"
     for i=1,count do
         local left=1+math.floor((i-1)*w/count); local right=math.floor(i*w/count)-1; local width=right-left+1
-        ui.style(left,3,width,4,api.ui.contrast(state.settings.panel),state.settings.panel)
+        local detail=4+math.floor((cardRows-4)/2)
+        local last=2+cardRows
+        ui.style(left,3,width,cardRows,api.ui.contrast(state.settings.panel),state.settings.panel)
         local accent=api.getAppColour(name)
         ui.style(left,3,width,1,api.ui.contrast(accent),accent)
         ui.put(left+1,3,({"HV OUTPUT","FARM STOCK","FARM MOVEMENT"})[i],width-2)
         if i==1 then
-            ui.put(left+1,4,state.hv.item and Me.amount(hvAmount).." panels" or "Select HV panel type",width-2)
-            ui.put(left+1,5,hvRate and hvRateCaption(hvRate) or "Collecting "..rateProgress("hv").."/60s",width-2)
-            ui.put(left+1,6,hvRate and ("Observed "..elapsedText(hvSeconds)) or "First complete minute",width-2)
-            ui.hits[#ui.hits+1]={x1=left,x2=right,y1=3,y2=6,action=state.hv.item and "item" or "chooseHV",value={key="hv",item=state.hv.item and Me.identity(state.hv.item)}}
+            ui.put(left+1,detail,state.hv.item and Me.amount(hvAmount).." panels" or "Select HV panel type",width-2)
+            ui.put(left+1,detail+1,hvRate and hvRateCaption(hvRate) or "Collecting "..rateProgress("hv").."/60s",width-2)
+            ui.put(left+1,last,hvRate and ("Observed "..elapsedText(hvSeconds)) or "First complete minute",width-2)
+            ui.hits[#ui.hits+1]={x1=left,x2=right,y1=3,y2=last,action=state.hv.item and "item" or "chooseHV",value={key="hv",item=state.hv.item and Me.identity(state.hv.item)}}
         elseif i==2 then
-            ui.put(left+1,4,Me.amount(farmLive and farm.total or nil).." items",width-2)
-            ui.put(left+1,5,Me.amount(farmLive and farm.types or nil).." item types",width-2)
+            ui.put(left+1,detail,Me.amount(farmLive and farm.total or nil).." items",width-2)
+            ui.put(left+1,detail+1,Me.amount(farmLive and farm.types or nil).." item types",width-2)
             local data=farmLive and farm.data or {}; local used,free=data.UsedBytes,data.FreeBytes
             if Me.number(used,0,Me.MAX) and Me.number(free,0,Me.MAX) and used+free>0 then
                 local ratio=used/(used+free); local colour=ratio>=.95 and 16384 or ratio>=.8 and 2 or 8192
-                ui.style(left,6,math.max(1,math.floor(width*ratio)),1,1,colour)
-                ui.put(left+1,6,"Bytes "..math.floor(ratio*1000+.5)/10 .."%",width-2)
-            else ui.put(left+1,6,farmLive and "Complete inventory" or status("farm"),width-2) end
+                ui.style(left,last,math.max(1,math.floor(width*ratio)),1,1,colour)
+                ui.put(left+1,last,"Bytes "..math.floor(ratio*1000+.5)/10 .."%",width-2)
+            else ui.put(left+1,last,farmLive and "Complete inventory" or status("farm"),width-2) end
         else
             local rising,falling=flow(state)
             local equivalents=completedRate(state,"equivalents")
-            ui.put(left+1,4,Me.amount(rising).." rising / "..Me.amount(falling).." falling",width-2)
-            ui.put(left+1,5,Me.amount(farmLive and farm.equivalents or nil).." panel equiv in farm",width-2)
-            ui.put(left+1,6,"Net eq "..rateText(state,equivalents and equivalents*state.settings.period,width-9),width-2)
+            ui.put(left+1,detail,Me.amount(rising).." rising / "..Me.amount(falling).." falling",width-2)
+            ui.put(left+1,detail+1,Me.amount(farmLive and farm.equivalents or nil).." panel equiv in farm",width-2)
+            ui.put(left+1,last,"Net eq "..rateText(state,equivalents and equivalents*state.settings.period,width-9),width-2)
         end
     end
     if plot then
-        local low,high,interval=chart(ui,1,9,w,3,state)
-        ui.put(1,8,"HV production  "..math.floor(state.settings.window/60).."m | "..math.floor(state.settings.window/w*10+.5)/10 .."s/column",w)
+        local plotTop=cardRows+5
+        local plotRows=math.min(12,3+math.floor((h-24)/4))
+        local low,high,interval=chart(ui,1,plotTop,w,plotRows,state)
+        ui.put(1,plotTop-1,"HV production  "..math.floor(state.settings.window/60).."m | "..math.floor(state.settings.window/w*10+.5)/10 .."s/column",w)
         if low then
             local text=rateText(state,low).." .. "..rateText(state,high).." | "..(interval and math.floor(interval*10+.5)/10 .."s samples" or "sampling")
-            if #text<w-32 then ui.put(w-#text+1,8,text,#text) end
+            if #text<w-32 then ui.put(w-#text+1,plotTop-1,text,#text) end
         end
+        return plotTop+plotRows+2
     end
-    return plot and 14 or 9
+    return cardRows+5
 end
 local function form(w,h,state,api,context)
     local view=context.view; view.pages=view.pages or {}; local screen=view.screen or "home"
@@ -659,7 +666,10 @@ local function form(w,h,state,api,context)
         local col=math.max(9,math.floor(w/(fields+1)))
         local start=w-fields*col+1
         local top=dashboard(ui,w,h,state,api)
-        local capacity=math.max(1,math.floor((h-top)/rowH))
+        local depth=h>=14 and math.min(api.ui.controlHeight(h),math.max(1,math.floor((h-top-2)/3))) or 1
+        local footer=h-depth+1
+        if #rows>0 then rowH=math.max(rowH,math.min(api.ui.controlHeight(h),math.floor((footer-top)/#rows))) end
+        local capacity=math.max(1,math.floor((footer-top)/rowH))
         local sticky,scroll={},{}
         for _,item in ipairs(rows) do local m=pinFor(state,item)
             if m and m.stick then sticky[#sticky+1]=item else scroll[#scroll+1]=item end
@@ -677,6 +687,7 @@ local function form(w,h,state,api,context)
             local count,rate,_,_,_,delta=reading(state,key)
             local custom=m and m.colour
             local bg=custom or (index%2==0 and state.settings.panel or state.settings.background)
+            if not custom and bg==state.settings.background and index%2==0 then bg=bg==128 and 32768 or 128 end
             local contrast=api.ui.contrast(bg)
             local function ink(color) return contrast==1 and color or contrast end
             local labelColor=custom and contrast or ink(groupColors[itemGroup(item)])
@@ -687,6 +698,8 @@ local function form(w,h,state,api,context)
                 ui.style(x,line,span,1,fg,nil)
             end
             ui.style(1,y,w,rowH,contrast,bg)
+            local stripe=custom and index%2==0 and 1 or 0
+            if stripe>0 then ui.style(1,y,1,rowH,nil,contrast) end
             local label=(m and (m.stick and "^ " or "* ") or "")..(m and m.name or hv and state.hv.name or item.name)
             if not hv and state.hv.item and item.key==state.hv.item.key then label=label.." (farm)" end
             if wide then
@@ -707,22 +720,22 @@ local function form(w,h,state,api,context)
                 local rateLabel=fitRate(state,rate,budget-#amount)
                 local rateX=w-#rateLabel+1
                 local countX=rateX-#amount-1
-                write(1,y,label,countX-2,labelColor)
+                write(1+stripe,y,label,countX-2-stripe,labelColor)
                 write(countX,y,amount,#amount,amountColor)
                 write(rateX,y,rateLabel,#rateLabel,directionColor(rate))
             else
                 local q=fitNumber(count,w)
                 local r=fitRate(state,rate,math.max(5,w-#q-1))
-                if #q+#r+1<=w then
-                    local x=1+math.floor((w-#q-#r-1)/2)
-                    write(1,y,label,w,labelColor,true)
+                if #q+#r+1<=w-stripe then
+                    local x=1+stripe+math.floor((w-stripe-#q-#r-1)/2)
+                    write(1+stripe,y,label,w-stripe,labelColor,true)
                     write(x,y+1,q,#q,amountColor)
                     write(x+#q+1,y+1,r,#r,directionColor(rate))
                 else
                     r=fitRate(state,rate,w-4)
-                    write(1,y,hv and "HV" or label,w-#r-1,labelColor)
+                    write(1+stripe,y,hv and "HV" or label,w-#r-1-stripe,labelColor)
                     write(w-#r+1,y,r,#r,directionColor(rate))
-                    write(1,y+1,q,w,amountColor,true)
+                    write(1+stripe,y+1,q,w-stripe,amountColor,true)
                 end
             end
             ui.hits[#ui.hits+1]={x1=1,x2=w,y1=y,y2=y+rowH-1,action="item",value={key=key,item=hv and state.hv.item and Me.identity(state.hv.item) or not hv and Me.identity(item) or nil}}
@@ -741,18 +754,20 @@ local function form(w,h,state,api,context)
         for i=1,slots do local item=scroll[first+i]; if item then row(top+(#sticky+i-1)*rowH,item,item.hv and "hv" or item.key,item.hv,first+i+#sticky) end end
         local farmRows=0; for _,item in ipairs(rows) do if not item.hv then farmRows=farmRows+1 end end
         if farmRows==0 then
-            local line=math.min(h-1,top+(#sticky+#scroll)*rowH)
-            if line>=top+#sticky*rowH and line<h then
+            local line=math.min(footer-1,top+(#sticky+#scroll)*rowH)
+            if line>=top+#sticky*rowH and line<footer then
                 ui.put(1,line,s.status=="ok" and "Farm ME is empty" or "Farm: "..status("farm"),w,true)
                 ui.hits[#ui.hits+1]={x1=1,x2=w,y=line,action="sourceInfo"}
             end
         end
         if pages>1 then
             local wing=math.max(2,math.floor(w/8)); local mid=math.floor((w+2*wing)/2)
-            ui.action(h,"<","page",{key="overview",page=page-1},1,wing,page>1)
-            ui.action(h,">","page",{key="overview",page=page+1},wing+1,2*wing,page<pages)
-            ui.action(h,"Pin item","pin",nil,2*wing+1,mid); ui.action(h,"Menu","menu",nil,mid+1,w)
-        else ui.footer({{"Pin item","pin"},{"Menu","menu"}}) end
+            ui.button(footer,"<","page",1,wing,page>1,128,nil,{key="overview",page=page-1},depth)
+            ui.button(footer,">","page",wing+1,2*wing,page<pages,128,nil,{key="overview",page=page+1},depth)
+            ui.button(footer,"Pin item","pin",2*wing+1,mid,true,accent,nil,nil,depth)
+            ui.button(footer,"Menu","menu",mid+1,w,true,128,nil,nil,depth)
+        else ui.footer({{"Pin item","pin",nil,true,accent},{"Menu","menu"}},depth) end
+        return ui.finish(true)
     elseif screen=="menu" then
         ui.menu("Solar farm menu",{{"ME sources","sources"},{"HV panel type / detection","chooseHV"},{"Graph/change: "..state.settings.window/60 .." minutes","window"},
             {"Rate unit: "..periods[state.settings.period],"period"},{"List sorting","listSort"},{"Reset rate learning","resetRates"},{"Withdrawal filter","dropSettings"},
@@ -841,7 +856,7 @@ local function form(w,h,state,api,context)
         ui.menu("Ignore big withdrawals",{{"Minimum: "..state.settings.dropCount,"globalField","dropCount"},{"Percent: "..state.settings.dropPercent,"globalField","dropPercent"}},"drop",{{"Back","menu"}})
     elseif screen=="pinColour" then
         local m=view.key=="hv" and state.hv or metric(state,view.key)
-        local lines,hits=api.ui.palette(w,h,m and m.colour,"Item color"); for _,hit in ipairs(hits) do if hit.action=="cancel" then hit.action="editPin" end end
+        local lines,hits=api.ui.palette(w,h,m and m.colour,"Item color",false); for _,hit in ipairs(hits) do if hit.action=="cancel" then hit.action="editPin" end end
         return lines,hits
     elseif screen=="number" then ui.numberPad(view.number.key,view.number.draft,view.number.back)
     elseif screen=="keyboard" then ui.keyboard(view.keyboard)
@@ -872,7 +887,7 @@ local function form(w,h,state,api,context)
         }
         ui.info("Solar farm",lines,"info",screen=="message" and view.back or "menu")
     else view.screen="home"; return form(w,h,state,api,context) end
-    return ui.lines,ui.hits
+    return ui.finish()
 end
 function app.render(w,h,state,api,context) if not ready then return {"Solar farm blocked","Check OS console"} end; return (form(w,h,state,api,context)) end
 local function beginText(view,target,key,value,back,limit) view.keyboard={target=target,key=key,draft=value or "",back=back,limit=limit or 24,bank=0,page=1}; view.screen="keyboard" end
@@ -897,7 +912,8 @@ local function setOrder(view,order,api,windowId)
 end
 function app.handleTouch(x,y,w,h,state,api,context)
     if not ready then return false end
-    local _,hits=form(w,h,state,api,context); local action,value
+    local hits = context.hits
+    if not hits then local _; _, hits = form(w,h, state, api, context) end; local action,value
     for _,hit in ipairs(hits) do if hit.enabled~=false and api.ui.hit(hit,x,y) then action,value=hit.action,hit.value; break end end
     if not action then return false end
     local view=context.view; local m=view.key=="hv" and state.hv or metric(state,view.key)

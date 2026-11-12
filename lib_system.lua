@@ -16,46 +16,11 @@ local function build(width,height,state,api,context)
     local view=context.view; view.pages=view.pages or {}
     local screen=view.screen or "home"
     local d=api.getDiagnostics()
-    local ui,accent=api.ui.content(width,height),api.getAppColour("@settings")
-    ui.style(1,1,width,height,1,32768)
-    local function button(y,label,action,value,x1,x2,enabled,bg)
-        ui.button(y,label,action,x1,x2,enabled,bg or 128,nil,value)
-    end
-    local function footer(items)
-        for i,item in ipairs(items) do button(height,item[1],item[2],item[3],1+math.floor((i-1)*width/#items),math.floor(i*width/#items),item[4]~=false,i%2==0 and 256 or 128) end
-    end
-    local function page(key,count,slots)
-        local pages=math.max(1,math.ceil(count/slots))
-        local current=math.max(1,math.min(view.pages[key] or 1,pages)); view.pages[key]=current
-        if pages>1 then
-            local half=math.floor(width/2)
-            button(height-1,"< "..current.."/"..pages,"page",{key=key,page=current-1},1,half,current>1)
-            button(height-1,">","page",{key=key,page=current+1},half+1,width,current<pages)
-        end
-        return (current-1)*slots
-    end
-    local function menu(title,items,key,back)
-        ui.heading(title,accent)
-        local slots=#items<=height-2 and height-2 or height-3
-        local first=page(key,#items,slots)
-        for i=1,slots do local item=items[first+i]; if item then button(i+1,item[1],item[2],item[3],nil,nil,item[4],item[5]) end end
-        footer(back or {{"Back","home"}})
-    end
+    local ui=api.ui.form(width,height,view,api.getAppColour("@settings"))
+    local menu=ui.menu
     local function info(title,lines,key,back)
-        local wrapped={}
-        for _,line in ipairs(lines) do
-            line=tostring(line):gsub("[%c]"," ")
-            repeat
-                local cut=#line>width and line:sub(1,width):match("^.*()%s")
-                if cut and cut>1 then wrapped[#wrapped+1],line=line:sub(1,cut-1),line:sub(cut+1)
-                else wrapped[#wrapped+1],line=line:sub(1,width),line:sub(width+1) end
-            until line==""
-        end
-        ui.heading(title,accent)
-        local slots=#wrapped<=height-2 and height-2 or height-3
-        local first=page(key,#wrapped,slots)
-        for i=1,slots do ui.text(i+1,wrapped[first+i] or "") end
-        footer(back or {{"Back","home"}})
+        ui.info(title,lines,key,back and back[1][2] or "home")
+        if back then ui.footer(back) end
     end
     if screen=="home" then
         local online,ports,targets,windows=0,0,0,#d.windows
@@ -217,11 +182,12 @@ local function build(width,height,state,api,context)
     elseif screen=="about" then
         info("About CC system",{"Live registry, routes, card catalogs, IO confirmations, enabled apps and saved windows. Offline clients remain visible during this OS session; a restart waits for announcements. Sensors and machine readings are never restored as live. Sensor bindings and app settings are saved by their owning apps. Client paths are based on received packets."},"about",{{"Back","settings"}})
     end
-    return ui.lines,ui.hits
+    return ui.finish()
 end
 function app.render(w,h,state,api,context) return (build(w,h,state,api,context)) end
 function app.handleTouch(x,y,w,h,state,api,context)
-    local _,hits=build(w,h,state,api,context)
+    local hits = context.hits
+    if not hits then local _; _, hits = build(w,h, state, api, context) end
     local view=context.view
     for _,hit in ipairs(hits) do if hit.enabled~=false and api.ui.hit(hit,x,y) then
         local action,value=hit.action,hit.value

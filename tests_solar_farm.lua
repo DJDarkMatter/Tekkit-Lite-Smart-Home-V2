@@ -12,7 +12,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         equal(t.state.history.main.keys[Me.itemKey("ic2.matter",0,"UU Matter")],nil)
         local text=t.text(); assert(text:find("Minium Shard",1,true)); assert(text:find("HV solar",1,true)); assert(not text:find("Iron Ingot",1,true))
         local hits=t.content().hits; local buttons={}
-        for _,hit in ipairs(hits) do if hit.y==t.height then buttons[#buttons+1]=hit.action end end
+        for _,hit in ipairs(hits) do if (hit.y2 or hit.y)==t.height then buttons[#buttons+1]=hit.action end end
         equal(table.concat(buttons,","),"pin,menu")
         t.click("menu"); local menu=t.text(); assert(menu:find("ME sources",1,true)); assert(not menu:find("Farm stocks",1,true)); assert(not menu:find("Stock alarms",1,true))
         equal(t.app.handleIOSelection,nil); equal(t.app.handleNotification,nil)
@@ -318,7 +318,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         equal(t.view(small).overviewSort.field,"name"); equal(t.view(small).overviewSort.descending,true); equal(t.view().overviewSort.field,"amount")
     end
     function tests.solar_curve_uses_six_height_steps_and_one_character_columns_with_real_sample_gaps()
-        local t=setup("solar_farm",true,{width=80,height=30}); t.configure(); t.state.elapsed=60; t.state.settings.window=300
+        local t=setup("solar_farm",true,{width=80,height=24}); t.configure(); t.state.elapsed=60; t.state.settings.window=300
         t.state.hvTrace={gap=false,points={{10,0},{20,1},{30,2},{40,3},{50,4},{60,5}}}
         local lines=t.content(); local heights={}
         for x=1,80 do local height=0
@@ -326,6 +326,12 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
             if height>0 then heights[height]=true end
         end
         for level=1,6 do assert(heights[level],"Missing virtual height "..level) end
+        t.height=38
+        lines=t.content()
+        local bars=0
+        for _,line in ipairs(lines) do if line:match("^[ |.]+$") and line:find("|",1,true) then bars=bars+1 end end
+        assert(bars>3,"Taller windows give the plot more rows")
+        t.height=24
         restartLearning(t); t.state.settings.window=300
         for i=1,100 do t.main[2].Size=t.main[2].Size+1; t.advance(2) end
         equal(#t.state.hvTrace.points,71); local previous=t.state.hvTrace.points[70]; local latest=t.state.hvTrace.points[71]; equal(latest[1]-previous[1],2)

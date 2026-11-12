@@ -56,6 +56,112 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         end
         for _,bank in ipairs({2,"123"}) do local k={bank=bank,draft=""}; Gui.typeKey(k,"1",4); equal(k.bank,bank) end
     end
+
+    function tests.v48_buttons_use_spare_rows_with_matching_hits_and_distinct_surfaces()
+        local Gui = dofile("lib_gui.lua")
+        for _, height in ipairs({6, 12, 28}) do
+            local ui=Gui.form(24,height,{},2048)
+            ui.menu("Actions",{{"First","first"},{"Second","second"},{"Third","third"}}, "actions",
+                {{"Back","back"},{"Next","next"}})
+            local lines, hits=ui.finish()
+            local surface=Gui.new(24,height,1,32768)
+            for _,style in ipairs(lines.styles) do
+                surface.style(style.x,style.y,style.width,style.height,style.fg,style.bg)
+            end
+            for _,hit in ipairs(hits) do
+                if height==6 then equal(hit.y1,hit.y2)
+                elseif height==12 then assert(hit.y2>hit.y1)
+                else assert(hit.y2-hit.y1+1>=4) end
+                for y=hit.y1,hit.y2 do equal(Gui.actionAt(hits,hit.x1,y),hit.action) end
+            end
+            for i=2,3 do
+                local previous, current=hits[i-1],hits[i]
+                if previous.y2+1==current.y1 then
+                    assert(surface.background[previous.y2]~=surface.background[current.y1],
+                        "Adjacent list entries need a visible boundary")
+                end
+            end
+            local footer=surface.background[height]
+            assert(footer:sub(1,12)~=footer:sub(13),"Adjacent footer buttons need a visible boundary")
+        end
+        local ui=Gui.content(20,16)
+        ui.button(2,"A longer friendly client name","choose")
+        local lines,hits=ui.finish()
+        assert(table.concat(lines,"\n"):find("client name",1,true))
+        assert(hits[1].y2>hits[1].y1)
+    end
+
+    function tests.v48_launcher_layout_and_palette_accept_taps_below_labels()
+        local apps={}
+        for i=1,12 do apps[i]={label="App "..i,value=i,enabled=true} end
+        local _,_,hits,_,pages=Desktop.menu({width=51,height=19},"Start",apps,1)
+        assert(hits[1].x2<hits[2].x1 and hits[1].y1==hits[2].y1 and pages==2)
+        equal(hits[2].item.value,2)
+        local t=setup(true,58,25)
+        local model=t.central.server.monitors["monitor_13:top"]
+        t.touch("top",2,25)
+        local function menuItem(value, menu)
+            for _,hit in ipairs(menu.menuHits) do if hit.item and hit.item.value==value then return hit end end
+            error("Missing menu item "..value)
+        end
+        local entry=menuItem("coffee",model)
+        assert(entry.y2>entry.y1)
+        t.touch("top",entry.x2,entry.y2)
+        local id,win=next(t.central.server.state.windows)
+        equal(win.appName,"coffee")
+        assert(t.api.placeWindow(id,1,1,54,22)); t.paint()
+        t.touch("top",win.x+win.width-5,win.y)
+        local resize=menuItem("custom",model.layoutMenu)
+        assert(resize.y2>resize.y1)
+        t.touch("top",resize.x1,resize.y2)
+        assert(model.placement and model.placement.kind=="custom")
+        t.touch("top",6,25)
+
+        local settings=t.open("@settings","top",2,2,50,20)
+        t.click(settings,"appearance")
+        t.click(settings,"background")
+        local color,back
+        for _,hit in ipairs(t.hits(settings)) do
+            if hit.action=="colour" and hit.value==2048 then color=hit end
+            if hit.action=="cancel" then back=hit end
+        end
+        assert(color.y2>color.y1 and back.y2>back.y1)
+        local window=t.window(settings)
+        t.touch("top",window.x+color.x2,window.y+color.y2)
+        equal(t.api.getOSSettings().backgroundColour,2048)
+    end
+
+    function tests.v48_touch_layout_revisions_reject_taps_for_an_older_layout()
+        local probe=[=[
+            local app={title="Probe",minWidth=12,minHeight=6}
+            function app.render(w,h,state,api)
+                local ui=api.ui.content(w,h)
+                ui.heading("Controls")
+                for i=1,state.count or 1 do ui.button(1+i,"Choice "..i,"choose",nil,nil,true,nil,nil,i) end
+                ui.button(h,"Back","back")
+                return ui.finish()
+            end
+            function app.handleTouch(x,y,w,h,state,api,context)
+                local action,value=api.ui.actionAt(context.hits,x,y)
+                if action=="choose" then state.chosen=value end
+            end
+            return app
+        ]=]
+        local t=setup({["apps_probe.lua"]=probe},58,25)
+        local id=t.open("probe","top",1,1,40,22)
+        local window=t.window(id)
+        local state=t.central.server.state.appStates.probe
+        local previous=t.display.client.devices.top.inputRevision
+        state.count=4
+        t.paint()
+        assert(previous~=t.display.client.devices.top.inputRevision)
+        local hit=t.hits(id)[2]
+        t.display.client.touch("top",window.x+hit.x2,window.y+hit.y2,previous)
+        t.bus.pump()
+        equal(state.chosen,nil)
+        t.touch("top",window.x+hit.x2,window.y+hit.y2)
+        equal(state.chosen,2)
+    end
     function tests.v41_shared_keyboard_qwerty_paging_and_next_mode_labels()
         local Gui = dofile("lib_gui.lua")
         for _, size in ipairs({{12, 6}, {19, 8}, {20, 6}, {38, 14}, {64, 26}}) do
@@ -105,10 +211,11 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             for _, decimal in ipairs({false, true}) do
                 local ui = Gui.form(width, height, {}, 2048)
                 ui.numberPad("Level", "201000", "edit", decimal)
-                local coverage, digits = {}, 0
+                local coverage, digits, lastKey = {}, 0, 0
                 for _, hit in ipairs(ui.hits) do
                     if hit.action == "digit" then
                         digits = digits + 1
+                        lastKey = math.max(lastKey, hit.y2)
                         assert(hit.y1 >= 3 and hit.y2 < height and hit.x1 >= 1 and hit.x2 <= width)
                         equal(ui.lines[hit.y]:sub(hit.x1, hit.x2):match("%S+"), hit.value)
                         for y = hit.y1, hit.y2 do
@@ -123,10 +230,14 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
                     end
                 end
                 equal(digits, 12)
-                for cell = 1, (height - 3) * width do assert(coverage[cell], "Gap between keypad tiles") end
-                local _, firstBottomKey = Gui.actionAt(ui.hits, 1, height - 1)
+                for cell = 1, (lastKey - 2) * width do assert(coverage[cell], "Gap between keypad tiles") end
+                for y = lastKey + 1, height do
+                    equal(Gui.actionAt(ui.hits, 1, y), "setNumber")
+                    equal(Gui.actionAt(ui.hits, width, y), "edit")
+                end
+                local _, firstBottomKey = Gui.actionAt(ui.hits, 1, lastKey)
                 equal(firstBottomKey, "9")
-                local _, secondBottomKey = Gui.actionAt(ui.hits, math.floor(width / 4) + 1, height - 1)
+                local _, secondBottomKey = Gui.actionAt(ui.hits, math.floor(width / 4) + 1, lastKey)
                 equal(secondBottomKey, decimal and "." or "Clr")
                 equal(Gui.actionAt(ui.hits, 1, height), "setNumber")
                 equal(Gui.actionAt(ui.hits, width, height), "edit")

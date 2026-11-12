@@ -101,17 +101,26 @@ local function build(w, h, state, api, view)
         local from = seconds + (view.finish and math.floor(math.max(0, os.clock() - finish)) or 0)
         ui.put(keys + 1, 2, "-" .. from .. "s", math.max(0, span - #edge - 1))
         ui.put(w - #edge + 1, 2, edge, #edge)
-        local slots = #entries <= h - 3 and h - 3 or h - 4
-        local first = ui.page("lanes", #entries, slots, h - 1)
-        for i = 1, slots do
+        local footer = math.min(api.ui.controlHeight(h), math.max(1, math.floor((h - 3) / 4)))
+        local bottom = h - footer
+        local pages = #entries > bottom - 2
+        local slots = bottom - (pages and 3 or 2)
+        local first = ui.page("lanes", #entries, slots, bottom)
+        local visible = math.min(slots, #entries - first)
+        local room = bottom - 2 - (pages and 1 or 0)
+        local gap = visible > 0 and room >= 3 * visible and 1 or 0
+        local available = room - math.max(0, visible - 1) * gap
+        for i = 1, visible do
             local address = entries[first + i]
             if address then
+                local y = 3 + math.floor((i - 1) * available / visible) + (i - 1) * gap
+                local depth = math.floor(i * available / visible) - math.floor((i - 1) * available / visible)
                 local label = colorLabel(api, address)
                 if keys >= 16 and view.mode ~= "side" then label = label .. " " .. api.clientName(address.clientId) end
                 local trace, current = api.getIOTrace(address, finish, seconds, span)
                 local badge = address.direction == "input" and "I " or "O "
                 local keyColor = address.color or 256
-                ui.action(i + 2, badge .. label, "lane", lane(address), 1, keys, true, keyColor)
+                ui.button(y, badge .. label, "lane", 1, keys, true, keyColor, nil, lane(address), depth)
                 local col = 1
                 while col <= #trace do
                     local char = trace:sub(col, col)
@@ -119,15 +128,15 @@ local function build(w, h, state, api, view)
                     while last < #trace and trace:sub(last + 1, last + 1) == char do last = last + 1 end
                     local glyph = char == "?" and "." or char == "0" and "_" or char == "|" and "|" or " "
                     ui.put(keys + col, i + 2, glyph:rep(last - col + 1), last - col + 1)
-                    ui.style(keys + col, i + 2, last - col + 1, 1, char == "?" and 128 or 1, ink[char])
+                    ui.style(keys + col, y, last - col + 1, depth, char == "?" and 128 or 1, ink[char])
                     col = last + 1
                 end
-                if not view.finish and current == "p" then ui.put(w, i + 2, "?", 1) end
+                if not view.finish and current == "p" then ui.put(w, y+math.floor((depth-1)/2), "?", 1) end
             end
         end
         if #entries == 0 then ui.put(1, 3, "No lines yet", w, true) end
         ui.footer({{w < 16 and "..." or "Menu", "menu"}, {"<", "earlier"}, {">", "later", nil, view.finish ~= nil},
-            {view.finish and (w < 16 and ">>" or "Live") or (w < 16 and "||" or "Hold"), "live"}})
+            {view.finish and (w < 16 and ">>" or "Live") or (w < 16 and "||" or "Hold"), "live"}}, footer)
     elseif screen == "menu" then
         local rows = {{"Range " .. (ranges[view.range or 2] or 30) .. "s", "range"}, {"All views", "home"}}
         if selected and view.mode == "saved" then
@@ -152,6 +161,7 @@ local function build(w, h, state, api, view)
         ui.info("Delete view?", {selected and selected.name or "View removed"}, "delete", "menu")
         ui.footer({{"Cancel", "menu"}, {"Delete", "delete", nil, selected ~= nil, 16384}})
     else ui.info("IO Scope", {view.message or "Select a view"}, "notice", view.back or "home") end
+    ui.finish()
     return ui
 end
 function app.render(w, h, state, api, context) return build(w, h, state, api, context.view).lines end
@@ -167,7 +177,7 @@ function app.handleIOSelection(key, address, state, api, context)
 end
 function app.handleTouch(x, y, w, h, state, api, context)
     local view = context.view
-    local action, value = api.ui.actionAt(build(w, h, state, api, view).hits, x, y)
+    local action, value = api.ui.actionAt(context.hits or build(w, h, state, api, view).hits, x, y)
     if not action then return false end
     local selected = find(state.views, view.viewId)
     local seconds = ranges[view.range or 2] or 30

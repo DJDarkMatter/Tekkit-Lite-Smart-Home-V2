@@ -99,7 +99,9 @@ function Monitor.new(net, config)
         local device = client.devices[side]
         if device and device.connected and device.hasFrame then
             local offset = type(config.touchOffsets) == "table" and config.touchOffsets[side] or nil
-            x, y = x + (offset and offset.x or 0), y + (offset and offset.y or 0)
+            -- Calibration can move a boundary tap off the grid. Keep it on the edge cell.
+            x = math.max(1, math.min(device.width, x + (offset and offset.x or 0)))
+            y = math.max(1, math.min(device.height, y + (offset and offset.y or 0)))
             net.send(net.config.channel, device.serverId, {type = "touch", clientId = device.id,
                 monitorId = device.id, x = x, y = y, serverSession = device.serverSession,
                 inputRevision = revision == nil and device.inputRevision or revision})

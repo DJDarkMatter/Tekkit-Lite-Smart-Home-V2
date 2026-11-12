@@ -263,8 +263,11 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
     function tests.me_monitors_tile_colours_are_cosmetic_persistent_and_remove_the_inner_grey_frame()
         local t=setup(); local board=t.create(t.id,1,1); t.bind(t.id,board,1,"Iron Ingot")
         local before=serialize(board.tiles[1].item)
-        for _,style in ipairs(t.content(t.id).styles) do
-            if style.y>1 and style.y<t.window(t.id).height-2 then assert(style.bg~=256,"No inner grey tile border") end
+        local content, bottom=t.content(t.id), 0
+        for _,hit in ipairs(content.hits) do if hit.action=="tile" then bottom=math.max(bottom,hit.y2) end end
+        assert(bottom>1)
+        for _,style in ipairs(content.styles) do
+            if style.y>1 and style.y<=bottom then assert(style.bg~=256,"No inner grey tile border") end
         end
         t.click(t.id,"tile",board.tiles[1].id); t.click(t.id,"tileColour")
         t.click(t.id,"colour",16384); t.click(t.id,"applyColour")

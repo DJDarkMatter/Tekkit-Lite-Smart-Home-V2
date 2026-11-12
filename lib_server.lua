@@ -950,7 +950,7 @@ function Server.new(net, storage, config, logger)
     end
     local function notificationModel(item, monitor)
         local available = not monitor.fullscreen and monitor.height >= 5 and monitor.height-1 or monitor.height
-        local width = math.min(34, monitor.width)
+        local width = math.min(monitor.width >= 60 and 48 or 34, monitor.width)
         local inner = math.max(1,width-2)
         local rows,remaining = {},item.message
         repeat
@@ -958,12 +958,14 @@ function Server.new(net, storage, config, logger)
             if cut and cut>1 then rows[#rows+1],remaining = remaining:sub(1,cut-1),remaining:sub(cut+1)
             else rows[#rows+1],remaining = remaining:sub(1,inner),remaining:sub(inner+1) end
         until remaining==""
-        local height = math.min(available, math.max(5,math.min(3,#rows)+4))
+        local depth = math.min(3, Gui.controlHeight(available))
+        local height = math.min(available, math.max(5,math.min(4,#rows)+3+depth))
         local x,y = 1+math.floor((monitor.width-width)/2),1+math.floor((available-height)/2)
-        local buttonY = y+math.max(0,height-(height>=3 and 2 or 1))
+        local bottom = y+height-(height>=3 and 2 or 1)
+        local top = math.max(y,bottom-depth+1)
         local inset = width>=3 and 1 or 0
         return {appName=item.appName,key=item.key,lines=rows,x=x,y=y,width=width,height=height,
-            ok={x1=x+inset,x2=x+width-inset-1,y=buttonY}}
+            ok={x1=x+inset,x2=x+width-inset-1,y=top+math.floor((bottom-top)/2),y1=top,y2=bottom}}
     end
 
     local function windowsFor(monitorId, stable)
@@ -1769,6 +1771,7 @@ function Server.new(net, storage, config, logger)
         local desktopColour = state.appearance.backgroundColour
         local borderColour, taskbarColour = state.appearance.windowBorderColour, state.appearance.taskbarColour
         local surface = Gui.new(monitor.width, monitor.height, Gui.contrast(desktopColour), desktopColour)
+        local appHits, previousHits = {}, monitor.appHits or {}
         local function write(x, y, text, limit)
             surface.write(x, y, text, nil, nil, limit)
         end
@@ -1800,7 +1803,7 @@ function Server.new(net, storage, config, logger)
                         local option = systemColours[dialog.target]
                         dialog.current = option and state.appearance[option.field] or api.getAppColour(win.appName)
                         content, dialog.hits = Gui.palette(body.width, body.height, dialog.current,
-                            dialog.error or (option and option.title or "UI color"))
+                            dialog.error or (option and option.title or "UI color"), false)
                     elseif dialog.kind == "sensor" then
                         content = SensorPicker.render(dialog, body.width, body.height, api.getSensorClients(), api.clientName)
                     else
@@ -1811,6 +1814,12 @@ function Server.new(net, storage, config, logger)
                         state.appStates[win.appName], api, viewContext(win))
                 end
                 if not ok or type(content) ~= "table" then content = {"App render failed"} end
+                if content.touchLayout then
+                    appHits[win.id] = content.hits
+                    if not previousHits[win.id] or not Gui.sameHits(previousHits[win.id], content.hits) then
+                        invalidateInput(id)
+                    end
+                end
                 for y = 1, body.height do write(body.x, body.y + y - 1, content[y] or "", body.width) end
                 for _, style in ipairs(type(content.styles) == "table" and content.styles or {}) do
                     if type(style) == "table" and integer(style.x, 1, body.width)
@@ -1823,6 +1832,7 @@ function Server.new(net, storage, config, logger)
                 end
             end
         end
+        monitor.appHits = appHits
         monitor.taskbar = {}
         if not fullscreen then
             local taskbar
@@ -1908,15 +1918,21 @@ function Server.new(net, storage, config, logger)
             surface.style(1, monitor.height, 4, 1, 1, 8192)
             surface.style(5, monitor.height, 8, 1, 1, 16384)
             placement.hits = {}
+            local function drawArrows(hits, background)
+                for _, hit in ipairs(hits) do
+                    surface.fill(hit.x1, hit.y1, hit.x2-hit.x1+1, hit.y2-hit.y1+1, 1, background)
+                    surface.write(hit.x1 + math.floor((hit.x2-hit.x1+1-#hit.label)/2), hit.y, hit.label, 1, background)
+                end
+            end
             if placement.first then surface.write(placement.first.x, placement.first.y, "+", 1, 32) end
             if placement.point then surface.write(placement.point.x, placement.point.y, "+", 32768, 1) end
             if placement.kind == "move" and rect then
                 if placement.valid then placement.hits = Desktop.moveArrows(rect, monitor) end
-                for _, hit in ipairs(placement.hits) do surface.write(hit.x1, hit.y, hit.label, 1, 128) end
+                drawArrows(placement.hits, 128)
             elseif placement.kind == "custom" and placement.point then
                 placement.hits, placement.pad = Desktop.pointArrows(placement.point, monitor, placement.pad)
-                surface.fill(placement.pad.x, placement.pad.y, 5, 3, 1, 128)
-                for _, hit in ipairs(placement.hits) do surface.write(hit.x1, hit.y, hit.label, 1, 2048) end
+                surface.fill(placement.pad.x, placement.pad.y, placement.pad.width, placement.pad.height, 1, 128)
+                drawArrows(placement.hits, 2048)
                 local ready = not placement.first or placement.valid
                 surface.style(1, monitor.height, 4, 1, 1, ready and 8192 or 128)
             end
@@ -1945,14 +1961,16 @@ function Server.new(net, storage, config, logger)
                 surface.fill(x,y,w,1,1,16384)
                 surface.write(x+(w>=3 and 1 or 0),y,notification.title,nil,nil,math.max(1,w-2))
                 local span=math.max(1,w-2)
-                for row=1,math.max(0,h-4) do
+                for row=1,math.max(0,popup.ok.y1-y-2) do
                     local text=popup.lines[row] or ""
                     surface.write(x+1+math.max(0,math.floor((span-#text)/2)),y+row,text,1,16384,span)
                 end
-                if monitor.notificationError and h>=5 then surface.write(x+1,y+h-3,w>=22 and "Save failed; retry OK" or "Save failed",16,16384,math.max(1,w-2)) end
+                if monitor.notificationError and popup.ok.y1-y>=2 then
+                    surface.write(x+1,popup.ok.y1-1,w>=22 and "Save failed; retry OK" or "Save failed",16,16384,math.max(1,w-2))
+                end
             end
             local hit=popup.ok
-            surface.fill(hit.x1,hit.y,hit.x2-hit.x1+1,1,16384,1)
+            surface.fill(hit.x1,hit.y1,hit.x2-hit.x1+1,hit.y2-hit.y1+1,16384,1)
             surface.write(hit.x1+math.max(0,math.floor((hit.x2-hit.x1-1)/2)),hit.y,"OK",16384,1,hit.x2-hit.x1+1)
         end
         return surface.frame()
@@ -2164,8 +2182,10 @@ function Server.new(net, storage, config, logger)
                             else dialog.error = tostring(ok and err or accepted) end
                         end
                     else
+                        local context = viewContext(win)
+                        context.hits = monitor.appHits and monitor.appHits[win.id]
                         local ok, handled, replacement = appCall(win.appName, "handleTouch", contentX, contentY,
-                            body.width, body.height, state.appStates[win.appName], api, viewContext(win))
+                            body.width, body.height, state.appStates[win.appName], api, context)
                         if ok and type(replacement) == "table" then state.appStates[win.appName] = replacement end
                     end
                 end

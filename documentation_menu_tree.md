@@ -17,7 +17,7 @@ Launcher, taskbar, title-bar controls and window placement.
 **Source** [lib_desktop.lua](lib_desktop.lua), [lib_server.lua](lib_server.lua), [lib_monitor.lua](lib_monitor.lua), [documentation_desktop.md](documentation_desktop.md)
 
 - Taskbar
-  - Start [+] — Lists Settings and compatible enabled apps alphabetically. A star marks a running app.
+  - Start [+] — Lists Settings and compatible enabled apps alphabetically. A star marks a running app. Roomy menus use taller entries.
     - [Settings](#settings) — Opens the built-in Settings window.
     - [App] — Opens the app or focuses its existing window on this monitor.
     - [Alert inbox](#alert-inbox) — Launcher entry on monitors without the clock shortcut.
@@ -28,7 +28,7 @@ Launcher, taskbar, title-bar controls and window placement.
   - Minimize [-] — Restore from the taskbar.
   - X Close — Closes the window on this monitor.
   - [[Title area]](#desktop--windows-move) — Starts the Move workflow.
-  - Layout [#]
+  - Layout [#] — Grid previews, panes, and actions grow with the available space.
     - 1×1 — Applies immediately. Uses the desktop area and keeps the taskbar.
     - 2×1 / 1×2 / 2×2 — Pick a numbered pane on the next screen.
       - [Position] — Positions that cannot fit the app are disabled.

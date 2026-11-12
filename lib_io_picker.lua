@@ -43,21 +43,14 @@ end
 
 function Picker.render(dialog, width, height, clients, api, testing)
     local label = api and api.clientName or function(id) return id end
-    local lines, hits = {styles = {}}, {}
+    local ui = Gui.content(width, height)
+    ui.style(1, 1, width, height, 1, 32768)
     local half = math.floor(width / 2)
-    local function text(row, value) lines[row] = tostring(value):sub(1, width) end
+    local text = ui.text
     local function button(row, x1, x2, label, action, value, enabled)
-        local line = lines[row] or string.rep(" ", width)
-        label = label:sub(1, x2 - x1 + 1)
-        local padding = math.floor((x2 - x1 + 1 - #label) / 2)
-        label = string.rep(" ", padding) .. label .. string.rep(" ", x2 - x1 + 1 - padding - #label)
-        lines[row] = line:sub(1, x1 - 1) .. label .. line:sub(x2 + 1)
-        hits[#hits + 1] = {y = row, x1 = x1, x2 = x2, action = action, value = value, enabled = enabled}
-        lines.styles[#lines.styles + 1] = {x = x1, y = row, width = x2 - x1 + 1, height = 1,
-            fg = enabled == false and 128 or action == "cancel" and 1 or 32768,
-            bg = action == "cancel" and 16384 or action == "use" and 32 or action == "select" and (row % 2 == 0 and 1 or 256) or 256}
+        local bg = action == "cancel" and 16384 or action == "use" and 32 or 128
+        ui.button(row, label, action, x1, x2, enabled, bg, nil, value)
     end
-    for row = 1, height do lines[row] = string.rep(" ", width) end
     if dialog.stage == 4 then
         text(1, "Use this " .. dialog.direction .. "?")
         text(2, label(dialog.chosen.clientId) or "No IO client")
@@ -85,12 +78,12 @@ function Picker.render(dialog, width, height, clients, api, testing)
         local pages = math.max(1, math.ceil(#list / slots))
         dialog.page = math.max(1, math.min(dialog.page, pages))
         text(1, titles[dialog.stage] .. (pages > 1 and (" " .. dialog.page .. "/" .. pages) or ""))
-        if path then text(2,path); lines.styles[#lines.styles+1]={x=1,y=2,width=width,height=1,fg=256,bg=32768} end
+        if path then text(2,path); ui.style(1,2,width,1,256,32768) end
         for row = 1, slots do
             local item = list[(dialog.page - 1) * slots + row]
             if item then
                 button(row + header, 1, width, (item.colour and "  " or "") .. item.label, "select", item.value)
-                if item.colour then lines.styles[#lines.styles + 1] = {x = 1, y = row + header, width = 2, height = 1, bg = item.colour} end
+                if item.colour then ui.style(1, row + header, 2, 1, nil, item.colour) end
             end
         end
         if #list == 0 then text(header+1, "No IO clients") end
@@ -101,14 +94,15 @@ function Picker.render(dialog, width, height, clients, api, testing)
         button(height, 1, half, "Back", "back")
         button(height, half + 1, width, "Cancel", "cancel")
     end
+    ui.style(1, 1, width, 1, 1, 2048)
+    local lines, hits = ui.finish()
     dialog.hits = hits
-    lines.styles[#lines.styles + 1] = {x = 1, y = 1, width = width, height = 1, fg = 1, bg = 2048}
     return lines
 end
 
 function Picker.touch(dialog, x, y)
     for _, hit in ipairs(dialog.hits or {}) do
-        if hit.y == y and x >= hit.x1 and x <= hit.x2 then
+        if Gui.hit(hit, x, y) then
             if hit.enabled == false then return end
             dialog.error = nil
             if hit.action == "cancel" then return "cancel"

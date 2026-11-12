@@ -82,6 +82,7 @@ function Picker.render(dialog, width, height, clients, clientName)
         ui.button(height, "Back", "back", 1, math.floor(width / 2))
         ui.button(height, "Cancel", "cancel", math.floor(width / 2) + 1, width)
     end
+    ui.finish()
     dialog.hits = ui.hits
     return ui.lines
 end

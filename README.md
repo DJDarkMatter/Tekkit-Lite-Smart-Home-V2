@@ -6,6 +6,18 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
+## Updating to v48
+
+Buttons, pickers, keyboards and alerts use the available character rows for larger touch targets. Larger app windows give readouts, cards, grids and plots more room. Compact windows keep their paginated layouts.
+
+Install **bundled-v48** on the central computer and update the optional apps you use. See [the commands and changed files](documentation_update_v48.md).
+
+## Updating to v47
+
+Nyan Cat keeps the face and outline visible when the sprite is reduced. Compact Tetris Rain uses complete lanes and keeps the pieces in view as they fall. The monitor bridge clips calibrated touches to the screen bounds so a tap can still reach either outer corner.
+
+Update Screensaver on the central computer and install the v47 monitor role on the bridge. See [the install commands and changed files](documentation_update_v47.md).
+
 ## Updating to v46
 
 Solar Farm fits one item per row on compact windows with at least 22 content columns. Counts and rates use brighter foreground colors. The whole-number and decimal keypads fill the space between the value display and the footer, including in Clock.
@@ -82,7 +94,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v46`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v48`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 

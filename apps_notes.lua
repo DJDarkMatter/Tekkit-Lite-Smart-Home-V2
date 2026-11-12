@@ -91,12 +91,13 @@ local function build(w, h, state, api, view)
         ui.info("Delete?", {screen == "deleteNote" and note.name or line.text}, "delete", back)
         ui.footer({{"Cancel", back}, {"Delete", "confirmDelete", nil, true, 16384}})
     else ui.info("Notes", {view.message or "Note changed"}, "message", view.back or "home") end
+    ui.finish()
     return ui
 end
 function app.render(w, h, state, api, context) return build(w, h, state, api, context.view).lines end
 function app.handleTouch(x, y, w, h, state, api, context)
     local view = context.view
-    local action, value = api.ui.actionAt(build(w, h, state, api, view).hits, x, y)
+    local action, value = api.ui.actionAt(context.hits or build(w, h, state, api, view).hits, x, y)
     if not action then return false end
     local note, index = find(state.notes, view.noteId)
     local line, lineIndex = find(note and note.lines, view.lineId)

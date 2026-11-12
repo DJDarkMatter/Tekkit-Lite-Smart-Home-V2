@@ -174,38 +174,6 @@ local function importLegacy(state, api)
     return ok
 end
 
-local digits = {
-    ["0"] = {"111","101","101","101","111"}, ["1"] = {"010","110","010","010","111"},
-    ["2"] = {"111","001","111","100","111"}, ["3"] = {"111","001","111","001","111"},
-    ["4"] = {"101","101","111","001","001"}, ["5"] = {"111","100","111","001","111"},
-    ["6"] = {"111","100","111","101","111"}, ["7"] = {"111","001","001","001","001"},
-    ["8"] = {"111","101","111","101","111"}, ["9"] = {"111","101","111","001","111"},
-    [":"] = {"0","1","0","1","0"},
-}
-local function clockWidth(value)
-    local total = -1
-    for index = 1, #value do total = total + #digits[value:sub(index, index)][1] + 1 end
-    return total
-end
-local function largeClock(ui, width, height, value, accent, contrast)
-    local total = clockWidth(value)
-    -- Keep clock-background space beside the strokes, in the chosen UI colour.
-    local scale = height >= 20 and width >= total * 2 + 4 and 2 or 1
-    local x = 1 + math.floor((width - total * scale) / 2)
-    ui.style(1, 2, width, 5 * scale, nil, accent)
-    for index = 1, #value do
-        local pattern = digits[value:sub(index, index)]
-        for row, pixels in ipairs(pattern) do
-            for column = 1, #pixels do
-                if pixels:sub(column, column) == "1" then
-                    ui.style(x + (column - 1) * scale, 2 + (row - 1) * scale, scale, scale, nil, contrast)
-                end
-            end
-        end
-        x = x + (#pattern[1] + 1) * scale
-    end
-    return 5 * scale
-end
 local function build(width, height, state, api, context)
     local view = context.view
     local ui = api.ui.content(width, height)
@@ -213,8 +181,8 @@ local function build(width, height, state, api, context)
     local accent = api.getAppColour(context.appName or "coffee")
     local page = view.page or "main"
     local half = math.floor(width / 2)
-    local function button(y, label, action, x1, x2, enabled, bg)
-        ui.button(y, label, action, x1, x2, enabled, bg)
+    local function button(y, label, action, x1, x2, enabled, bg, rows)
+        ui.button(y, label, action, x1, x2, enabled, bg, nil, nil, rows)
     end
     if page == "menu" or page == "settings" or page == "maintenance" then
         local items, back, title
@@ -261,17 +229,18 @@ local function build(width, height, state, api, context)
         button(height, "Cancel", "maintenance")
     else
         local inline = width >= 36 and height >= 8
-        local limit = height - (inline and 1 or 3)
+        local depth = math.min(api.ui.controlHeight(height), math.max(1, math.floor((height - 6) / (inline and 1 or 3))))
+        local limit = height - (inline and 1 or 3) * depth
         local remaining = state.phase == "harvest" and state.harvestRemaining or state.remainingTime
         local value = clock(remaining)
         ui.heading(state.phase == "harvest" and "Harvesting" or "Next harvest", accent)
-        local large = width >= clockWidth(value) + 4 and limit >= 9
+        local readout = limit >= 9 and ui.readout(2, value, limit - 4, api.ui.contrast(accent), accent) or 0
         local spaced = width >= 30 and height >= 10
         local timeRow = spaced and 3 or 2
-        local statusRow = large and 2 + largeClock(ui, width, height, value, accent, api.ui.contrast(accent))
+        local statusRow = readout > 0 and 2 + readout
             or spaced and 5 or 3
         local infoRow = statusRow + (spaced and 2 or 1)
-        if not large then ui.text(timeRow, value, true) end
+        if readout == 0 then ui.text(timeRow, value, true) end
         local status = saveError and "Save failed" or notice or runtimeStatus
         if width < 20 then
             local compact = {["Set harvest IO"] = "Set output", ["Set online output first"] = "Need output",
@@ -284,6 +253,7 @@ local function build(width, height, state, api, context)
         local presence = player == nil and "Unknown" or player and "Online" or "Away"
         if width >= 30 and infoRow + 1 <= limit then
             local cardWidth = math.floor((width - 3) / 2)
+            local cardRows = math.max(2, math.min(5, limit - infoRow))
             local function card(x, title, text)
                 text = text:sub(1, cardWidth)
                 local function put(y, label)
@@ -291,11 +261,21 @@ local function build(width, height, state, api, context)
                     local line = ui.lines[y]
                     ui.lines[y] = line:sub(1, left - 1) .. label .. line:sub(left + #label)
                 end
-                put(infoRow, title); put(infoRow + 1, text)
-                ui.style(x, infoRow, cardWidth, 1, 256, 32768)
+                put(infoRow, title); put(infoRow + math.floor(cardRows / 2), text)
+                ui.style(x, infoRow, cardWidth, cardRows, 1, 128)
+                ui.style(x, infoRow, cardWidth, 1, api.ui.contrast(accent), accent)
             end
             card(2, "PLAYER", presence)
             card(width - cardWidth, "TRIP / TOTAL", state.tripHarvests .. " / " .. state.totalHarvests)
+            if limit - infoRow - cardRows >= 3 then
+                local duration = state.phase == "harvest" and state.config.harvest or state.config.countdown
+                local progress = math.max(0, math.min(1, 1 - remaining / duration))
+                local y, span = limit - 1, width - 2
+                ui.text(y - 1, state.phase == "harvest" and "Harvest progress" or "Cycle progress", true)
+                ui.style(2, y, span, 2, nil, 128)
+                local filled = math.floor(progress * span)
+                if filled > 0 then ui.style(2, y, filled, 2, nil, accent) end
+            end
         else
             if infoRow <= limit then
                 ui.text(infoRow, "Player: " .. (width < 16 and (player == nil and "?" or player and "on" or "off") or presence), true)
@@ -305,17 +285,18 @@ local function build(width, height, state, api, context)
         end
         if inline then
             local third = math.floor((width - 2) / 3)
-            button(height, state.paused and "Resume" or "Pause", "pause", 1, third, true, accent)
-            button(height, state.phase == "harvest" and "Active" or "Harvest now", "force", third + 2, 2 * third + 1, state.phase ~= "harvest", 128)
-            button(height, "Menu", "menu", 2 * third + 3, width)
+            button(limit + 1, state.paused and "Resume" or "Pause", "pause", 1, third, true, accent, depth)
+            button(limit + 1, state.phase == "harvest" and "Active" or "Harvest now", "force", third + 2, 2 * third + 1, state.phase ~= "harvest", 128, depth)
+            button(limit + 1, "Menu", "menu", 2 * third + 3, width, true, 256, depth)
         else
-            button(height - 2, state.paused and "Resume" or "Pause", "pause", nil, nil, true, accent)
-            button(height - 1, state.phase == "harvest" and (width >= 16 and "Harvest active" or "Active") or "Harvest now",
-                "force", nil, nil, state.phase ~= "harvest", 128)
-            button(height, "Menu", "menu")
+            button(limit + 1, state.paused and "Resume" or "Pause", "pause", nil, nil, true, accent, depth)
+            button(limit + depth + 1, state.phase == "harvest" and (width >= 16 and "Harvest active" or "Active") or "Harvest now",
+                "force", nil, nil, state.phase ~= "harvest", 128, depth)
+            button(limit + 2 * depth + 1, "Menu", "menu", nil, nil, true, 256, depth)
         end
+        return ui.finish(true)
     end
-    return ui.lines, ui.hits
+    return ui.finish()
 end
 
 function app.render(width, height, state, api, context)
@@ -325,7 +306,8 @@ end
 
 function app.handleTouch(x, y, width, height, state, api, context)
     if not ready then return false end
-    local _, hits = build(width, height, state, api, context)
+    local hits = context.hits
+    if not hits then local _; _, hits = build(width, height, state, api, context) end
     local action
     for _, hit in ipairs(hits) do
         if api.ui.hit(hit, x, y) and hit.enabled ~= false then action = hit.action; break end
