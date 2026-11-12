@@ -1,19 +1,16 @@
-# Clock: alarms, timers and stopwatch (v33)
+# Clock
 
 `apps_clock.lua` runs on the central OS. It is an optional background service: after explicit installation it starts at every OS boot, even without a window. Closing its windows leaves clocks and output signals running.
 
 ## Install or update
 
-Upload the complete v33 package's root files to the V2 GitHub repository. Replace the single installer paste with the supplied `install.lua` (banner `bundled-v33`), download a fresh `inst` on the central computer, quit the OS and run:
+Install the v50 server role on the central computer. Run `inst app clock` to install Clock by itself or `inst apps` to install the whole release catalog. See [the v50 update instructions](documentation_update_v50.md).
 
-```text
-cd /
-inst server
-inst app clock
-reboot
-```
+## World time
 
-Keep the existing startup script. Use `inst server --startup` if configuring startup for the first time. IO/monitor/sensor/relay clients do not change for v25. The installer includes no apps; `inst app clock` fetches this app through GitHub's contents API, with the existing raw-download fallback. No extra Pastebin file is needed.
+Clock shows the current Minecraft time on its home screen. Wider windows use a two-column grid for Alarms, Timers, Stopwatch and World time. Settings and Status are in the footer. On narrow windows Settings is labeled **Setup**.
+
+Open **Clock → World time** for a larger readout and the world day when available.
 
 ## Alarms
 

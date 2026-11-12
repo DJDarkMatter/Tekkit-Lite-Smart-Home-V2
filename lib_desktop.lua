@@ -3,8 +3,12 @@ local Desktop = {}
 local Gui = dofile("lib_gui.lua")
 local function clamp(value, low, high) return math.max(low, math.min(value, high)) end
 
+function Desktop.taskbarY(monitor)
+    return monitor.taskbarPosition == "top" and 1 or monitor.height
+end
+
 function Desktop.area(monitor)
-    return {x = 1, y = 1, width = monitor.width, height = monitor.height - 1}
+    return {x = 1, y = monitor.taskbarPosition == "top" and 2 or 1, width = monitor.width, height = monitor.height - 1}
 end
 
 function Desktop.controls(win)
@@ -23,10 +27,11 @@ end
 
 function Desktop.fits(rect, app, monitor)
     local minW, minH, maxW, maxH = Desktop.bounds(app, monitor)
+    local area = Desktop.area(monitor)
     return rect and rect.width >= minW and rect.height >= minH and rect.width <= maxW
-        and rect.height <= maxH and rect.x >= 1 and rect.y >= 1
+        and rect.height <= maxH and rect.x >= area.x and rect.y >= area.y
         and rect.x + rect.width - 1 <= monitor.width
-        and rect.y + rect.height - 1 < monitor.height
+        and rect.y + rect.height <= area.y + area.height
 end
 
 function Desktop.fullscreen(app, monitor)
@@ -42,7 +47,7 @@ end
 
 function Desktop.relative(rect, monitor)
     local area = Desktop.area(monitor)
-    return {x = (rect.x - 1) / area.width, y = (rect.y - 1) / area.height,
+    return {x = (rect.x - area.x) / area.width, y = (rect.y - area.y) / area.height,
         width = rect.width / area.width, height = rect.height / area.height}
 end
 
@@ -53,15 +58,15 @@ function Desktop.free(rect, relative, app, monitor)
     local width, height, x, y
     if relative then
         width, height = math.floor(relative.width * area.width + 0.5), math.floor(relative.height * area.height + 0.5)
-        x, y = 1 + math.floor(relative.x * area.width + 0.5), 1 + math.floor(relative.y * area.height + 0.5)
+        x, y = area.x + math.floor(relative.x * area.width + 0.5), area.y + math.floor(relative.y * area.height + 0.5)
     else
         width, height = tonumber(rect.width) or (app.preferredWidth or 30) + 2,
             tonumber(rect.height) or (app.preferredHeight or 10) + 2
-        x, y = tonumber(rect.x) or 1, tonumber(rect.y) or 1
+        x, y = tonumber(rect.x) or area.x, tonumber(rect.y) or area.y
     end
     width, height = clamp(math.floor(width), minW, maxW), clamp(math.floor(height), minH, maxH)
     return {x = clamp(math.floor(x), 1, area.width - width + 1),
-        y = clamp(math.floor(y), 1, area.height - height + 1), width = width, height = height}
+        y = clamp(math.floor(y), area.y, area.y + area.height - height), width = width, height = height}
 end
 
 local grids = {{1, 1}, {2, 1}, {1, 2}, {2, 2}, {3, 1}, {1, 3}, {3, 2}, {2, 3}, {3, 3}}
@@ -95,7 +100,7 @@ function Desktop.zone(mode, monitor)
     end
     if not columns or column > columns or row > rows then return end
     local left, top = math.floor((column - 1) * area.width / columns), math.floor((row - 1) * area.height / rows)
-    return {x = left + 1, y = top + 1, width = math.floor(column * area.width / columns) - left,
+    return {x = left + area.x, y = top + area.y, width = math.floor(column * area.width / columns) - left,
         height = math.floor(row * area.height / rows) - top}
 end
 
@@ -135,8 +140,11 @@ function Desktop.pointArrows(point, monitor, anchor)
     local depth = area.height >= 14 and 2 or 1
     local side = area.width >= 22 and 2 or 1
     local width, height = 2 * side + 3, 3 * depth
+    local bottom = area.y + area.height - 1
     anchor = anchor or {x = point.x > area.width / 2 and 1 or area.width - width + 1,
-        y = point.y > area.height / 2 and 2 or area.height - height + 1}
+        y = point.y > area.y + area.height / 2 - 1 and area.y + 1 or bottom - height + 1}
+    anchor.x = clamp(anchor.x, area.x, area.width - width + 1)
+    anchor.y = clamp(anchor.y, area.y + 1, bottom - height + 1)
     anchor.width, anchor.height = width, height
     local function add(x, y, w, label, dx, dy)
         hits[#hits + 1] = {x1 = x, x2 = x + w - 1, y = y + math.floor((depth-1)/2),
@@ -144,8 +152,8 @@ function Desktop.pointArrows(point, monitor, anchor)
     end
     if point.x > 1 then add(anchor.x, anchor.y + depth, side, "<", -1, 0) end
     if point.x < area.width then add(anchor.x + width - side, anchor.y + depth, side, ">", 1, 0) end
-    if point.y > 1 then add(anchor.x + side, anchor.y, 3, "^", 0, -1) end
-    if point.y < area.height then add(anchor.x + side, anchor.y + 2*depth, 3, "v", 0, 1) end
+    if point.y > area.y then add(anchor.x + side, anchor.y, 3, "^", 0, -1) end
+    if point.y < bottom then add(anchor.x + side, anchor.y + 2*depth, 3, "v", 0, 1) end
     return hits, anchor
 end
 
@@ -159,8 +167,8 @@ function Desktop.moveArrows(rect, monitor)
     end
     if rect.x > 1 then add(rect.x, middleY, " < ", -1, 0) end
     if rect.x + rect.width - 1 < area.width then add(rect.x + rect.width - 3, middleY, " > ", 1, 0) end
-    if rect.y > 1 then add(middleX - 1, rect.y, " ^ ", 0, -1) end
-    if rect.y + rect.height - 1 < area.height then add(middleX - 1, rect.y + rect.height - depth, " v ", 0, 1) end
+    if rect.y > area.y then add(middleX - 1, rect.y, " ^ ", 0, -1) end
+    if rect.y + rect.height < area.y + area.height then add(middleX - 1, rect.y + rect.height - depth, " v ", 0, 1) end
     return hits
 end
 
@@ -193,7 +201,7 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
     end
     page = clamp(page or 1, 1, pages)
     local rect = {x = clamp(win.x + win.width - width, 1, area.width - width + 1),
-        y = clamp(win.y + 1, 1, area.height - height + 1), width = width, height = height}
+        y = clamp(win.y + 1, area.y, area.y + area.height - height), width = width, height = height}
     local ui, byMode = Gui.content(width, height), {}
     ui.style(1, 1, width, height, 1, 32768)
     for _, item in ipairs(options) do byMode[item.value] = item end
@@ -333,28 +341,26 @@ end
 -- Shared paginated popup geometry for the launcher and window layout menus.
 function Desktop.menu(monitor, title, items, page, anchor)
     local area = Desktop.area(monitor)
-    local columns = not anchor and area.width >= 45 and #items >= 6 and 2 or 1
-    local width = math.min(area.width, columns == 2 and 56 or area.width >= 52 and 32 or 26)
-    local depth = math.min(4, Gui.controlHeight(area.height))
-    local rows = math.max(1, math.floor((area.height - 1) / depth))
-    if #items > rows * columns then rows = math.max(1, rows - 1) end
-    local slots = rows * columns
+    local width = math.min(area.width, anchor and 26 or 22)
+    local depth = anchor and math.min(4, Gui.controlHeight(area.height)) or 1
+    local slots = math.max(1, math.floor((area.height - 1) / depth))
+    if not anchor then slots = math.min(slots, 16) end
+    if #items > slots then slots = math.max(1, slots - 1) end
     local pages = math.max(1, math.ceil(#items / slots))
     page = clamp(page or 1, 1, pages)
-    local height = math.min(area.height, 1 + (math.max(1, math.ceil(math.min(#items, slots) / columns)) + (pages > 1 and 1 or 0)) * depth)
+    local height = math.min(area.height, 1 + (math.max(1, math.min(#items, slots)) + (pages > 1 and 1 or 0)) * depth)
+    local lastY = area.y + area.height - height
+    local origin = monitor.taskbarPosition == "top" and area.y or lastY
     local rect = {x = clamp(anchor and anchor.x or 1, 1, area.width - width + 1),
-        y = clamp(anchor and anchor.y or area.height - height + 1, 1, area.height - height + 1), width = width, height = height}
+        y = clamp(anchor and anchor.y or origin, area.y, lastY), width = width, height = height}
     local ui = Gui.content(width, height)
     ui.style(1, 1, width, height, 1, 32768)
     ui.heading(title .. (pages > 1 and " " .. page .. "/" .. pages or ""), 128)
     for slot = 1, slots do
         local item = items[(page - 1) * slots + slot]
         if item then
-            local row, column = math.floor((slot-1)/columns), (slot-1)%columns
-            local x1 = 1 + math.floor(column*(width+1)/columns)
-            local x2 = math.floor((column+1)*(width+1)/columns)-1
-            local hit = ui.button(2 + row * depth, item.label, "item", x1, x2,
-                item.enabled, (row+column) % 2 == 0 and 256 or 128, nil, nil, depth)
+            local hit = ui.button(2 + (slot-1)*depth, item.label, "item", 1, width,
+                item.enabled, slot % 2 == 0 and 128 or 256, nil, nil, depth)
             hit.item = item
         end
     end

@@ -57,14 +57,15 @@ local function export(note, api)
     return ok, ok and path or err
 end
 local function build(w, h, state, api, view)
-    local ui = api.ui.form(w, h, view, api.getAppColour(appName))
+    local accent = api.getAppColour(appName)
+    local ui = api.ui.form(w, h, view, accent)
     local screen = view.screen or "home"
     local note = find(state.notes, view.noteId)
     local line = find(note and note.lines, view.lineId)
     if not note and screen ~= "keyboard" and screen ~= "message" then screen = "home" end
     if not line and (screen == "line" or screen == "deleteLine") then screen = "note" end
     if screen == "home" then
-        local rows = {{"+ New note", "newNote", nil, #state.notes < 48}}
+        local rows = {{"+ New note", "newNote", nil, #state.notes < 48, accent}}
         for _, item in ipairs(state.notes) do rows[#rows + 1] = {item.name, "open", item.id} end
         ui.menu("Notes", rows, "notes", {{"Close", "close"}})
     elseif screen == "note" then
@@ -75,12 +76,12 @@ local function build(w, h, state, api, view)
                 true, item.checked and 8192 or nil}
         end
         if #rows == 0 then rows[1] = {"No lines yet", nil, nil, false} end
-        ui.menu(note.name, rows, "lines", {{"Back", "home"}, {"+ Add", "add", nil, #note.lines < 96}, {"Menu", "menu"}})
+        ui.menu(note.name, rows, "lines", {{"Back", "home"}, {"+ Add", "add", nil, #note.lines < 96, accent}, {"Menu", "menu"}})
     elseif screen == "menu" then
         ui.menu("Note menu", {{view.edit and "Done editing" or "Edit lines", "editMode"}, {"Rename note", "rename"},
             {"Export Markdown", "export"}, {"Delete note", "deleteNote"}}, "menu", {{"Back", "note"}})
     elseif screen == "add" then
-        ui.menu("Add to note", {{"Text line", "newLine", "text"}, {"Checkbox", "newLine", "check"}}, "add", {{"Back", "note"}})
+        ui.menu("Add to note", {{"Text line", "newLine", "text"}, {"Checkbox", "newLine", "check"}}, "add", {{"Back", "note"}}, true)
     elseif screen == "line" then
         ui.info(line.check and (line.checked and "Checked" or "Checkbox") or "Text line",
             {line.text}, "lineText", "note")

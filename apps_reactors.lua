@@ -116,7 +116,8 @@ local function build(width, height, state, api, context)
     end
     local ui = api.ui.content(width, height)
     local contrast = api.ui.contrast(state.panelColour)
-    ui.style(1, 1, width, height, contrast, state.panelColour)
+    local background = screen == "home" and 32768 or state.panelColour
+    ui.style(1, 1, width, height, api.ui.contrast(background), background)
     local function put(x, y, value, span, centre)
         if y < 1 or y > height then return end
         span = math.min(span or width - x + 1, width - x + 1)
@@ -129,13 +130,9 @@ local function build(width, height, state, api, context)
     end
     local function footer(left, action, right, rightAction, depth)
         depth=depth or 1
-        local y=height-depth+1
-        if not right then button(y, left, action, nil, nil, nil, true, 128, depth)
-        else
-            local half = math.floor(width / 2)
-            button(y, left, action, nil, 1, half, true, 128, depth)
-            button(y, right, rightAction, nil, half + 1, width, true, accent, depth)
-        end
+        local items = {{left, action}}
+        if right then items[2] = {right, rightAction, nil, true, accent} end
+        ui.buttonRow(height-depth+1,items,depth)
     end
     local function pages(count, slots, key, row)
         local total = math.max(1, math.ceil(count / slots))
@@ -201,18 +198,18 @@ local function build(width, height, state, api, context)
     end
     if screen == "home" then
         ui.heading("Reactors", accent)
-        local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-4)/5)))
+        local depth=math.min(3,api.ui.controlHeight(height),math.max(1,math.floor((height-4)/5)))
+        local nav=api.ui.secondaryHeight
         local columns = math.max(1, math.min(3, math.floor((width + 1) / 23)))
-        local bottom = height - 2*depth
+        local bottom = height - depth - nav
         local rows = math.max(1, math.floor((bottom - 1) / 8))
         if #state.reactors > columns * rows then bottom = bottom - 1; rows = math.max(1, math.floor((bottom - 1) / 8)) end
         local slots = rows * columns
         local page = pages(#state.reactors, slots, "home", bottom + 1)
         if #state.reactors == 0 then
-            button(math.max(2, math.floor((height-depth)/2)), "+ Add reactor", "add", nil, nil, nil, true, accent, depth)
-            footer("Settings", "settings", nil, nil, depth)
+            ui.choices(2, height - nav, {{"+ Add reactor", "add", nil, true, accent}}, true)
+            footer("Settings", "settings", nil, nil, nav)
         else
-            ui.style(1, 2, width, bottom - 1, 1, 32768)
             local visible=math.min(slots,#state.reactors-(page-1)*slots)
             local drawColumns=math.min(columns,visible)
             local drawRows=math.min(rows,math.ceil(visible/drawColumns))
@@ -225,20 +222,22 @@ local function build(width, height, state, api, context)
                     local w, rh = x2 - x1 + 1, y2 - y1 + 1
                     local controlRows=math.min(depth,math.max(1,rh-2))
                     local detailEnd=y2-controlRows
+                    local inset=w>=20 and 2 or 0
                     ui.style(x1, y1, w, rh, contrast, state.panelColour)
-                    ui.style(x1, y1, w, 1, api.ui.contrast(accent), accent)
-                    put(x1, y1, item.name, w - 4)
+                    ui.style(x1, y1, w, 1, 1, 128)
+                    if inset>0 then ui.style(x1,y1,1,1,nil,accent) end
+                    put(x1+inset, y1, item.name, w - inset - 4)
                     local status = reading(item)
                     local active = status.status == "ok" and status.reactor and status.reactor.active
                     local label = status.status ~= "ok" and "?" or active == nil and "?" or active and "On" or "Off"
                     put(x2 - 2, y1, label, 3)
-                    ui.style(x2 - 2, y1, 3, 1, 32768, label == "On" and 32 or label == "Off" and 16384 or 2)
+                    local badge = label == "On" and 32 or label == "Off" and 16384 or 2
+                    ui.style(x2 - 2, y1, 3, 1, api.ui.contrast(badge), badge)
                     local values = metrics(status.reactor,w<24)
                     for _,text in ipairs(extraFields(status.data)) do values[#values+1]=text end
-                    for index = 1, math.min(#values, detailEnd-y1) do put(x1, y1 + index, values[index], w) end
+                    for index = 1, math.min(#values, detailEnd-y1) do put(x1+inset, y1 + index, values[index], w-inset) end
                     if status.status ~= "ok" then
-                        put(x1, math.min(detailEnd, y1 + 1), status.error or "Sensor unavailable", w)
-                        ui.style(x1, y1 + 1, w, math.max(1, detailEnd-y1), 128, state.panelColour)
+                        put(x1+inset, math.min(detailEnd, y1 + 1), status.error or "Sensor unavailable", w-inset)
                     elseif status.reactor and status.reactor.percent and detailEnd-y1 > #values+1 then
                         local y=detailEnd-1
                         local filled=math.floor(w*math.max(0,math.min(100,status.reactor.percent))/100)
@@ -249,8 +248,8 @@ local function build(width, height, state, api, context)
                     switch(item, detailEnd+1, x1, x2, controlRows)
                 end
             end
-            button(height-2*depth+1, "+ Add reactor", "add", nil, nil, nil, #state.reactors < 64, accent, depth)
-            footer("Settings", "settings", nil, nil, depth)
+            button(height-depth-nav+1, "+ Add reactor", "add", nil, nil, nil, #state.reactors < 64, accent, depth)
+            footer("Settings", "settings", nil, nil, nav)
         end
     elseif screen == "reactor" then
         local status = reading(entry)
@@ -259,7 +258,8 @@ local function build(width, height, state, api, context)
         local active = value.active == nil and "?" or value.active and "On" or "Off"
         if status.status ~= "ok" then active = "?" end
         put(width - 2, 1, active, 3)
-        ui.style(width - 2, 1, 3, 1, 32768, active == "On" and 32 or active == "Off" and 16384 or 2)
+        local badge = active == "On" and 32 or active == "Off" and 16384 or 2
+        ui.style(width - 2, 1, 3, 1, api.ui.contrast(badge), badge)
         local columns = width >= 50 and 2 or 1
         local inset, gutter = width >= 24 and 2 or 0, columns > 1 and 2 or 0
         local span = math.floor((width - 2 * inset - gutter) / columns)
@@ -290,7 +290,8 @@ local function build(width, height, state, api, context)
         end
         values = wrapped
         local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-4)/4)))
-        local bottom=height-2*depth
+        local nav=api.ui.secondaryHeight
+        local bottom=height-depth-nav
         local statusRow = height >= 9 and bottom or nil
         local barRows = height >= 26 and 3 or height >= 18 and 2 or 1
         local barRow = height >= 13 and bottom-barRows or nil
@@ -325,7 +326,7 @@ local function build(width, height, state, api, context)
             ui.style(1, row, width, 1, 1, 16384)
         elseif statusRow then ui.text(statusRow, "Data " .. math.floor(status.age or 0) .. "s old", true) end
         switch(entry, bottom+1, nil, nil, depth)
-        footer("Back", "home", "Edit", "edit", depth)
+        footer("Back", "home", "Edit", "edit", nav)
         return ui.finish(true)
     elseif screen == "edit" or screen == "settings" then
         local items = screen == "edit" and {{label = "Rename", action = "rename"}, {label = "Sensor target", action = "sensor"},

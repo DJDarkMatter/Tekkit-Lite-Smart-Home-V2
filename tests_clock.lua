@@ -73,6 +73,36 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         bus.advance(1); t.id=t.open()
         return t
     end
+    function tests.v50_clock_home_uses_a_wide_grid_and_keeps_every_compact_control_reachable()
+        local t=setup({offset=18*3600-70})
+        local hits={}
+        for _,hit in ipairs(t.content(t.id).hits) do hits[hit.action]=hit end
+        assert(hits.worldTime.y2>hits.worldTime.y1)
+        assert(hits.alarms.y2-hits.alarms.y1>hits.settings.y2-hits.settings.y1)
+        assert(hits.alarms.paint.bg~=hits.settings.paint.bg)
+        equal(hits.alarms.y1,hits.timers.y1)
+        equal(hits.stopwatch.y1,hits.worldTime.y1)
+        assert(hits.alarms.x2+1<hits.timers.x1)
+        equal(hits.settings.y1,hits.status.y1)
+        local id=t.open("left")
+        local compact={}
+        for _,hit in ipairs(t.content(id).hits) do compact[hit.action]=hit end
+        assert(compact.alarms.y2<compact.timers.y1 and compact.timers.y2<compact.stopwatch.y1)
+        assert(compact.stopwatch.y2<compact.worldTime.y1 and compact.worldTime.y2<compact.settings.y1)
+        assert(compact.settings.x2<compact.status.x1)
+        t.click(id,"settings"); equal(t.view(id).screen,"settings")
+        t.click(id,"home")
+        t.click(id,"worldTime")
+        local content=t.content(id)
+        assert(content[1]:find("World time",1,true))
+        assert(content[2]:find(t.api.getSystem().gameTime,1,true))
+        local before=content[2]
+        t.bus.advance(2)
+        assert(t.content(id)[2]~=before)
+        assert(table.concat(t.content(id),"\n"):find("Day 100",1,true))
+        t.click(id,"home")
+        equal(t.view(id).screen,"home")
+    end
     function tests.v41_clock_signal_details_recover_when_alarm_is_deleted_on_another_monitor()
         local t = setup()
         local alarm = t.new(t.id, "alarm", {minute = 1200}, nil)

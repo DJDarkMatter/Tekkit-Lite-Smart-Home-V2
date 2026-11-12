@@ -16,8 +16,8 @@ Launcher, taskbar, title-bar controls and window placement.
 
 **Source** [lib_desktop.lua](lib_desktop.lua), [lib_server.lua](lib_server.lua), [lib_monitor.lua](lib_monitor.lua), [documentation_desktop.md](documentation_desktop.md)
 
-- Taskbar
-  - Start [+] — Lists Settings and compatible enabled apps alphabetically. A star marks a running app. Roomy menus use taller entries.
+- Taskbar — Appears at the edge selected in Settings.
+  - Start [+] — Lists Settings and compatible enabled apps alphabetically in a compact column. A star marks a running app.
     - [Settings](#settings) — Opens the built-in Settings window.
     - [App] — Opens the app or focuses its existing window on this monitor.
     - [Alert inbox](#alert-inbox) — Launcher entry on monitors without the clock shortcut.
@@ -61,7 +61,9 @@ Appearance, system diagnostics, client names and saved app data.
 - Appearance
   - [Background](#shared-dialogs-os-color-palette) — Choose a desktop background color.
   - [Window border / Borders](#shared-dialogs-os-color-palette) — Choose a frame color.
-  - [Taskbar](#shared-dialogs-os-color-palette) — Choose a taskbar color.
+  - Taskbar
+    - [Color](#shared-dialogs-os-color-palette) — Choose a taskbar color.
+    - Position — Choose Top or Bottom for all monitors.
 - System overview
   - Central computer — IDs, channels, uptime, last checkpoint, world clock and player status.
   - Clients — Announced clients and online/offline status.
@@ -92,11 +94,11 @@ Appearance, system diagnostics, client names and saved app data.
 - App data
   - Backup & restore
     - Create backup
-      - [Entire OS / OS settings / app] — Creates a backup immediately when none exists.
+      - [Entire OS / OS settings / app] — Entire OS includes app programs, data and reported client settings.
         - Replace backup? — Replace or Cancel if a backup already exists.
     - Restore backup
       - [Existing backup]
-        - Restore data? — Restore or Cancel.
+        - Restore data? — Restore or Cancel. Entire OS restores the saved setup and restarts.
   - Reset data
     - Entire OS
       - Are you sure? — Continue or Cancel.
@@ -167,7 +169,7 @@ Reusable picker and editor flows linked from their calling menus.
 
 ### Clock
 
-World-time alarms, timers, a stopwatch and optional redstone signals.
+Live world time, alarms, timers, a stopwatch and redstone signals.
 
 **Path** Desktop → Start → Clock
 
@@ -220,7 +222,8 @@ World-time alarms, timers, a stopwatch and optional redstone signals.
   - Lap — Adds a split while running. The lap list can page.
   - Reset — Clears elapsed time and lap history.
   - Real / Game — Change the time base when stopped and reset. Real shows tenths. Game shows days and HH:MM:SS.
-- Settings
+- World time — Live Minecraft HH:MM and world day when available.
+- Settings / Setup
   - [UI color](#shared-dialogs-os-color-palette) — Standard OS palette.
   - Timer history — Cycles 10, 20 and 50 retained results.
   - <a name="clock-clock-status"></a> Clock status — World time, source health and errors.
@@ -426,7 +429,7 @@ IO side presets, timed buttons, custom switch grids and scenes.
       - [Rename](#shared-dialogs-touch-keyboard) — Touch keyboard.
       - Delete
         - Delete scene? — Delete or Cancel.
-- Settings / App settings
+- Settings / App settings — Setup on narrow windows.
   - UI color — Preview a swatch, then Apply or Cancel.
   - Background — Preview a swatch, then Apply or Cancel.
   - Button borders — Preview a swatch, then Apply or Cancel.
@@ -560,7 +563,7 @@ Finished HV arrivals, panel equivalents and production-sorted farm stock.
     - Use default filter — Clears the item-specific overrides.
     - [Select HV item](#solar-farm-hv-panel-type) — HV pin only.
     - Unpin item — Removes the pin.
-- Pin item / Pin overview item — Opens the item picker.
+- Pin item / Pin — Opens the item picker.
   - [Farm ME item] — Pins the selected farm item.
   - [HV solar / main ME] — Pins the main-ME HV row.
   - [Find](#solar-farm-find) — Opens the same filters as the HV picker.

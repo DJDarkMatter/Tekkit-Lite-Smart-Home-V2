@@ -106,7 +106,7 @@ function Network.new(config, isServer, logger)
     assert(integer(boot.bootCounter, 0, 2147483646), "Invalid transport boot counter")
     boot.bootCounter = boot.bootCounter + 1
     assert(storage.save(path, boot), "Cannot checkpoint network startup")
-    local net = {id = os.getComputerID(), config = config, isServer = isServer}
+    local net = {id = os.getComputerID(), config = config, isServer = isServer, bootCounter = boot.bootCounter}
     if filterLegacyRednet(net.id) then log("CraftOS 1.5 Rednet channel filter active") end
     -- Destination IDs still disambiguate computers if reply channels collide.
     net.replyChannel = replyFor(net.id, config.channel)
@@ -165,6 +165,10 @@ function Network.new(config, isServer, logger)
     end
 
     function net.toServer(message)
+        if message.type == "announce" and net.backupSettings then
+            net.backupSettings.transportBoot = net.bootCounter
+            message.backupSettings = net.backupSettings
+        end
         return net.send(config.channel, config.serverId, message)
     end
 

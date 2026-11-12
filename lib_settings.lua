@@ -65,7 +65,17 @@ function Settings.new(actions)
             local function label(text, color) return w >= 24 and text .. " " .. api.ui.colourName(color) or text end
             ui.menu("Appearance", {{label("Background", settings.backgroundColour), "background", nil, true, settings.backgroundColour},
                 {label(w >= 13 and "Window border" or "Borders", settings.windowBorderColour), "windowBorder", nil, true, settings.windowBorderColour},
-                {label("Taskbar", settings.taskbarColour), "taskbar", nil, true, settings.taskbarColour}}, "appearance")
+                {"Taskbar", "taskbar"}}, "appearance")
+        elseif section == "taskbar" then
+            local settings = api.getOSSettings()
+            local position = settings.taskbarPosition == "top" and "Top" or "Bottom"
+            ui.menu("Taskbar", {{"Color " .. api.ui.colourName(settings.taskbarColour), "taskbarColour", nil, true, settings.taskbarColour},
+                {"Position " .. position, "taskbarPosition"}}, "taskbar", {{"Back", "appearance"}})
+        elseif section == "taskbarPosition" then
+            local position = api.getOSSettings().taskbarPosition
+            ui.menu("Taskbar position", {{position == "top" and "* Top" or "Top", "setTaskbarPosition", "top"},
+                {position == "bottom" and "* Bottom" or "Bottom", "setTaskbarPosition", "bottom"}},
+                "taskbarPosition", {{"Back", "taskbar"}})
         elseif section == "screensavers" then
             local names, installed = api.getScreensavers()
             local rows = {}
@@ -119,7 +129,11 @@ function Settings.new(actions)
         if not action then return false end
         if action == "page" then view.pages[value.key] = value.page
         elseif action == "close" then return api.closeWindow(id)
-        elseif action == "background" or action == "windowBorder" or action == "taskbar" then return api.pickColour(id, action)
+        elseif action == "background" or action == "windowBorder" then return api.pickColour(id, action)
+        elseif action == "taskbarColour" then return api.pickColour(id, "taskbar")
+        elseif action == "setTaskbarPosition" then
+            local ok, err = api.setTaskbarPosition(value)
+            view.section, view.status, view.back = ok and "taskbar" or "status", err, "taskbar"
         elseif action == "nameClient" then
             if value then view.nameId = value end
             view.section, view.keyboard, view.status = "nameClient", nil, nil

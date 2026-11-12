@@ -944,7 +944,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v48", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v50", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -1026,6 +1026,52 @@ local function githubFile(name, contents)
     end
     return '{"type":"file","name":"' .. name .. '","encoding":"base64","size":' .. #contents
         .. ',"content":"' .. table.concat(encoded) .. '\\n"}'
+end
+function tests.v49_bulk_app_install_downloads_every_catalog_entry_and_rolls_back_a_failed_swap()
+    local bus = newBus()
+    local comp = bus.computer(10, "server")
+    comp.env.shell = {dir = function() return "" end}
+    local install = assert(comp.env.loadfile("install.lua"))
+    install("server")
+    local config = serialize({tickInterval=2,enabledApps={custom=true}})
+    comp.disk.files["configs_os.txt"] = config
+    comp.disk.files["apps_coffee.lua"] = "-- previous Coffee"
+    local requests, failedDownload = {}, true
+    comp.env.http = {get=function(url)
+        local path = url:match("(apps_[%w_-]+%.lua)")
+        assert(path and url:find("main",1,true),url)
+        requests[path]=(requests[path] or 0)+1
+        if path=="apps_window_presets.lua" and failedDownload then return nil,"Test connection failure" end
+        local contents = "return {title=" .. string.format("%q",path) .. "}"
+        return {readAll=function() return githubFile(path,contents) end,close=function() end}
+    end}
+    assert(not pcall(install,"apps"))
+    equal(comp.disk.files["configs_os.txt"],config)
+    equal(comp.disk.files["apps_coffee.lua"],"-- previous Coffee")
+    equal(comp.disk.files["apps_clock.lua"],nil)
+    failedDownload=false
+    local move=comp.env.fs.move
+    comp.env.fs.move=function(from,to)
+        if from=="apps_coffee.lua.restore_new" then error("Test swap failure") end
+        return move(from,to)
+    end
+    assert(not pcall(install,"apps"))
+    equal(comp.disk.files["apps_coffee.lua"],"-- previous Coffee")
+    equal(comp.disk.files["apps_clock.lua"],nil)
+    equal(comp.disk.files["configs_os.txt"],config)
+    comp.env.fs.move=move
+    requests={}
+    install("apps")
+    local settings=assert(unserialize(comp.disk.files["configs_os.txt"]))
+    equal(settings.tickInterval,2); equal(settings.enabledApps.custom,true)
+    local count=0
+    for path,downloads in pairs(requests) do
+        equal(downloads,1); assert(comp.disk.files[path])
+        assert(settings.enabledApps[path:match("^apps_([%w_-]+)%.lua$")])
+        count=count+1
+    end
+    equal(count,12)
+    equal(comp.disk.files["apps_coffee.lua.pre_update"],"-- previous Coffee")
 end
 function tests.app_installer_downloads_actual_switchboard_and_boots_it_with_only_extracted_core_files()
     local bus = newBus()

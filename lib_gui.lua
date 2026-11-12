@@ -82,12 +82,22 @@ function Gui.controlHeight(height)
     return height < 9 and 1 or math.min(6, math.max(2, math.floor(height / 5)))
 end
 
+local secondaryActions = {settings=true, edit=true, menu=true, back=true, home=true,
+    cancel=true, close=true, about=true, status=true, page=true, prev=true, previous=true, next=true,
+    earlier=true, later=true, stopwatchMode=true}
+local secondaryLabels = {Settings=true, Edit=true, Menu=true, More=true, Back=true, Cancel=true, Close=true, Status=true}
+
+Gui.secondaryHeight = 1
+
+local function isSecondary(label, action)
+    return secondaryActions[action] or secondaryLabels[label]
+end
+
 -- Give the same space to a row of controls, including its touch regions.
 -- Rows with graphs, artwork or multi-row tiles retain their internal geometry.
 local function expandRows(lines, hits, width, height)
-    local target = Gui.controlHeight(height)
+    local target = math.min(3, Gui.controlHeight(height))
     if target == 1 then return end
-    target = math.max(target, math.min(8, math.floor(height / 4)))
     local occupied, locked, controls, sizes = {}, {}, {}, {}
     for y = 1, height do occupied[y] = lines[y] and lines[y]:find("%S") ~= nil end
     for _, paint in ipairs(lines.styles) do
@@ -101,7 +111,7 @@ local function expandRows(lines, hits, width, height)
             occupied[y] = true
             if last > first then locked[y] = true end
         end
-        if first == last and hit.paint then controls[first] = true end
+        if first == last and hit.paint and not hit.secondary then controls[first] = true end
     end
     local free = height
     for y = 1, height do
@@ -110,9 +120,9 @@ local function expandRows(lines, hits, width, height)
     end
     if free == 0 then return end
     local remaining = free
-    -- Upgrade the footer first when there is only a little spare room.
+    -- Give available rows to the content and actions before navigation.
     for depth = 2, target do
-        for y = height, 1, -1 do
+        for y = 1, height do
             if remaining > 0 and controls[y] and not locked[y] then
                 sizes[y], remaining = depth, remaining - 1
             end
@@ -156,6 +166,23 @@ local function labelAt(lines, x1, x2, y, label)
         .. string.rep(" ", span - inset - #label) .. lines[y]:sub(x2 + 1)
 end
 
+local function styleSecondary(lines, hits)
+    local depth = Gui.secondaryHeight
+    for _, hit in ipairs(hits) do
+        if hit.secondary and hit.paint then
+            local paint = hit.paint
+            paint.bg, paint.fg = 32768, hit.enabled == false and 128 or 256
+            if hit.y2 - hit.y1 + 1 > depth then
+                labelAt(lines, hit.x1, hit.x2, hit.y, "")
+                hit.y1 = hit.y2 - depth + 1
+                hit.y = hit.y1 + math.floor((depth - 1) / 2)
+                paint.y, paint.height = hit.y1, depth
+                labelAt(lines, hit.x1, hit.x2, hit.y, hit.label)
+            end
+        end
+    end
+end
+
 local function splitLine(value, width)
     local cut = #value > width and value:sub(1, width):match("^.*()%s")
     if cut and cut > 1 then return value:sub(1, cut - 1), value:sub(cut + 1) end
@@ -179,12 +206,11 @@ local function wrapButtons(lines, hits)
     end
 end
 
--- Use a visible seam for touching controls of the same color. Full-width
--- neutral rows can alternate fills; other controls keep their assigned color.
+-- Use dark gutters for adjoining controls that have no room for a gap.
 local function separateButtons(lines, hits, height)
     local starts, ends, empty, striped = {}, {}, {}, {}
     local function seam(hit, x, y, w, h)
-        lines.styles[#lines.styles + 1] = {x=x,y=y,width=w,height=h,bg=Gui.contrast(hit.paint.bg)}
+        lines.styles[#lines.styles + 1] = {x=x,y=y,width=w,height=h,bg=hit.paint.bg==32768 and 128 or 32768}
     end
     local function blank(x1, x2, first, last)
         for y = first, last do
@@ -213,13 +239,12 @@ local function separateButtons(lines, hits, height)
                         break
                     end
                 end
-                if above and (paint.bg == 128 or paint.bg == 256) then
-                    paint.bg = paint.bg == 128 and 256 or 128
-                    paint.fg = hit.enabled == false and (paint.bg == 128 and 256 or 128) or Gui.contrast(paint.bg)
-                elseif above then
+                if above then
                     local x1, x2 = math.max(above.x1, hit.x1), math.min(above.x2, hit.x2)
                     if blank(x1,x2,y,y) then seam(hit,x1,y,x2-x1+1,1)
                     elseif blank(x1,x2,y-1,y-1) then seam(above,x1,y-1,x2-x1+1,1)
+                    elseif paint.bg == 128 and above.x1 == hit.x1 and above.x2 == hit.x2 then
+                        paint.bg, paint.fg = 32768, 1
                     elseif not striped[above] then
                         if blank(hit.x1,hit.x1,y,y) then seam(hit,hit.x1,y,1,1) end
                         if blank(hit.x2,hit.x2,y,y) then seam(hit,hit.x2,y,1,1) end
@@ -230,9 +255,8 @@ local function separateButtons(lines, hits, height)
                     local bottom = math.min(left.y2 or left.y, hit.y2 or hit.y)
                     if blank(hit.x1,hit.x1,y,bottom) then seam(hit,hit.x1,y,1,bottom-y+1)
                     elseif blank(left.x2,left.x2,y,bottom) then seam(left,left.x2,y,1,bottom-y+1)
-                    elseif paint.bg == 128 or paint.bg == 256 then
-                        paint.bg = paint.bg == 128 and 256 or 128
-                        paint.fg = Gui.contrast(paint.bg)
+                    elseif paint.bg == 128 then
+                        paint.bg, paint.fg = 32768, 1
                     end
                 end
             end
@@ -244,7 +268,11 @@ function Gui.finish(lines, width, height, fixed)
     local hits = lines.hits or {}
     lines.touchLayout = true
     if #hits > 0 then
-        if not fixed then expandRows(lines, hits, width, height) end
+        styleSecondary(lines, hits)
+        if not fixed and not lines.arrangedChoices then
+            expandRows(lines, hits, width, height)
+            styleSecondary(lines, hits)
+        end
         wrapButtons(lines, hits)
         separateButtons(lines, hits, height)
     end
@@ -299,6 +327,12 @@ function Gui.content(width, height)
         local left = centred and math.floor((width - #text) / 2) or 0
         ui.lines[y] = string.rep(" ", left) .. text .. string.rep(" ", width - left - #text)
     end
+    function ui.put(x, y, value, span, centred)
+        if y < 1 or y > height or span < 1 then return end
+        local text = tostring(value):gsub("[%c]", " "):sub(1, span)
+        if centred then x = x + math.floor((span - #text) / 2) end
+        ui.lines[y] = ui.lines[y]:sub(1, x - 1) .. text .. ui.lines[y]:sub(x + #text)
+    end
     function ui.readout(y, value, available, foreground, background)
         local glyphs, span = {}, -1
         for i = 1, #value do
@@ -324,20 +358,80 @@ function Gui.content(width, height)
         return 5 * scale
     end
     function ui.heading(text, accent)
-        ui.text(1, text)
-        ui.style(1, 1, width, 1, Gui.contrast(accent or 128), accent or 128)
+        if width < 14 or #text > width - 2 then
+            ui.text(1, text)
+            ui.style(1, 1, width, 1, Gui.contrast(accent or 128), accent or 128)
+        else
+            ui.text(1, "  " .. text)
+            ui.style(1, 1, width, 1, 1, 128)
+            local marker = accent or 256
+            ui.style(1, 1, 1, 1, Gui.contrast(marker), marker)
+        end
     end
     function ui.button(y, label, action, x1, x2, enabled, bg, fg, value, rows)
         x1, x2 = x1 or 1, x2 or width
         rows = rows or 1
         local middle = y + math.floor((rows - 1) / 2)
         labelAt(ui.lines, x1, x2, middle, label)
-        bg = enabled == false and 256 or bg or 128
-        local paint = ui.style(x1, y, x2 - x1 + 1, rows, enabled == false and 128 or fg or Gui.contrast(bg), bg)
+        bg = enabled == false and 32768 or bg or 128
+        local paint = ui.style(x1, y, x2 - x1 + 1, rows, enabled == false and 256 or fg or Gui.contrast(bg), bg)
         local hit = {x1 = x1, x2 = x2, y = middle, y1 = y, y2 = y + rows - 1,
-            action = action, value = value, enabled = enabled, paint = paint, label = label}
+            action = action, value = value, enabled = enabled, paint = paint, label = label,
+            secondary = isSecondary(label, action)}
         ui.hits[#ui.hits + 1] = hit
         return hit
+    end
+    function ui.buttonRow(y, items, depth)
+        local count = #items
+        local gap = width >= count * 7 - 1 and 1 or 0
+        local span = width - (count - 1) * gap
+        for i, item in ipairs(items) do
+            local left = 1 + math.floor((i - 1) * span / count) + (i - 1) * gap
+            local right = math.floor(i * span / count) + (i - 1) * gap
+            ui.button(y, item[1], item[2], left, right, item[4], item[5], nil, item[3], depth)
+        end
+    end
+    -- Ordered lists stay in one column. Short sets of actions can opt into
+    -- two columns when their labels fit. Gaps are outside the touch targets.
+    function ui.choices(top, bottom, items, tiles, panel)
+        if #items == 0 then return end
+        panel = panel or 128
+        local inset = width >= 32 and 2 or width >= 20 and 1 or 0
+        local span = width - 2 * inset
+        if tiles then span = math.min(span, #items == 1 and 30 or 68) end
+        local left = 1 + math.floor((width - span) / 2)
+        local columns = 1
+        if tiles and width >= 28 and #items > 1 then
+            columns = 2
+            for _, item in ipairs(items) do
+                if #item[1] > math.floor((span - 2) / 2) then columns = 1; break end
+            end
+        end
+        local rows = math.ceil(#items / columns)
+        local room = bottom - top + 1
+        if not tiles and room >= rows * 3 then top, room = top + 1, room - 1 end
+        local gap = room >= rows * 3 - 1 and 1 or 0
+        local depth = math.min(3, math.floor((room - (rows - 1) * gap) / rows))
+        local horizontal = columns == 2 and 2 or 0
+        local cells = span - horizontal
+        if tiles then top = top + math.floor((room - rows * depth - (rows - 1) * gap) / 2) end
+        for i, item in ipairs(items) do
+            local row, col = math.floor((i - 1) / columns), (i - 1) % columns
+            local x1 = left + math.floor(col * cells / columns) + col * horizontal
+            local x2 = left + math.floor((col + 1) * cells / columns) + col * horizontal - 1
+            local y = top + row * (depth + gap)
+            local secondary = isSecondary(item[1], item[2])
+            local buttonDepth = secondary and 1 or depth
+            if secondary then y = y + math.floor((depth - 1) / 2) end
+            local bg = item[5] or (gap == 0 and panel == 128 and (rows - row) % 2 == 0 and 32768 or panel)
+            local hit = ui.button(y, item[1], item[2], x1, x2, item[4], bg, nil, item[3], buttonDepth)
+            if not tiles then
+                local pad = #item[1] < x2 - x1 + 1 and 1 or 0
+                labelAt(ui.lines, x1, x2, hit.y, "")
+                ui.put(x1 + pad, hit.y, item[1], x2 - x1 + 1 - pad)
+            end
+        end
+        ui.lines.arrangedChoices = true
     end
     function ui.finish(fixed)
         ui.lines.hits = ui.hits
@@ -352,11 +446,12 @@ function Gui.menu(width, height, title, items, page, back, accent)
     local pages = math.max(1, math.ceil(#items / slots))
     page = math.max(1, math.min(page or 1, pages))
     ui.heading(title .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), accent)
-    local inset = width >= 24 and 1 or 0
-    for row = 1, slots do
-        local item = items[(page - 1) * slots + row]
-        if item then ui.button(row + 1, item.label, item.action, 1 + inset, width - inset, item.enabled) end
+    local visible = {}
+    for i = (page - 1) * slots + 1, math.min(page * slots, #items) do
+        local item = items[i]
+        visible[#visible + 1] = {item.label, item.action, item.value, item.enabled, item.bg}
     end
+    ui.choices(2, height - (pages > 1 and 2 or 1), visible)
     if pages > 1 then
         local half = math.floor(width / 2)
         ui.button(height - 1, "< Prev", "previous", 1, half, page > 1)
@@ -451,12 +546,6 @@ function Gui.form(width,height,view,accent,background,panel)
     local ui=Gui.content(width,height); view.pages=view.pages or {}
     background,panel=background or 32768,panel or 128
     ui.style(1,1,width,height,Gui.contrast(background),background)
-    function ui.put(x,y,value,span,center)
-        if y<1 or y>height or span<1 then return end
-        local text=tostring(value):gsub("[%c]"," "):sub(1,span)
-        if center then x=x+math.max(0,math.floor((span-#text)/2)) end
-        ui.lines[y]=ui.lines[y]:sub(1,x-1)..text..ui.lines[y]:sub(x+#text)
-    end
     function ui.action(y,text,action,value,x1,x2,enabled,bg)
         ui.button(y,text,action,x1,x2,enabled,bg or panel,nil,value)
     end
@@ -464,9 +553,11 @@ function Gui.form(width,height,view,accent,background,panel)
         -- A screen can replace the default Back footer supplied by info().
         for i=#ui.hits,1,-1 do if (ui.hits[i].y2 or ui.hits[i].y)==height then table.remove(ui.hits,i) end end
         depth=depth or 1
-        for i,row in ipairs(rows) do
-            ui.button(height-depth+1,row[1],row[2],1+math.floor((i-1)*width/#rows),math.floor(i*width/#rows),row[4],row[5] or panel,nil,row[3],depth)
+        local items = {}
+        for i, row in ipairs(rows) do
+            items[i] = {row[1], row[2], row[3], row[4], row[5] or panel}
         end
+        ui.buttonRow(height - depth + 1, items, depth)
     end
     function ui.page(key,count,slots,y,draw)
         local pages=math.max(1,math.ceil(count/slots))
@@ -479,12 +570,24 @@ function Gui.form(width,height,view,accent,background,panel)
         end
         return (current-1)*slots,current,pages
     end
-    function ui.menu(title,rows,key,footer)
+    function ui.menu(title,rows,key,footer,tiles)
         ui.heading(title,accent)
-        local slots=#rows<=height-2 and height-2 or height-3
-        local first=ui.page(key,#rows,slots,height-1)
-        for i=1,slots do local row=rows[first+i]; if row then ui.action(i+1,row[1],row[2],row[3],nil,nil,row[4],row[5]) end end
-        ui.footer(footer or {{"Back","home"}})
+        footer = footer or {{"Back","home"}}
+        local depth = 1
+        for _, row in ipairs(footer) do
+            if not isSecondary(row[1], row[2]) then
+                depth = math.min(3, Gui.controlHeight(height), math.max(1, height - #rows - 1))
+                break
+            end
+        end
+        local bottom = height - depth
+        local paged = #rows > bottom - 1
+        local slots = bottom - (paged and 2 or 1)
+        local first = ui.page(key,#rows,slots,bottom)
+        local visible = {}
+        for i = first + 1, math.min(first + slots, #rows) do visible[#visible + 1] = rows[i] end
+        ui.choices(2, bottom - (paged and 1 or 0), visible, tiles, panel)
+        ui.footer(footer, depth)
     end
     function ui.info(title,lines,key,back)
         local columns=1

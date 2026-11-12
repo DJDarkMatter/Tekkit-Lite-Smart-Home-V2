@@ -1,8 +1,9 @@
--- SmartHome OS installer: bundled-v48
+-- SmartHome OS installer: bundled-v50
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
--- User apps: inst app NAME [--ref BRANCH_OR_COMMIT] (GitHub)
+-- User apps: inst apps [--ref REF] or inst app NAME [--ref REF] (GitHub)
+-- Entire OS backup: inst restore [BACKUP_FILE]
 -- Alternatives: inst app NAME PASTE_ID   or   inst app NAME --file PATH
 -- OS/client installation is offline. Apps are fetched only on request.
 local sources = {
@@ -191,6 +192,300 @@ end
 
 return storage
 ]=],
+    ["lib_backup.lua"] = [=[-- Full snapshots are data plus locally installed app sources. Wireless
+-- announcements carry only the settings used by each supported client role.
+local Backup = {}
+local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
+local statePath, journalPath = "configs_os_state.txt", "restore_pending.txt"
+local transportPath = "configs_transport.txt"
+local roles = {io = true, monitor = true, sensor = true, relay = true}
+local sides = {top = true, bottom = true, left = true, right = true, front = true, back = true}
+
+local function integer(value, low, high)
+    return type(value) == "number" and value == math.floor(value) and value >= low and value <= high
+end
+
+local function number(value, low, high)
+    return type(value) == "number" and value >= low and value <= high
+end
+
+local function appName(value)
+    return type(value) == "string" and value:match("^[%w_-]+$") and value ~= "system" and value ~= "level_emitter"
+end
+
+local function wireColour(value)
+    if not integer(value, 1, 32768) then return false end
+    while value > 1 do
+        if value % 2 ~= 0 then return false end
+        value = value / 2
+    end
+    return true
+end
+
+function Backup.validState(value)
+    for _, key in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
+        if value[key] ~= nil and type(value[key]) ~= "table" then return false end
+    end
+    for name, mapping in pairs(value.outputMap or {}) do
+        if type(name) ~= "string" or type(mapping) ~= "table" or type(mapping.clientId) ~= "string"
+            or not sides[mapping.side] or (mapping.color ~= nil and not wireColour(mapping.color)) then return false end
+    end
+    for id, entries in pairs(value.managedSides or {}) do
+        if type(id) ~= "string" or type(entries) ~= "table" then return false end
+        for side, enabled in pairs(entries) do if not sides[side] or enabled ~= true then return false end end
+    end
+    return true
+end
+
+local function networkSettings(network)
+    if type(network) ~= "table" or type(network.networkId) ~= "string" or #network.networkId < 1
+        or not integer(network.channel, 1, 65532) or network.relayEnabled ~= nil and type(network.relayEnabled) ~= "boolean"
+        or network.serverId ~= nil and not integer(network.serverId, 0, 2147483647) then return end
+    return {networkId = network.networkId, channel = network.channel,
+        relayEnabled = network.relayEnabled, serverId = network.serverId}
+end
+
+function Backup.clientSettings(role, config, network)
+    local minimumAnnounce = (role == "io" or role == "monitor") and 1 or .5
+    if not roles[role] or type(config) ~= "table" or type(config.clientId) ~= "string"
+        or #config.clientId < 1 or #config.clientId > 64 or not number(config.announceInterval, minimumAnnounce, 2147483647)
+        or not number(config.timeout, .5, 2147483647) or config.timeout <= config.announceInterval then return end
+    local net = networkSettings(network)
+    if not net or #net.networkId > 256 then return end
+    local result = {clientId = config.clientId, announceInterval = config.announceInterval, timeout = config.timeout}
+    if role == "monitor" then
+        if not number(config.textScale, .5, 5) or not integer(config.textScale * 2, 1, 10)
+            or type(config.touchOffsets) ~= "table" then return end
+        result.textScale, result.touchOffsets = config.textScale, {}
+        for side in pairs(sides) do
+            local offset = config.touchOffsets[side]
+            if offset ~= nil then
+                if type(offset) ~= "table" or not integer(offset.x, -3, 3) or not integer(offset.y, -3, 3) then return end
+                result.touchOffsets[side] = {x = offset.x, y = offset.y}
+            end
+        end
+    elseif role == "io" then
+        if type(config.sides) ~= "table" or #config.sides > 6 or type(config.safeOff) ~= "boolean"
+            or not number(config.outputInterval, .5, 2147483647) then return end
+        result.sides, result.safeOff, result.outputInterval = {}, config.safeOff, config.outputInterval
+        for i, side in ipairs(config.sides) do
+            if not sides[side] then return end
+            result.sides[i] = side
+        end
+    elseif role == "sensor" then
+        for _, key in ipairs({"discoveryInterval", "pollInterval", "requestTimeout"}) do
+            if not number(config[key], .5, 60) then return end
+            result[key] = config[key]
+        end
+        if not integer(config.bootCounter, 0, 2147483646) then return end
+        result.bootCounter = config.bootCounter
+    end
+    return {config = result, network = net}
+end
+
+local function readFile(path)
+    local file = fs.open(path, "r")
+    if not file then return nil end
+    local contents = file.readAll()
+    file.close()
+    return contents
+end
+
+function Backup.capturePrograms()
+    local programs = {}
+    for _, path in ipairs(fs.list("")) do
+        local name = path:match("^apps_([%w_-]+)%.lua$")
+        if appName(name) and not fs.isDir(path) then
+            programs[name] = assert(readFile(path), "Cannot back up " .. path)
+            Work.check(#programs[name])
+        end
+    end
+    local startup
+    if fs.exists("startup") and not fs.isDir("startup") then startup = assert(readFile("startup"), "Cannot back up startup") end
+    return programs, startup
+end
+
+function Backup.valid(bundle, target)
+    if type(bundle) ~= "table" or bundle.target ~= target or type(bundle.time) ~= "string"
+        or (bundle.version ~= 1 and not (bundle.version == 2 and target == "@all")) then return false end
+    local data = bundle.data
+    if type(data) ~= "table" or not Backup.validState(data) then return false end
+    for _, key in ipairs({"appStates", "outputMap", "windows", "appearance", "archivedRoutes", "alertHistory"}) do
+        if type(data[key]) ~= "table" then return false end
+    end
+    if bundle.version == 1 then return true end
+    if type(bundle.osConfig) ~= "table" or type(bundle.osConfig.enabledApps) ~= "table"
+        or not networkSettings(bundle.network) or type(bundle.programs) ~= "table"
+        or bundle.startup ~= nil and type(bundle.startup) ~= "string" or type(data.clientConfigs) ~= "table" then return false end
+    for name, program in pairs(bundle.programs) do
+        if not appName(name) or type(program) ~= "string" or #program == 0 then return false end
+    end
+    return true
+end
+
+function Backup.exists(path)
+    return fs.exists(path) or fs.exists(path .. ".tmp") or fs.exists(path .. ".bak")
+end
+
+local function restorePath(path)
+    return path == statePath or path == "configs_os.txt" or path == "configs_network.txt" or path == transportPath or path == "startup"
+        or roles[path:match("^configs_([%w_-]+)%.txt$")] or appName(path:match("^apps_([%w_-]+)%.lua$"))
+end
+
+-- The journal exists only while renames can be incomplete. Its presence on
+-- boot rolls the local computer back before loading any restored settings.
+function Backup.recover(storage)
+    if not fs.exists(journalPath) then return end
+    local journal = assert(storage.load(journalPath), "Unreadable restore journal")
+    for i = #journal, 1, -1 do
+        local entry = journal[i]
+        assert(type(entry.path) == "string" and restorePath(entry.path) and type(entry.existed) == "boolean", "Invalid restore journal")
+        local path = entry.path
+        local previous, staged = path .. ".restore_old", path .. ".restore_new"
+        if fs.exists(previous) then
+            if fs.exists(path) then fs.delete(path) end
+            fs.move(previous, path)
+        elseif not entry.existed and fs.exists(path) then fs.delete(path) end
+        if fs.exists(staged) then fs.delete(staged) end
+    end
+    fs.delete(journalPath)
+end
+
+local function keepPrevious(path, suffix)
+    local previous, recovery = path .. ".restore_old", path .. suffix
+    if fs.exists(previous) then
+        if fs.exists(recovery) then fs.delete(recovery) end
+        fs.move(previous, recovery)
+    end
+end
+
+local function replace(storage, files, suffix)
+    Backup.recover(storage)
+    suffix = suffix or ".before_restore"
+    local paths, journal = {}, {}
+    for path, contents in pairs(files) do
+        assert(restorePath(path) and not fs.isDir(path), "Invalid restore target: " .. path)
+        if readFile(path) ~= contents then paths[#paths + 1] = path end
+    end
+    table.sort(paths)
+    if #paths == 0 then return true end
+    local ok, err = Work.call(function()
+        for _, path in ipairs(paths) do
+            keepPrevious(path, suffix)
+            local stage = assert(fs.open(path .. ".restore_new", "w"), "Cannot stage " .. path)
+            stage.write(files[path])
+            stage.close()
+            journal[#journal + 1] = {path = path, existed = fs.exists(path)}
+            Work.check(#files[path])
+        end
+        assert(storage.save(journalPath, journal, true))
+        for _, entry in ipairs(journal) do
+            local path = entry.path
+            if entry.existed then fs.move(path, path .. ".restore_old") end
+            fs.move(path .. ".restore_new", path)
+        end
+        fs.delete(journalPath)
+    end)
+    if not ok then
+        local recovered, why = Work.call(Backup.recover, storage)
+        if recovered then
+            for _, path in ipairs(paths) do pcall(fs.delete, path .. ".restore_new") end
+        else return false, tostring(err) .. ". Recovery pending: " .. tostring(why) end
+        return false, err
+    end
+    for _, path in ipairs(paths) do pcall(keepPrevious, path, suffix) end
+    return true
+end
+
+function Backup.installApps(storage, sources)
+    return replace(storage, sources, ".pre_update")
+end
+
+local function includeTransport(storage, files, saved)
+    if not integer(saved, 0, 2147483646) then return end
+    local transport = storage.load(transportPath) or {}
+    local current = tonumber(transport.bootCounter) or 0
+    if saved > current then
+        transport.bootCounter = saved
+        files[transportPath] = Work.serialize(transport)
+    end
+end
+
+function Backup.restoreServer(bundle, storage)
+    assert(Backup.valid(bundle, "@all"), "Invalid Entire OS backup")
+    assert(fs.exists("main_os.lua"), "Install the server role first")
+    local data, files = bundle.data, {}
+    local config = storage.load("configs_os.txt") or {}
+    local previous = storage.load(config.saveFile or statePath, Backup.validState) or {}
+    if bundle.version == 2 then
+        config = bundle.osConfig
+        for _, key in ipairs({"tickInterval", "saveInterval", "clientTimeout", "retryInterval"}) do
+            assert(config[key] == nil or number(config[key], .0001, 2147483647), "Invalid OS setting: " .. key)
+        end
+        config.saveFile = statePath
+        files["configs_os.txt"] = Work.serialize(config)
+        files["configs_network.txt"] = Work.serialize(bundle.network)
+        for name, source in pairs(bundle.programs) do
+            local path = "apps_" .. name .. ".lua"
+            assert(loadstring(source, path))
+            files[path] = source
+            Work.check(#source)
+        end
+        if bundle.startup then
+            assert(loadstring(bundle.startup, "startup"))
+            files.startup = bundle.startup
+        end
+        includeTransport(storage, files, bundle.transportBoot)
+    else
+        -- A version-one snapshot contains application state and bindings only.
+        -- Import that state even when the corresponding app has yet to be installed.
+        config.saveFile = statePath
+        files["configs_os.txt"] = Work.serialize(config)
+        data.clientConfigs = previous.clientConfigs
+    end
+    data.desktopVersion = 2
+    data.bootCounter = math.max(tonumber(data.bootCounter) or 0, tonumber(previous.bootCounter) or 0)
+    data.managedSides = data.managedSides or {}
+    for id, entries in pairs(previous.managedSides or {}) do
+        data.managedSides[id] = data.managedSides[id] or {}
+        for side in pairs(entries) do data.managedSides[id][side] = true end
+    end
+    data.outputs = data.outputs or {}
+    for name, route in pairs(data.outputMap) do
+        local owner = route.owner
+        local available = owner == "@settings" or type(config.enabledApps) == "table" and config.enabledApps[owner] == true
+            and (files["apps_" .. owner .. ".lua"] or fs.exists("apps_" .. owner .. ".lua"))
+        if type(owner) == "string" and not available then
+            data.archivedRoutes[owner] = data.archivedRoutes[owner] or {}
+            data.archivedRoutes[owner][name] = route
+            data.outputMap[name], data.outputs[name] = nil, nil
+        else
+            data.managedSides[route.clientId] = data.managedSides[route.clientId] or {}
+            data.managedSides[route.clientId][route.side] = true
+        end
+    end
+    files[statePath] = Work.serialize(data)
+    return replace(storage, files)
+end
+
+function Backup.restoreClient(bundle, storage, role, id)
+    assert(Backup.valid(bundle, "@all") and bundle.version == 2 and roles[role], "This backup has no client settings")
+    local clients = bundle.data.clientConfigs[role]
+    local record = type(clients) == "table" and clients[id]
+    local saved = type(record) == "table" and Backup.clientSettings(role, record.config, record.network)
+    assert(saved and saved.config.clientId == id, "No saved " .. role .. " client named " .. tostring(id))
+    local path = "configs_" .. role .. ".txt"
+    if role == "sensor" then
+        local current = storage.load(path) or {}
+        saved.config.bootCounter = math.max(saved.config.bootCounter, tonumber(current.bootCounter) or 0)
+    end
+    local files = {[path] = Work.serialize(saved.config), ["configs_network.txt"] = Work.serialize(saved.network)}
+    includeTransport(storage, files, record.transportBoot)
+    return replace(storage, files)
+end
+
+return Backup
+]=],
     ["lib_network.lua"] = [=[-- All wire packets are serialized strings, including on old CC modems.
 local Network = {}
 local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
@@ -299,7 +594,7 @@ function Network.new(config, isServer, logger)
     assert(integer(boot.bootCounter, 0, 2147483646), "Invalid transport boot counter")
     boot.bootCounter = boot.bootCounter + 1
     assert(storage.save(path, boot), "Cannot checkpoint network startup")
-    local net = {id = os.getComputerID(), config = config, isServer = isServer}
+    local net = {id = os.getComputerID(), config = config, isServer = isServer, bootCounter = boot.bootCounter}
     if filterLegacyRednet(net.id) then log("CraftOS 1.5 Rednet channel filter active") end
     -- Destination IDs still disambiguate computers if reply channels collide.
     net.replyChannel = replyFor(net.id, config.channel)
@@ -358,6 +653,10 @@ function Network.new(config, isServer, logger)
     end
 
     function net.toServer(message)
+        if message.type == "announce" and net.backupSettings then
+            net.backupSettings.transportBoot = net.bootCounter
+            message.backupSettings = net.backupSettings
+        end
         return net.send(config.channel, config.serverId, message)
     end
 
@@ -652,12 +951,22 @@ function Gui.controlHeight(height)
     return height < 9 and 1 or math.min(6, math.max(2, math.floor(height / 5)))
 end
 
+local secondaryActions = {settings=true, edit=true, menu=true, back=true, home=true,
+    cancel=true, close=true, about=true, status=true, page=true, prev=true, previous=true, next=true,
+    earlier=true, later=true, stopwatchMode=true}
+local secondaryLabels = {Settings=true, Edit=true, Menu=true, More=true, Back=true, Cancel=true, Close=true, Status=true}
+
+Gui.secondaryHeight = 1
+
+local function isSecondary(label, action)
+    return secondaryActions[action] or secondaryLabels[label]
+end
+
 -- Give the same space to a row of controls, including its touch regions.
 -- Rows with graphs, artwork or multi-row tiles retain their internal geometry.
 local function expandRows(lines, hits, width, height)
-    local target = Gui.controlHeight(height)
+    local target = math.min(3, Gui.controlHeight(height))
     if target == 1 then return end
-    target = math.max(target, math.min(8, math.floor(height / 4)))
     local occupied, locked, controls, sizes = {}, {}, {}, {}
     for y = 1, height do occupied[y] = lines[y] and lines[y]:find("%S") ~= nil end
     for _, paint in ipairs(lines.styles) do
@@ -671,7 +980,7 @@ local function expandRows(lines, hits, width, height)
             occupied[y] = true
             if last > first then locked[y] = true end
         end
-        if first == last and hit.paint then controls[first] = true end
+        if first == last and hit.paint and not hit.secondary then controls[first] = true end
     end
     local free = height
     for y = 1, height do
@@ -680,9 +989,9 @@ local function expandRows(lines, hits, width, height)
     end
     if free == 0 then return end
     local remaining = free
-    -- Upgrade the footer first when there is only a little spare room.
+    -- Give available rows to the content and actions before navigation.
     for depth = 2, target do
-        for y = height, 1, -1 do
+        for y = 1, height do
             if remaining > 0 and controls[y] and not locked[y] then
                 sizes[y], remaining = depth, remaining - 1
             end
@@ -726,6 +1035,23 @@ local function labelAt(lines, x1, x2, y, label)
         .. string.rep(" ", span - inset - #label) .. lines[y]:sub(x2 + 1)
 end
 
+local function styleSecondary(lines, hits)
+    local depth = Gui.secondaryHeight
+    for _, hit in ipairs(hits) do
+        if hit.secondary and hit.paint then
+            local paint = hit.paint
+            paint.bg, paint.fg = 32768, hit.enabled == false and 128 or 256
+            if hit.y2 - hit.y1 + 1 > depth then
+                labelAt(lines, hit.x1, hit.x2, hit.y, "")
+                hit.y1 = hit.y2 - depth + 1
+                hit.y = hit.y1 + math.floor((depth - 1) / 2)
+                paint.y, paint.height = hit.y1, depth
+                labelAt(lines, hit.x1, hit.x2, hit.y, hit.label)
+            end
+        end
+    end
+end
+
 local function splitLine(value, width)
     local cut = #value > width and value:sub(1, width):match("^.*()%s")
     if cut and cut > 1 then return value:sub(1, cut - 1), value:sub(cut + 1) end
@@ -749,12 +1075,11 @@ local function wrapButtons(lines, hits)
     end
 end
 
--- Use a visible seam for touching controls of the same color. Full-width
--- neutral rows can alternate fills; other controls keep their assigned color.
+-- Use dark gutters for adjoining controls that have no room for a gap.
 local function separateButtons(lines, hits, height)
     local starts, ends, empty, striped = {}, {}, {}, {}
     local function seam(hit, x, y, w, h)
-        lines.styles[#lines.styles + 1] = {x=x,y=y,width=w,height=h,bg=Gui.contrast(hit.paint.bg)}
+        lines.styles[#lines.styles + 1] = {x=x,y=y,width=w,height=h,bg=hit.paint.bg==32768 and 128 or 32768}
     end
     local function blank(x1, x2, first, last)
         for y = first, last do
@@ -783,13 +1108,12 @@ local function separateButtons(lines, hits, height)
                         break
                     end
                 end
-                if above and (paint.bg == 128 or paint.bg == 256) then
-                    paint.bg = paint.bg == 128 and 256 or 128
-                    paint.fg = hit.enabled == false and (paint.bg == 128 and 256 or 128) or Gui.contrast(paint.bg)
-                elseif above then
+                if above then
                     local x1, x2 = math.max(above.x1, hit.x1), math.min(above.x2, hit.x2)
                     if blank(x1,x2,y,y) then seam(hit,x1,y,x2-x1+1,1)
                     elseif blank(x1,x2,y-1,y-1) then seam(above,x1,y-1,x2-x1+1,1)
+                    elseif paint.bg == 128 and above.x1 == hit.x1 and above.x2 == hit.x2 then
+                        paint.bg, paint.fg = 32768, 1
                     elseif not striped[above] then
                         if blank(hit.x1,hit.x1,y,y) then seam(hit,hit.x1,y,1,1) end
                         if blank(hit.x2,hit.x2,y,y) then seam(hit,hit.x2,y,1,1) end
@@ -800,9 +1124,8 @@ local function separateButtons(lines, hits, height)
                     local bottom = math.min(left.y2 or left.y, hit.y2 or hit.y)
                     if blank(hit.x1,hit.x1,y,bottom) then seam(hit,hit.x1,y,1,bottom-y+1)
                     elseif blank(left.x2,left.x2,y,bottom) then seam(left,left.x2,y,1,bottom-y+1)
-                    elseif paint.bg == 128 or paint.bg == 256 then
-                        paint.bg = paint.bg == 128 and 256 or 128
-                        paint.fg = Gui.contrast(paint.bg)
+                    elseif paint.bg == 128 then
+                        paint.bg, paint.fg = 32768, 1
                     end
                 end
             end
@@ -814,7 +1137,11 @@ function Gui.finish(lines, width, height, fixed)
     local hits = lines.hits or {}
     lines.touchLayout = true
     if #hits > 0 then
-        if not fixed then expandRows(lines, hits, width, height) end
+        styleSecondary(lines, hits)
+        if not fixed and not lines.arrangedChoices then
+            expandRows(lines, hits, width, height)
+            styleSecondary(lines, hits)
+        end
         wrapButtons(lines, hits)
         separateButtons(lines, hits, height)
     end
@@ -869,6 +1196,12 @@ function Gui.content(width, height)
         local left = centred and math.floor((width - #text) / 2) or 0
         ui.lines[y] = string.rep(" ", left) .. text .. string.rep(" ", width - left - #text)
     end
+    function ui.put(x, y, value, span, centred)
+        if y < 1 or y > height or span < 1 then return end
+        local text = tostring(value):gsub("[%c]", " "):sub(1, span)
+        if centred then x = x + math.floor((span - #text) / 2) end
+        ui.lines[y] = ui.lines[y]:sub(1, x - 1) .. text .. ui.lines[y]:sub(x + #text)
+    end
     function ui.readout(y, value, available, foreground, background)
         local glyphs, span = {}, -1
         for i = 1, #value do
@@ -894,20 +1227,80 @@ function Gui.content(width, height)
         return 5 * scale
     end
     function ui.heading(text, accent)
-        ui.text(1, text)
-        ui.style(1, 1, width, 1, Gui.contrast(accent or 128), accent or 128)
+        if width < 14 or #text > width - 2 then
+            ui.text(1, text)
+            ui.style(1, 1, width, 1, Gui.contrast(accent or 128), accent or 128)
+        else
+            ui.text(1, "  " .. text)
+            ui.style(1, 1, width, 1, 1, 128)
+            local marker = accent or 256
+            ui.style(1, 1, 1, 1, Gui.contrast(marker), marker)
+        end
     end
     function ui.button(y, label, action, x1, x2, enabled, bg, fg, value, rows)
         x1, x2 = x1 or 1, x2 or width
         rows = rows or 1
         local middle = y + math.floor((rows - 1) / 2)
         labelAt(ui.lines, x1, x2, middle, label)
-        bg = enabled == false and 256 or bg or 128
-        local paint = ui.style(x1, y, x2 - x1 + 1, rows, enabled == false and 128 or fg or Gui.contrast(bg), bg)
+        bg = enabled == false and 32768 or bg or 128
+        local paint = ui.style(x1, y, x2 - x1 + 1, rows, enabled == false and 256 or fg or Gui.contrast(bg), bg)
         local hit = {x1 = x1, x2 = x2, y = middle, y1 = y, y2 = y + rows - 1,
-            action = action, value = value, enabled = enabled, paint = paint, label = label}
+            action = action, value = value, enabled = enabled, paint = paint, label = label,
+            secondary = isSecondary(label, action)}
         ui.hits[#ui.hits + 1] = hit
         return hit
+    end
+    function ui.buttonRow(y, items, depth)
+        local count = #items
+        local gap = width >= count * 7 - 1 and 1 or 0
+        local span = width - (count - 1) * gap
+        for i, item in ipairs(items) do
+            local left = 1 + math.floor((i - 1) * span / count) + (i - 1) * gap
+            local right = math.floor(i * span / count) + (i - 1) * gap
+            ui.button(y, item[1], item[2], left, right, item[4], item[5], nil, item[3], depth)
+        end
+    end
+    -- Ordered lists stay in one column. Short sets of actions can opt into
+    -- two columns when their labels fit. Gaps are outside the touch targets.
+    function ui.choices(top, bottom, items, tiles, panel)
+        if #items == 0 then return end
+        panel = panel or 128
+        local inset = width >= 32 and 2 or width >= 20 and 1 or 0
+        local span = width - 2 * inset
+        if tiles then span = math.min(span, #items == 1 and 30 or 68) end
+        local left = 1 + math.floor((width - span) / 2)
+        local columns = 1
+        if tiles and width >= 28 and #items > 1 then
+            columns = 2
+            for _, item in ipairs(items) do
+                if #item[1] > math.floor((span - 2) / 2) then columns = 1; break end
+            end
+        end
+        local rows = math.ceil(#items / columns)
+        local room = bottom - top + 1
+        if not tiles and room >= rows * 3 then top, room = top + 1, room - 1 end
+        local gap = room >= rows * 3 - 1 and 1 or 0
+        local depth = math.min(3, math.floor((room - (rows - 1) * gap) / rows))
+        local horizontal = columns == 2 and 2 or 0
+        local cells = span - horizontal
+        if tiles then top = top + math.floor((room - rows * depth - (rows - 1) * gap) / 2) end
+        for i, item in ipairs(items) do
+            local row, col = math.floor((i - 1) / columns), (i - 1) % columns
+            local x1 = left + math.floor(col * cells / columns) + col * horizontal
+            local x2 = left + math.floor((col + 1) * cells / columns) + col * horizontal - 1
+            local y = top + row * (depth + gap)
+            local secondary = isSecondary(item[1], item[2])
+            local buttonDepth = secondary and 1 or depth
+            if secondary then y = y + math.floor((depth - 1) / 2) end
+            local bg = item[5] or (gap == 0 and panel == 128 and (rows - row) % 2 == 0 and 32768 or panel)
+            local hit = ui.button(y, item[1], item[2], x1, x2, item[4], bg, nil, item[3], buttonDepth)
+            if not tiles then
+                local pad = #item[1] < x2 - x1 + 1 and 1 or 0
+                labelAt(ui.lines, x1, x2, hit.y, "")
+                ui.put(x1 + pad, hit.y, item[1], x2 - x1 + 1 - pad)
+            end
+        end
+        ui.lines.arrangedChoices = true
     end
     function ui.finish(fixed)
         ui.lines.hits = ui.hits
@@ -922,11 +1315,12 @@ function Gui.menu(width, height, title, items, page, back, accent)
     local pages = math.max(1, math.ceil(#items / slots))
     page = math.max(1, math.min(page or 1, pages))
     ui.heading(title .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), accent)
-    local inset = width >= 24 and 1 or 0
-    for row = 1, slots do
-        local item = items[(page - 1) * slots + row]
-        if item then ui.button(row + 1, item.label, item.action, 1 + inset, width - inset, item.enabled) end
+    local visible = {}
+    for i = (page - 1) * slots + 1, math.min(page * slots, #items) do
+        local item = items[i]
+        visible[#visible + 1] = {item.label, item.action, item.value, item.enabled, item.bg}
     end
+    ui.choices(2, height - (pages > 1 and 2 or 1), visible)
     if pages > 1 then
         local half = math.floor(width / 2)
         ui.button(height - 1, "< Prev", "previous", 1, half, page > 1)
@@ -1021,12 +1415,6 @@ function Gui.form(width,height,view,accent,background,panel)
     local ui=Gui.content(width,height); view.pages=view.pages or {}
     background,panel=background or 32768,panel or 128
     ui.style(1,1,width,height,Gui.contrast(background),background)
-    function ui.put(x,y,value,span,center)
-        if y<1 or y>height or span<1 then return end
-        local text=tostring(value):gsub("[%c]"," "):sub(1,span)
-        if center then x=x+math.max(0,math.floor((span-#text)/2)) end
-        ui.lines[y]=ui.lines[y]:sub(1,x-1)..text..ui.lines[y]:sub(x+#text)
-    end
     function ui.action(y,text,action,value,x1,x2,enabled,bg)
         ui.button(y,text,action,x1,x2,enabled,bg or panel,nil,value)
     end
@@ -1034,9 +1422,11 @@ function Gui.form(width,height,view,accent,background,panel)
         -- A screen can replace the default Back footer supplied by info().
         for i=#ui.hits,1,-1 do if (ui.hits[i].y2 or ui.hits[i].y)==height then table.remove(ui.hits,i) end end
         depth=depth or 1
-        for i,row in ipairs(rows) do
-            ui.button(height-depth+1,row[1],row[2],1+math.floor((i-1)*width/#rows),math.floor(i*width/#rows),row[4],row[5] or panel,nil,row[3],depth)
+        local items = {}
+        for i, row in ipairs(rows) do
+            items[i] = {row[1], row[2], row[3], row[4], row[5] or panel}
         end
+        ui.buttonRow(height - depth + 1, items, depth)
     end
     function ui.page(key,count,slots,y,draw)
         local pages=math.max(1,math.ceil(count/slots))
@@ -1049,12 +1439,24 @@ function Gui.form(width,height,view,accent,background,panel)
         end
         return (current-1)*slots,current,pages
     end
-    function ui.menu(title,rows,key,footer)
+    function ui.menu(title,rows,key,footer,tiles)
         ui.heading(title,accent)
-        local slots=#rows<=height-2 and height-2 or height-3
-        local first=ui.page(key,#rows,slots,height-1)
-        for i=1,slots do local row=rows[first+i]; if row then ui.action(i+1,row[1],row[2],row[3],nil,nil,row[4],row[5]) end end
-        ui.footer(footer or {{"Back","home"}})
+        footer = footer or {{"Back","home"}}
+        local depth = 1
+        for _, row in ipairs(footer) do
+            if not isSecondary(row[1], row[2]) then
+                depth = math.min(3, Gui.controlHeight(height), math.max(1, height - #rows - 1))
+                break
+            end
+        end
+        local bottom = height - depth
+        local paged = #rows > bottom - 1
+        local slots = bottom - (paged and 2 or 1)
+        local first = ui.page(key,#rows,slots,bottom)
+        local visible = {}
+        for i = first + 1, math.min(first + slots, #rows) do visible[#visible + 1] = rows[i] end
+        ui.choices(2, bottom - (paged and 1 or 0), visible, tiles, panel)
+        ui.footer(footer, depth)
     end
     function ui.info(title,lines,key,back)
         local columns=1
@@ -1471,7 +1873,17 @@ function Settings.new(actions)
             local function label(text, color) return w >= 24 and text .. " " .. api.ui.colourName(color) or text end
             ui.menu("Appearance", {{label("Background", settings.backgroundColour), "background", nil, true, settings.backgroundColour},
                 {label(w >= 13 and "Window border" or "Borders", settings.windowBorderColour), "windowBorder", nil, true, settings.windowBorderColour},
-                {label("Taskbar", settings.taskbarColour), "taskbar", nil, true, settings.taskbarColour}}, "appearance")
+                {"Taskbar", "taskbar"}}, "appearance")
+        elseif section == "taskbar" then
+            local settings = api.getOSSettings()
+            local position = settings.taskbarPosition == "top" and "Top" or "Bottom"
+            ui.menu("Taskbar", {{"Color " .. api.ui.colourName(settings.taskbarColour), "taskbarColour", nil, true, settings.taskbarColour},
+                {"Position " .. position, "taskbarPosition"}}, "taskbar", {{"Back", "appearance"}})
+        elseif section == "taskbarPosition" then
+            local position = api.getOSSettings().taskbarPosition
+            ui.menu("Taskbar position", {{position == "top" and "* Top" or "Top", "setTaskbarPosition", "top"},
+                {position == "bottom" and "* Bottom" or "Bottom", "setTaskbarPosition", "bottom"}},
+                "taskbarPosition", {{"Back", "taskbar"}})
         elseif section == "screensavers" then
             local names, installed = api.getScreensavers()
             local rows = {}
@@ -1525,7 +1937,11 @@ function Settings.new(actions)
         if not action then return false end
         if action == "page" then view.pages[value.key] = value.page
         elseif action == "close" then return api.closeWindow(id)
-        elseif action == "background" or action == "windowBorder" or action == "taskbar" then return api.pickColour(id, action)
+        elseif action == "background" or action == "windowBorder" then return api.pickColour(id, action)
+        elseif action == "taskbarColour" then return api.pickColour(id, "taskbar")
+        elseif action == "setTaskbarPosition" then
+            local ok, err = api.setTaskbarPosition(value)
+            view.section, view.status, view.back = ok and "taskbar" or "status", err, "taskbar"
         elseif action == "nameClient" then
             if value then view.nameId = value end
             view.section, view.keyboard, view.status = "nameClient", nil, nil
@@ -1783,12 +2199,15 @@ return app
 ]=],
     ["lib_alert_inbox.lua"] = [=[-- Monitor-local sidebar over the desktop. History is owned by the OS.
 local Inbox = {}
+local Desktop = dofile("lib_desktop.lua")
 
 function Inbox.render(monitor, entries, api)
     local view = monitor.inbox
     local small = monitor.width < 34 or monitor.height < 10
+    local area = Desktop.area(monitor)
     local width, height = small and monitor.width or math.min(38, math.floor(monitor.width * .48)),
-        small and monitor.height or monitor.height - 1
+        small and monitor.height or area.height
+    local y = small and 1 or area.y
     local x = monitor.width - width + 1
     local ui = api.ui.form(width, height, view, 2048)
     local selected
@@ -1810,13 +2229,13 @@ function Inbox.render(monitor, entries, api)
         ui.menu("Alert inbox", rows, "alerts", {{"Back", "close"}})
     end
     ui.finish()
-    return {x = x, width = width, height = height, lines = ui.lines, hits = ui.hits}
+    return {x = x, y = y, width = width, height = height, lines = ui.lines, hits = ui.hits}
 end
 
 function Inbox.touch(monitor, model, api, x, y)
-    if x < model.x or y > model.height then return false end
+    if x < model.x or y < model.y or y >= model.y + model.height then return false end
     local view = monitor.inbox
-    local action, value = api.ui.actionAt(model.hits, x - model.x + 1, y)
+    local action, value = api.ui.actionAt(model.hits, x - model.x + 1, y - model.y + 1)
     if action == "close" then monitor.inbox = nil
     elseif action == "list" then view.selected = nil
     elseif action == "details" then view.selected, view.pages.details = value, 1
@@ -2032,8 +2451,12 @@ local Desktop = {}
 local Gui = dofile("lib_gui.lua")
 local function clamp(value, low, high) return math.max(low, math.min(value, high)) end
 
+function Desktop.taskbarY(monitor)
+    return monitor.taskbarPosition == "top" and 1 or monitor.height
+end
+
 function Desktop.area(monitor)
-    return {x = 1, y = 1, width = monitor.width, height = monitor.height - 1}
+    return {x = 1, y = monitor.taskbarPosition == "top" and 2 or 1, width = monitor.width, height = monitor.height - 1}
 end
 
 function Desktop.controls(win)
@@ -2052,10 +2475,11 @@ end
 
 function Desktop.fits(rect, app, monitor)
     local minW, minH, maxW, maxH = Desktop.bounds(app, monitor)
+    local area = Desktop.area(monitor)
     return rect and rect.width >= minW and rect.height >= minH and rect.width <= maxW
-        and rect.height <= maxH and rect.x >= 1 and rect.y >= 1
+        and rect.height <= maxH and rect.x >= area.x and rect.y >= area.y
         and rect.x + rect.width - 1 <= monitor.width
-        and rect.y + rect.height - 1 < monitor.height
+        and rect.y + rect.height <= area.y + area.height
 end
 
 function Desktop.fullscreen(app, monitor)
@@ -2071,7 +2495,7 @@ end
 
 function Desktop.relative(rect, monitor)
     local area = Desktop.area(monitor)
-    return {x = (rect.x - 1) / area.width, y = (rect.y - 1) / area.height,
+    return {x = (rect.x - area.x) / area.width, y = (rect.y - area.y) / area.height,
         width = rect.width / area.width, height = rect.height / area.height}
 end
 
@@ -2082,15 +2506,15 @@ function Desktop.free(rect, relative, app, monitor)
     local width, height, x, y
     if relative then
         width, height = math.floor(relative.width * area.width + 0.5), math.floor(relative.height * area.height + 0.5)
-        x, y = 1 + math.floor(relative.x * area.width + 0.5), 1 + math.floor(relative.y * area.height + 0.5)
+        x, y = area.x + math.floor(relative.x * area.width + 0.5), area.y + math.floor(relative.y * area.height + 0.5)
     else
         width, height = tonumber(rect.width) or (app.preferredWidth or 30) + 2,
             tonumber(rect.height) or (app.preferredHeight or 10) + 2
-        x, y = tonumber(rect.x) or 1, tonumber(rect.y) or 1
+        x, y = tonumber(rect.x) or area.x, tonumber(rect.y) or area.y
     end
     width, height = clamp(math.floor(width), minW, maxW), clamp(math.floor(height), minH, maxH)
     return {x = clamp(math.floor(x), 1, area.width - width + 1),
-        y = clamp(math.floor(y), 1, area.height - height + 1), width = width, height = height}
+        y = clamp(math.floor(y), area.y, area.y + area.height - height), width = width, height = height}
 end
 
 local grids = {{1, 1}, {2, 1}, {1, 2}, {2, 2}, {3, 1}, {1, 3}, {3, 2}, {2, 3}, {3, 3}}
@@ -2124,7 +2548,7 @@ function Desktop.zone(mode, monitor)
     end
     if not columns or column > columns or row > rows then return end
     local left, top = math.floor((column - 1) * area.width / columns), math.floor((row - 1) * area.height / rows)
-    return {x = left + 1, y = top + 1, width = math.floor(column * area.width / columns) - left,
+    return {x = left + area.x, y = top + area.y, width = math.floor(column * area.width / columns) - left,
         height = math.floor(row * area.height / rows) - top}
 end
 
@@ -2164,8 +2588,11 @@ function Desktop.pointArrows(point, monitor, anchor)
     local depth = area.height >= 14 and 2 or 1
     local side = area.width >= 22 and 2 or 1
     local width, height = 2 * side + 3, 3 * depth
+    local bottom = area.y + area.height - 1
     anchor = anchor or {x = point.x > area.width / 2 and 1 or area.width - width + 1,
-        y = point.y > area.height / 2 and 2 or area.height - height + 1}
+        y = point.y > area.y + area.height / 2 - 1 and area.y + 1 or bottom - height + 1}
+    anchor.x = clamp(anchor.x, area.x, area.width - width + 1)
+    anchor.y = clamp(anchor.y, area.y + 1, bottom - height + 1)
     anchor.width, anchor.height = width, height
     local function add(x, y, w, label, dx, dy)
         hits[#hits + 1] = {x1 = x, x2 = x + w - 1, y = y + math.floor((depth-1)/2),
@@ -2173,8 +2600,8 @@ function Desktop.pointArrows(point, monitor, anchor)
     end
     if point.x > 1 then add(anchor.x, anchor.y + depth, side, "<", -1, 0) end
     if point.x < area.width then add(anchor.x + width - side, anchor.y + depth, side, ">", 1, 0) end
-    if point.y > 1 then add(anchor.x + side, anchor.y, 3, "^", 0, -1) end
-    if point.y < area.height then add(anchor.x + side, anchor.y + 2*depth, 3, "v", 0, 1) end
+    if point.y > area.y then add(anchor.x + side, anchor.y, 3, "^", 0, -1) end
+    if point.y < bottom then add(anchor.x + side, anchor.y + 2*depth, 3, "v", 0, 1) end
     return hits, anchor
 end
 
@@ -2188,8 +2615,8 @@ function Desktop.moveArrows(rect, monitor)
     end
     if rect.x > 1 then add(rect.x, middleY, " < ", -1, 0) end
     if rect.x + rect.width - 1 < area.width then add(rect.x + rect.width - 3, middleY, " > ", 1, 0) end
-    if rect.y > 1 then add(middleX - 1, rect.y, " ^ ", 0, -1) end
-    if rect.y + rect.height - 1 < area.height then add(middleX - 1, rect.y + rect.height - depth, " v ", 0, 1) end
+    if rect.y > area.y then add(middleX - 1, rect.y, " ^ ", 0, -1) end
+    if rect.y + rect.height < area.y + area.height then add(middleX - 1, rect.y + rect.height - depth, " v ", 0, 1) end
     return hits
 end
 
@@ -2222,7 +2649,7 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
     end
     page = clamp(page or 1, 1, pages)
     local rect = {x = clamp(win.x + win.width - width, 1, area.width - width + 1),
-        y = clamp(win.y + 1, 1, area.height - height + 1), width = width, height = height}
+        y = clamp(win.y + 1, area.y, area.y + area.height - height), width = width, height = height}
     local ui, byMode = Gui.content(width, height), {}
     ui.style(1, 1, width, height, 1, 32768)
     for _, item in ipairs(options) do byMode[item.value] = item end
@@ -2362,28 +2789,26 @@ end
 -- Shared paginated popup geometry for the launcher and window layout menus.
 function Desktop.menu(monitor, title, items, page, anchor)
     local area = Desktop.area(monitor)
-    local columns = not anchor and area.width >= 45 and #items >= 6 and 2 or 1
-    local width = math.min(area.width, columns == 2 and 56 or area.width >= 52 and 32 or 26)
-    local depth = math.min(4, Gui.controlHeight(area.height))
-    local rows = math.max(1, math.floor((area.height - 1) / depth))
-    if #items > rows * columns then rows = math.max(1, rows - 1) end
-    local slots = rows * columns
+    local width = math.min(area.width, anchor and 26 or 22)
+    local depth = anchor and math.min(4, Gui.controlHeight(area.height)) or 1
+    local slots = math.max(1, math.floor((area.height - 1) / depth))
+    if not anchor then slots = math.min(slots, 16) end
+    if #items > slots then slots = math.max(1, slots - 1) end
     local pages = math.max(1, math.ceil(#items / slots))
     page = clamp(page or 1, 1, pages)
-    local height = math.min(area.height, 1 + (math.max(1, math.ceil(math.min(#items, slots) / columns)) + (pages > 1 and 1 or 0)) * depth)
+    local height = math.min(area.height, 1 + (math.max(1, math.min(#items, slots)) + (pages > 1 and 1 or 0)) * depth)
+    local lastY = area.y + area.height - height
+    local origin = monitor.taskbarPosition == "top" and area.y or lastY
     local rect = {x = clamp(anchor and anchor.x or 1, 1, area.width - width + 1),
-        y = clamp(anchor and anchor.y or area.height - height + 1, 1, area.height - height + 1), width = width, height = height}
+        y = clamp(anchor and anchor.y or origin, area.y, lastY), width = width, height = height}
     local ui = Gui.content(width, height)
     ui.style(1, 1, width, height, 1, 32768)
     ui.heading(title .. (pages > 1 and " " .. page .. "/" .. pages or ""), 128)
     for slot = 1, slots do
         local item = items[(page - 1) * slots + slot]
         if item then
-            local row, column = math.floor((slot-1)/columns), (slot-1)%columns
-            local x1 = 1 + math.floor(column*(width+1)/columns)
-            local x2 = math.floor((column+1)*(width+1)/columns)-1
-            local hit = ui.button(2 + row * depth, item.label, "item", x1, x2,
-                item.enabled, (row+column) % 2 == 0 and 256 or 128, nil, nil, depth)
+            local hit = ui.button(2 + (slot-1)*depth, item.label, "item", 1, width,
+                item.enabled, slot % 2 == 0 and 128 or 256, nil, nil, depth)
             hit.item = item
         end
     end
@@ -2414,6 +2839,7 @@ local SensorHub = dofile("lib_sensor_server.lua")
 local SensorPicker = dofile("lib_sensor_picker.lua")
 local IOHistory = dofile("lib_io_history.lua")
 local Inbox = dofile("lib_alert_inbox.lua")
+local Backup = dofile("lib_backup.lua")
 local systemColours = {background = {field = "backgroundColour", title = "Background"},
     windowBorder = {field = "windowBorderColour", title = "Window border"}, taskbar = {field = "taskbarColour", title = "Taskbar"}}
 local defaultAppearance = {backgroundColour = 2048, windowBorderColour = 128, taskbarColour = 128}
@@ -2498,20 +2924,7 @@ local function sameSnapshot(a, b)
     return true
 end
 
-local function validState(value)
-    for _, key in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
-        if value[key] ~= nil and type(value[key]) ~= "table" then return false end
-    end
-    for name, mapping in pairs(value.outputMap or {}) do
-        if type(name) ~= "string" or type(mapping) ~= "table" or type(mapping.clientId) ~= "string"
-            or not sideSet[mapping.side] or (mapping.color ~= nil and not colour(mapping.color)) then return false end
-    end
-    for id, entries in pairs(value.managedSides or {}) do
-        if type(id) ~= "string" or type(entries) ~= "table" then return false end
-        for side, enabled in pairs(entries) do if not sideSet[side] or enabled ~= true then return false end end
-    end
-    return true
-end
+local validState = Backup.validState
 
 local function validApp(app)
     if type(app) ~= "table" then return false end
@@ -2546,6 +2959,7 @@ function Server.new(net, storage, config, logger)
     for field, value in pairs(defaultAppearance) do
         if not colour(state.appearance[field]) then state.appearance[field] = value end
     end
+    if state.appearance.taskbarPosition ~= "top" then state.appearance.taskbarPosition = "bottom" end
     local appColours = {}
     if type(state.appearance.appColours) == "table" then
         for name, value in pairs(state.appearance.appColours) do
@@ -2553,7 +2967,7 @@ function Server.new(net, storage, config, logger)
         end
     end
     state.appearance.appColours = appColours
-    for _, key in ipairs({"clientNames", "uptimeHistory", "alertHistory", "archivedRoutes"}) do
+    for _, key in ipairs({"clientNames", "uptimeHistory", "alertHistory", "archivedRoutes", "clientConfigs"}) do
         if type(state[key]) ~= "table" then state[key] = {} end
     end
     state.notificationSequence = tonumber(state.notificationSequence) or 0
@@ -2636,12 +3050,13 @@ function Server.new(net, storage, config, logger)
         return windows
     end
     function server.save(forgetPrevious)
+        if server.restartAfterRestore then return true end
         local previousStage = Work.stage
         Work.stage = "Saving OS state"
         local saved = {}
         for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides",
             "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance",
-            "clientNames", "uptimeHistory", "alertHistory", "archivedRoutes", "notificationSequence"}) do
+            "clientNames", "uptimeHistory", "alertHistory", "archivedRoutes", "notificationSequence", "clientConfigs"}) do
             saved[name] = state[name]
         end
         saved.windows = saveWindows()
@@ -2691,7 +3106,8 @@ function Server.new(net, storage, config, logger)
 
     function api.getOSSettings()
         return {backgroundMode = "solid", backgroundColour = state.appearance.backgroundColour,
-            windowBorderColour = state.appearance.windowBorderColour, taskbarColour = state.appearance.taskbarColour}
+            windowBorderColour = state.appearance.windowBorderColour, taskbarColour = state.appearance.taskbarColour,
+            taskbarPosition = state.appearance.taskbarPosition or "bottom"}
     end
     function api.getAppColour(name) return state.appearance.appColours[name] or 2048 end
     local function saveAppearance(change)
@@ -2712,6 +3128,17 @@ function Server.new(net, storage, config, logger)
     function api.setTaskbarColour(value)
         if not colour(value) then return false, "Choose a CC color" end
         return saveAppearance(function(appearance) appearance.taskbarColour = value end)
+    end
+    function api.setTaskbarPosition(position)
+        if position ~= "top" and position ~= "bottom" then return false, "Choose Top or Bottom" end
+        local ok, err = saveAppearance(function(appearance) appearance.taskbarPosition = position end)
+        if not ok then return false, err end
+        for id, monitor in pairs(server.monitors) do
+            monitor.taskbarPosition = position
+            monitor.launcher, monitor.layoutMenu, monitor.placement, monitor.inbox = nil, nil, nil, nil
+            invalidateInput(id)
+        end
+        return true
     end
     local systemColourSetters = {background = api.setBackgroundColour,
         windowBorder = api.setWindowBorderColour, taskbar = api.setTaskbarColour}
@@ -3354,7 +3781,9 @@ function Server.new(net, storage, config, logger)
         return first
     end
     local function notificationModel(item, monitor)
-        local available = not monitor.fullscreen and monitor.height >= 5 and monitor.height-1 or monitor.height
+        local area = not monitor.fullscreen and monitor.height >= 5 and Desktop.area(monitor)
+            or {y = 1, height = monitor.height}
+        local available = area.height
         local width = math.min(monitor.width >= 60 and 48 or 34, monitor.width)
         local inner = math.max(1,width-2)
         local rows,remaining = {},item.message
@@ -3365,7 +3794,7 @@ function Server.new(net, storage, config, logger)
         until remaining==""
         local depth = math.min(3, Gui.controlHeight(available))
         local height = math.min(available, math.max(5,math.min(4,#rows)+3+depth))
-        local x,y = 1+math.floor((monitor.width-width)/2),1+math.floor((available-height)/2)
+        local x,y = 1+math.floor((monitor.width-width)/2),area.y+math.floor((available-height)/2)
         local bottom = y+height-(height>=3 and 2 or 1)
         local top = math.max(y,bottom-depth+1)
         local inset = width>=3 and 1 or 0
@@ -3461,7 +3890,8 @@ function Server.new(net, storage, config, logger)
         fit(win, monitor)
         if not app.fullscreenOnly and not x and not y then
             local existing, placed = windowsFor(monitorId), false
-            for cy = 1, monitor.height - win.height do
+            local area = Desktop.area(monitor)
+            for cy = area.y, area.y + area.height - win.height do
                 for cx = 1, monitor.width - win.width + 1 do
                     local free = true
                     for _, other in ipairs(existing) do
@@ -3912,24 +4342,32 @@ function Server.new(net, storage, config, logger)
     local function backupBundle(target)
         local path = backupPath(target)
         if not path then return nil end
-        return storage.load(path, function(bundle)
-            return bundle.version == 1 and bundle.target == target and type(bundle.time) == "string"
-                and type(bundle.data) == "table" and validState(bundle.data)
-                and type(bundle.data.appStates) == "table" and type(bundle.data.outputMap) == "table"
-                and type(bundle.data.windows) == "table" and type(bundle.data.appearance) == "table"
-                and type(bundle.data.archivedRoutes) == "table" and type(bundle.data.alertHistory) == "table"
-        end)
+        return storage.load(path, function(bundle) return Backup.valid(bundle, target) end)
     end
     local function backupInfo(target)
         local bundle = backupBundle(target)
-        if not bundle then return nil end
+        local path = backupPath(target)
+        if not bundle then return path and Backup.exists(path) and "Unreadable backup" or nil end
         local day = bundle.day and "Day " .. bundle.day .. " " or ""
-        return day .. bundle.time .. " / " .. #sortedKeys(bundle.data.windows) .. " windows"
+        local windows = #sortedKeys(bundle.data.windows)
+        if target ~= "@all" then return day .. bundle.time .. " / " .. windows .. " windows" end
+        if bundle.version == 1 then
+            local configured = 0
+            for name, appState in pairs(bundle.data.appStates) do
+                if name ~= "@settings" and type(appState) == "table" and next(appState) then configured = configured + 1 end
+            end
+            return "Legacy: " .. configured .. " saved apps / " .. windows .. " windows"
+        end
+        local clients = 0
+        for _, group in pairs(bundle.data.clientConfigs) do
+            if type(group) == "table" then clients = clients + #sortedKeys(group) end
+        end
+        return #sortedKeys(bundle.programs) .. " apps / " .. clients .. " clients / " .. windows .. " windows"
     end
     local function listBackups()
         local result, found = {}, {}
         local function include(id)
-            if not found[id] and backupBundle(id) then
+            if not found[id] and Backup.exists(backupPath(id)) then
                 result[#result + 1] = {id = id, label = id == "@all" and "Entire OS" or appTitle(id)}
                 found[id] = true
             end
@@ -3978,7 +4416,17 @@ function Server.new(net, storage, config, logger)
         end
         local bundle = stamp()
         bundle.target, bundle.version, bundle.data = target, 1, data
-        local ok, err = storage.save(path, bundle, true)
+        if all then
+            local ok, programs, startup = Work.call(Backup.capturePrograms)
+            if not ok then return false, programs end
+            bundle.version, bundle.programs, bundle.startup = 2, programs, startup
+            bundle.osConfig, bundle.network = copy(config), copy(net.config)
+            bundle.transportBoot = net.bootCounter
+            data.outputs, data.managedSides = copy(state.outputs), copy(state.managedSides)
+            data.appRegistry, data.clientConfigs = copy(state.appRegistry), copy(state.clientConfigs)
+            data.bootCounter, data.notificationSequence = state.bootCounter, state.notificationSequence
+        end
+        local ok, err = storage.save(path, bundle)
         if ok then log("Backup saved to " .. path) end
         return ok, err
     end
@@ -3986,6 +4434,15 @@ function Server.new(net, storage, config, logger)
     local function restoreBackup(target)
         local bundle = backupBundle(target)
         if not bundle then return false, "Backup missing or unreadable" end
+        if target == "@all" then
+            local saved, saveError = server.save()
+            if not saved then return false, saveError end
+            local ok, restored, err = Work.call(Backup.restoreServer, bundle, storage)
+            if not ok or not restored then return false, ok and err or restored end
+            server.restartAfterRestore = true
+            log("Restored " .. backupPath(target) .. "; restarting OS")
+            return true, "Restarting OS"
+        end
         local data = bundle.data
         local all, desktop = target == "@all", target == "@all" or target == "@settings"
         local function owns(name) return all or name == target end
@@ -4175,6 +4632,8 @@ function Server.new(net, storage, config, logger)
     local function renderMonitor(id, monitor)
         local desktopColour = state.appearance.backgroundColour
         local borderColour, taskbarColour = state.appearance.windowBorderColour, state.appearance.taskbarColour
+        monitor.taskbarPosition = state.appearance.taskbarPosition or "bottom"
+        local area, barY = Desktop.area(monitor), Desktop.taskbarY(monitor)
         local surface = Gui.new(monitor.width, monitor.height, Gui.contrast(desktopColour), desktopColour)
         local appHits, previousHits = {}, monitor.appHits or {}
         local function write(x, y, text, limit)
@@ -4242,13 +4701,13 @@ function Server.new(net, storage, config, logger)
         if not fullscreen then
             local taskbar
             taskbar, monitor.taskbar = Desktop.taskbar(windowsFor(id, true), monitor, server.gameTime, desktopState(id), active)
-            write(1, monitor.height, taskbar)
-            surface.style(1, monitor.height, monitor.width, 1, Gui.contrast(taskbarColour), taskbarColour)
+            write(1, barY, taskbar)
+            surface.style(1, barY, monitor.width, 1, Gui.contrast(taskbarColour), taskbarColour)
         end
         for _, hit in ipairs(monitor.taskbar) do
             if (hit.action == "launcher" and monitor.launcher) or (hit.action == "window" and hit.id == active) then
                 local highlight = Gui.contrast(taskbarColour)
-                surface.style(hit.x1, monitor.height, hit.x2 - hit.x1 + 1, 1, Gui.contrast(highlight), highlight)
+                surface.style(hit.x1, barY, hit.x2 - hit.x1 + 1, 1, Gui.contrast(highlight), highlight)
             end
         end
         if not fullscreen and (monitor.launcher or monitor.layoutMenu) then
@@ -4317,11 +4776,11 @@ function Server.new(net, storage, config, logger)
             if placement.kind == "custom" and placement.point then
                 hint = placement.error or ((placement.first and "2:" or "1:") .. placement.point.x .. "," .. placement.point.y .. " OK")
             end
-            write(1, 1, hint .. string.rep(" ", monitor.width))
-            write(1, monitor.height, "[OK][Cancel]" .. string.rep(" ", math.max(0, monitor.width - 12)))
-            surface.style(1, 1, monitor.width, 1, 1, 128)
-            surface.style(1, monitor.height, 4, 1, 1, 8192)
-            surface.style(5, monitor.height, 8, 1, 1, 16384)
+            write(1, area.y, hint .. string.rep(" ", monitor.width))
+            write(1, barY, "[OK][Cancel]" .. string.rep(" ", math.max(0, monitor.width - 12)))
+            surface.style(1, area.y, monitor.width, 1, 1, 128)
+            surface.style(1, barY, 4, 1, 1, 8192)
+            surface.style(5, barY, 8, 1, 1, 16384)
             placement.hits = {}
             local function drawArrows(hits, background)
                 for _, hit in ipairs(hits) do
@@ -4339,21 +4798,21 @@ function Server.new(net, storage, config, logger)
                 surface.fill(placement.pad.x, placement.pad.y, placement.pad.width, placement.pad.height, 1, 128)
                 drawArrows(placement.hits, 2048)
                 local ready = not placement.first or placement.valid
-                surface.style(1, monitor.height, 4, 1, 1, ready and 8192 or 128)
+                surface.style(1, barY, 4, 1, 1, ready and 8192 or 128)
             end
             if placement.kind == "move" and rect or placement.kind == "custom" and placement.point then
                 local x = monitor.width - 4
-                surface.write(x, 1, "Place", 32768, 256)
-                placement.hits[#placement.hits + 1] = {x1 = x, x2 = monitor.width, y = 1, action = "place"}
+                surface.write(x, area.y, "Place", 32768, 256)
+                placement.hits[#placement.hits + 1] = {x1 = x, x2 = monitor.width, y = area.y, action = "place"}
             end
         end
         monitor.inboxModel = nil
         if not fullscreen and monitor.inbox then
             local model = Inbox.render(monitor, state.alertHistory, api)
             monitor.inboxModel = model
-            for y = 1, model.height do write(model.x, y, model.lines[y], model.width) end
+            for y = 1, model.height do write(model.x, model.y + y - 1, model.lines[y], model.width) end
             for _, style in ipairs(model.lines.styles) do
-                surface.style(model.x + style.x - 1, style.y, style.width, style.height or 1, style.fg, style.bg)
+                surface.style(model.x + style.x - 1, model.y + style.y - 1, style.width, style.height or 1, style.fg, style.bg)
             end
         end
         local notification = firstNotification()
@@ -4407,6 +4866,7 @@ function Server.new(net, storage, config, logger)
     local function touch(id, x, y)
         local monitor = server.monitors[id]
         if not integer(x, 1, monitor.width) or not integer(y, 1, monitor.height) then return end
+        local area, barY = Desktop.area(monitor), Desktop.taskbarY(monitor)
         local notification = firstNotification()
         if notification then
             local popup=monitor.notification
@@ -4429,7 +4889,7 @@ function Server.new(net, storage, config, logger)
         if placement then
             local win = state.windows[placement.windowId]
             if not win then monitor.placement = nil; return end
-            if y == monitor.height then
+            if y == barY then
                 if x >= 5 and x <= 12 then monitor.placement = nil
                 elseif x <= 4 and placement.kind == "custom" and placement.point and not placement.first then
                     placement.first, placement.point, placement.pad = placement.point, nil, nil
@@ -4465,7 +4925,7 @@ function Server.new(net, storage, config, logger)
             if placement.kind == "move" then
                 if placement.preview then return end
                 placement.preview = {x = math.max(1, math.min(x, monitor.width - win.width + 1)),
-                    y = math.max(1, math.min(y, monitor.height - win.height)), width = win.width, height = win.height}
+                    y = math.max(area.y, math.min(y, area.y + area.height - win.height)), width = win.width, height = win.height}
             else
                 if placement.point then return end
                 placement.point = {x = x, y = y}
@@ -4476,7 +4936,7 @@ function Server.new(net, storage, config, logger)
             placement.error = placement.preview and not placement.valid and "Does not fit" or nil
             return
         end
-        if not fullscreen and y == monitor.height then
+        if not fullscreen and y == barY then
             for _, hit in ipairs(monitor.taskbar or {}) do
                 if x >= hit.x1 and x <= hit.x2 then
                     monitor.layoutMenu = nil
@@ -4634,9 +5094,25 @@ function Server.new(net, storage, config, logger)
             if message.clientType == "relay" then client.forwarded = message.forwarded end
             if reconnect then client.inputs, client.values = {}, {} end
             group[id] = client
+            if type(message.backupSettings) == "table" then
+                local role = message.clientType
+                local record = Backup.clientSettings(role, message.backupSettings.config, message.backupSettings.network)
+                local base, side = id:match("^(.*):([^:]+)$")
+                if record and record.network.networkId == net.config.networkId and record.network.channel == net.config.channel
+                    and (role == "monitor" and base == record.config.clientId and sideSet[side]
+                        or role ~= "monitor" and record.config.clientId == id) then
+                    if type(state.clientConfigs[role]) ~= "table" then state.clientConfigs[role] = {} end
+                    record.computerId = message.sender
+                    if integer(message.backupSettings.transportBoot, 1, 2147483646) then
+                        record.transportBoot = message.backupSettings.transportBoot
+                    end
+                    state.clientConfigs[role][record.config.clientId] = record
+                end
+            end
             if message.clientType == "monitor" then
                 if reconnect or client.width ~= message.width or client.height ~= message.height then invalidateInput(id) end
                 client.width, client.height = message.width, message.height
+                client.taskbarPosition = state.appearance.taskbarPosition or "bottom"
                 client.touchProtocol = message.touchProtocol == 1
                 client.lastRender = nil -- Periodic full repaint also recovers a lost frame.
             elseif message.clientType == "io" then
@@ -4739,7 +5215,7 @@ function Server.new(net, storage, config, logger)
                     invalidateInput(id)
                     touch(id, message.x, message.y)
                 else client.lastRender = nil end -- Recover a lost reply without applying an old tap twice.
-                server.refreshMonitors(false)
+                if not server.restartAfterRestore then server.refreshMonitors(false) end
             end
         elseif message.type == "resize" then
             local client = registered(server.monitors, message, replyChannel)
@@ -5536,7 +6012,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v48: starting")
+console.log("SmartHome OS v50: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -5558,6 +6034,7 @@ end
 local ok, err = pcall(function()
     Work.stage = "Loading OS configuration"
     storage = dofile("lib_storage.lua")
+    dofile("lib_backup.lua").recover(storage)
     Network = dofile("lib_network.lua")
     Server = dofile("lib_server.lua")
     networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
@@ -5672,6 +6149,11 @@ ok, err = Work.protect(function()
                 for _, output in ipairs(lines) do console.log(output) end
                 if quit then console.finish(); return end
             end
+            if server.restartAfterRestore then
+                console.finish()
+                if type(os.reboot) == "function" then os.reboot() end
+                return
+            end
             if head > tail then pending, head, tail, overflow = {}, 1, 0, false
             else Work.check(8192) end
         end
@@ -5681,6 +6163,8 @@ finish(ok, err)
 ]=],
     ["clients_io_client.lua"] = [=[-- Run from the computer root. Configs survive program updates.
 local storage = dofile("lib_storage.lua")
+local Backup = dofile("lib_backup.lua")
+Backup.recover(storage)
 local Network = dofile("lib_network.lua")
 local IO = dofile("lib_io.lua")
 local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
@@ -5692,6 +6176,7 @@ assert(type(config.announceInterval) == "number" and config.announceInterval >= 
 assert(type(config.timeout) == "number" and config.timeout > config.announceInterval, "Invalid timeout")
 assert(type(config.sides) == "table", "Invalid IO sides")
 local net = Network.new(networkConfig, false)
+net.backupSettings = Backup.clientSettings("io", config, networkConfig)
 local client = IO.new(net, config)
 net.ensureModem()
 client.clearOutputs()
@@ -5728,6 +6213,8 @@ while true do
 end
 ]=],
     ["clients_monitor_client.lua"] = [=[local storage = dofile("lib_storage.lua")
+local Backup = dofile("lib_backup.lua")
+Backup.recover(storage)
 local Network = dofile("lib_network.lua")
 local Monitor = dofile("lib_monitor.lua")
 local args = {...}
@@ -5748,6 +6235,7 @@ for _, offset in pairs(config.touchOffsets) do
         and math.abs(offset.x) <= 3 and math.abs(offset.y) <= 3, "Invalid touch offset")
 end
 local net = Network.new(networkConfig, false)
+net.backupSettings = Backup.clientSettings("monitor", config, networkConfig)
 local client = Monitor.new(net, config)
 print("Monitor client: " .. config.clientId)
 client.scan()
@@ -6693,6 +7181,8 @@ return Picker
 ]=],
     ["clients_sensor_client.lua"] = [=[-- Generic OpenCCSensors bridge; all names/configuration stay in the root.
 local storage = dofile("lib_storage.lua")
+local Backup = dofile("lib_backup.lua")
+Backup.recover(storage)
 local Network = dofile("lib_network.lua")
 local Sensor = dofile("lib_sensor.lua")
 local args = {...}
@@ -6715,6 +7205,7 @@ config.bootCounter = math.floor(config.bootCounter) + 1
 assert(storage.save("configs_sensor.txt", config), "Cannot checkpoint sensor startup")
 config.bootId = config.clientId .. ":" .. config.bootCounter
 local net = Network.new(networkConfig, false)
+net.backupSettings = Backup.clientSettings("sensor", config, networkConfig)
 local client = Sensor.new(net, config)
 print("Sensor client: " .. config.clientId .. " (computer " .. net.id .. ")")
 client.tick(os.clock())
@@ -6790,6 +7281,8 @@ end
 Work.stage = "Starting relay"
 local ok, err = pcall(function()
     local storage = dofile("lib_storage.lua")
+    local Backup = dofile("lib_backup.lua")
+    Backup.recover(storage)
     local Network = dofile("lib_network.lua")
     local Relay = dofile("lib_relay.lua")
     local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
@@ -6799,6 +7292,7 @@ local ok, err = pcall(function()
         "Invalid relay announce interval")
     assert(type(config.timeout) == "number" and config.timeout > config.announceInterval, "Invalid relay timeout")
     net = Network.new(networkConfig, false)
+    net.backupSettings = Backup.clientSettings("relay", config, networkConfig)
     client = Relay.new(net, config)
     print("Relay client v40: " .. config.clientId .. " (computer " .. net.id .. ")")
     print("Relay channel " .. net.relayChannel .. "; automatic multi-hop forwarding")
@@ -6868,34 +7362,59 @@ end)
 finish(ok, err)
 ]=],
 }
+local catalog = {"clock", "coffee", "io_scope", "logic_sandbox", "me_monitor", "me_storage", "notes", "reactors", "screensaver", "solar_farm", "switchboard", "window_presets"}
 local workChunk = assert(loadstring(sources["lib_work.lua"], "lib_work.lua"))
 setfenv(workChunk, getfenv(1))
 workChunk()
 local args = {...}
 local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v48")
+print("SmartHome installer: bundled-v50")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
-if not entry[role] and role ~= "app" then
+local appsUsage = "Usage: inst apps [--ref REF]"
+local restoreUsage = "Usage: inst restore [FILE] | inst restore io|monitor|sensor|relay CLIENT_ID [FILE]"
+local appMode = role == "app" or role == "apps"
+if not entry[role] and not appMode and role ~= "restore" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
     print(appUsage)
+    print(appsUsage)
+    print(restoreUsage)
     return
 end
 assert(shell.dir() == "", "Run cd / first")
-local files
-if role == "app" then
-    local name, source = args[2], args[3]
-    assert(type(name) == "string" and name:match("^[%w_-]+$"), "Specify a simple app name without .lua")
-    assert(not source and not args[4]
-        or (source == "--file" or source == "--ref") and args[4] and not args[5]
-        or source and source:match("^%w+$") and not args[4], appUsage)
-    assert(name ~= "system", "System Overview is built into Settings")
-    assert(name ~= "level_emitter", "Level Emitter has been retired. Use Logic Sandbox for item rules.")
+local function bundled(name)
+    local chunk = assert(loadstring(sources[name], name))
+    setfenv(chunk, getfenv(1))
+    return chunk()
+end
+local storage = bundled("lib_storage.lua")
+local backup = bundled("lib_backup.lua")
+backup.recover(storage)
+if role == "restore" then
+    local target, id, path = args[2], args[3], args[4]
+    if entry[target] and target ~= "server" then
+        assert(id and not args[5], restoreUsage)
+    else
+        assert(not path and (target == "server" or not id), restoreUsage)
+        if target == "server" then path = id else path = target end
+        target = "server"
+    end
+    path = path or "backup_os_all.txt"
+    local bundle = assert(storage.load(path, function(value) return backup.valid(value, "@all") end),
+        "Entire OS backup missing or unreadable: " .. path)
+    local ok, err
+    if target == "server" then ok, err = backup.restoreServer(bundle, storage)
+    else ok, err = backup.restoreClient(bundle, storage, target, id) end
+    assert(ok, err)
+    print("Restored " .. target .. " from " .. path)
+    print("Run reboot to load the restored settings")
+    return
+end
+local function appSource(name, source, parameter)
     local github = source == nil or source == "--ref"
-    local ref = source == "--ref" and args[4] or "main"
+    local ref = source == "--ref" and parameter or "main"
     assert(not github or ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)
         and ref:sub(1, 1) ~= "/" and ref:sub(-1) ~= "/", "Invalid GitHub branch or commit")
-    assert(fs.exists("main_os.lua") and fs.exists("lib_server.lua"), "Install apps on the central OS computer")
     local path = "apps_" .. name .. ".lua"
     local contents
     if github then
@@ -6984,7 +7503,7 @@ if role == "app" then
             print("Downloaded via GitHub raw")
         end
     elseif source == "--file" then
-        local file = assert(fs.open(args[4], "r"), "Cannot read app source: " .. args[4])
+        local file = assert(fs.open(parameter, "r"), "Cannot read app source: " .. parameter)
         contents = file.readAll(); file.close()
     else
         local temporary = path .. ".download"
@@ -6997,29 +7516,58 @@ if role == "app" then
     assert(type(contents) == "string" and #contents > 0, "Empty app source")
     local chunk, err = loadstring(contents, path)
     assert(chunk, "Invalid app Lua: " .. tostring(err))
-    -- Read settings without resetting them or executing the app at install time.
-    local storageChunk = assert(loadstring(sources["lib_storage.lua"], "lib_storage.lua"))
-    setfenv(storageChunk, getfenv(1))
-    local storage = storageChunk()
+    return path, contents
+end
+
+local files
+if appMode then
+    local names, source, parameter
+    if role == "apps" then
+        assert(not args[2] or args[2] == "--ref" and args[3] and not args[4], appsUsage)
+        names, source, parameter = catalog, args[2], args[3]
+    else
+        local name = args[2]
+        source, parameter = args[3], args[4]
+        assert(type(name) == "string" and name:match("^[%w_-]+$"), "Specify a simple app name without .lua")
+        assert(not source and not parameter
+            or (source == "--file" or source == "--ref") and parameter and not args[5]
+            or source and source:match("^%w+$") and not parameter, appUsage)
+        assert(name ~= "system", "System Overview is built into Settings")
+        assert(name ~= "level_emitter", "Level Emitter has been retired. Use Logic Sandbox for item rules.")
+        names = {name}
+    end
+    assert(fs.exists("main_os.lua") and fs.exists("lib_server.lua"), "Install apps on the central OS computer")
     local configPath = "configs_os.txt"
     local settings = storage.load(configPath)
     if not settings then
-        for _, suffix in ipairs({"", ".tmp", ".bak"}) do
-            assert(not fs.exists(configPath .. suffix), "Unreadable OS settings")
-        end
+        assert(not backup.exists(configPath), "Unreadable OS settings")
         settings = {}
     end
     if settings.enabledApps == nil then settings.enabledApps = {} end
     assert(type(settings.enabledApps) == "table", "Invalid enabledApps setting")
-    settings.enabledApps[name] = true -- Explicit app installation opts this app in.
-    sources[path], sources[configPath] = contents, textutils.serialize(settings)
-    files = {path, configPath}
+    files = {}
+    local downloads = {}
+    for _, name in ipairs(names) do
+        local path, contents = appSource(name, source, parameter)
+        downloads[path], sources[path] = contents, contents
+        files[#files + 1] = path
+        settings.enabledApps[name] = true
+    end
+    sources[configPath] = textutils.serialize(settings)
+    if role == "apps" then
+        downloads[configPath] = sources[configPath]
+        assert(backup.installApps(storage, downloads))
+        print("Installed and enabled " .. #names .. " SmartHome apps")
+        print("Restart the central OS to load them")
+        return
+    end
+    files[#files + 1] = configPath
 else
     for index = 2, #args do
         assert(args[index] == "--startup", "Usage: inst server|io|monitor|sensor|relay [--startup]")
         autorun = true
     end
-    files = {"lib_work.lua", "lib_storage.lua", "lib_network.lua"}
+    files = {"lib_work.lua", "lib_storage.lua", "lib_backup.lua", "lib_network.lua"}
     if role == "server" or role == "monitor" then files[#files + 1] = "lib_gui.lua" end
     if role == "server" then
         files[#files + 1] = "lib_me.lua"
@@ -7044,12 +7592,9 @@ else
         files[#files + 1] = "startup"
     end
 end
-if role ~= "app" then
+if not appMode then
     -- Upgrade old folder-based installations without resetting IDs, apps or state.
     -- Existing flat files take precedence; old files remain recovery copies.
-    local storageChunk = assert(loadstring(sources["lib_storage.lua"], "lib_storage.lua"))
-    setfenv(storageChunk, getfenv(1))
-    local storage = storageChunk()
     local function existsAny(path)
         return fs.exists(path) or fs.exists(path .. ".tmp") or fs.exists(path .. ".bak")
     end

@@ -642,19 +642,20 @@ local function drawRule(ui, w, h, view, api, circuit, root)
     local toggle = circuit.enabled and "Turn off" or not canIf and "Set up IF" or not canThen and "Set up THEN" or "Turn on"
     local toggleAction = circuit.enabled and "toggleCircuit" or not canIf and "editIF" or not canThen and "editTHEN" or "toggleCircuit"
     local title = #ruleRoots(circuit) == 1 and circuit.name or root.name
-    ui.heading(title .. (circuit.enabled and " [ON]" or " [OFF]"))
     local accent = api.getAppColour(appName)
+    ui.heading(title .. (circuit.enabled and " [ON]" or " [OFF]"), accent)
     if h >= 14 and w >= 24 then
         local depth = math.min(api.ui.controlHeight(h), math.floor((h-7)/3))
-        local bottom = h-2*depth
+        local nav = api.ui.secondaryHeight
+        local bottom = h-depth-nav
         local firstHeight = math.max(3,math.floor((bottom-2)*.4))
         local thenY = firstHeight+3
         local function card(y, last, label, action, lines)
-            local background = 128
-            ui.style(1,y,w,last-y+1,1,background)
-            ui.style(1,y,w,1,api.ui.contrast(accent),accent)
-            ui.put(2,y,label,w-2)
-            for i=1,math.min(#lines,last-y) do ui.put(2,y+i,lines[i],w-2) end
+            ui.style(2,y,w-2,last-y+1,1,128)
+            ui.style(2,y,1,last-y+1,nil,accent)
+            ui.style(3,y,w-3,1,256)
+            ui.put(4,y,label,w-4)
+            for i=1,math.min(#lines,last-y) do ui.put(4,y+i,lines[i],w-4) end
             ui.hits[#ui.hits+1]={x1=1,x2=w,y1=y,y2=last,action=action}
         end
         local conditionLines = {ifText}
@@ -676,7 +677,7 @@ local function drawRule(ui, w, h, view, api, circuit, root)
         end
         card(thenY,bottom,"THEN","editTHEN",thenLines)
         ui.button(bottom+1,toggle,toggleAction,nil,nil,true,canIf and canThen and accent or 128,nil,nil,depth)
-        ui.footer({{"Back","ruleBack"},{"More","ruleMenu"}},depth)
+        ui.footer({{"Back","ruleBack"},{"More","ruleMenu"}},nav)
         return
     elseif h >= 8 and w >= 19 then
         ui.action(2, "IF", "editIF", nil, nil, nil, true, accent)
@@ -737,7 +738,8 @@ local function drawCondition(ui, view, api, circuit, node)
 end
 local function build(w, h, state, api, context)
     local view, id = context.view, context.windowId
-    local ui = api.ui.form(w, h, view, api.getAppColour(appName))
+    local accent = api.getAppColour(appName)
+    local ui = api.ui.form(w, h, view, accent)
     local circuit = find(state.circuits, view.circuitId)
     if not view.ruleEditor then
         view.ruleEditor, view.keyboard, view.time = true, nil, nil
@@ -811,7 +813,7 @@ local function build(w, h, state, api, context)
     end
     previews[id] = #bindings > 0 and {bindings = bindings, expires = os.clock() + 4} or nil
     if screen == "home" then
-        local rows = {{"+ New rule", "newRule", "Sequence", #state.circuits < 24}}
+        local rows = {{"+ New rule", "newRule", "Sequence", #state.circuits < 24, accent}}
         for _, item in ipairs(state.circuits) do
             local status = item.enabled and " ON" or " OFF"
             rows[#rows + 1] = {item.name:sub(1, w - #status) .. status, "openGroup", item.id}
@@ -823,7 +825,7 @@ local function build(w, h, state, api, context)
         ui.menu("Rules", rows, "circuits", {{"Close", "close"}, {"More", "homeMenu"}})
     elseif screen == "homeMenu" then
         ui.menu("Logic Sandbox", {{"New output", "newRule", "Output", #state.circuits < 24},
-            {"Wiring", "wiringHome"}}, "homeMenu", {{"Back", "home"}})
+            {"Wiring", "wiringHome"}}, "homeMenu", {{"Back", "home"}}, true)
     elseif screen == "rules" then
         local rows = {}
         for _, item in ipairs(ruleRoots(circuit)) do
@@ -837,7 +839,7 @@ local function build(w, h, state, api, context)
     elseif screen == "condition" then drawCondition(ui, view, api, circuit, node)
     elseif screen == "ifOptions" then
         ui.menu("Change IF", {{"Item count", "ifType", "Item amount"}, {"Redstone", "ifType", "Input"},
-            {"Combine", "ifCombine"}, {"Clear", "clearIF"}}, "ifOptions", {{"Back", "condition"}})
+            {"Combine", "ifCombine"}, {"Clear", "clearIF"}}, "ifOptions", {{"Back", "condition"}}, true)
     elseif screen == "ifCombine" then
         local rows = {}
         for _, kind in ipairs({"AND", "OR", "NOT", "Delay", "XOR"}) do

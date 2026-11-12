@@ -174,11 +174,9 @@ local function build(width, height, state, api, context)
         ui.button(y, label, action, x1, x2, enabled, bg or theme.border, nil, value)
     end
     local function footer(label, action, otherLabel, otherAction)
-        if otherLabel then
-            local half = math.floor(width / 2)
-            button(height, label, action, nil, 1, half)
-            button(height, otherLabel, otherAction, nil, half + 1, width, true, accent)
-        else button(height, label, action) end
+        local items = {{label, action, nil, true, theme.border}}
+        if otherLabel then items[2] = {otherLabel, otherAction, nil, true, accent} end
+        ui.buttonRow(height, items)
     end
     local function pager(key, page, pages, row)
         view.pages = view.pages or {}
@@ -200,13 +198,12 @@ local function build(width, height, state, api, context)
         local slots = #items <= height-header-1 and height-header-1 or height-header-2
         local pages = math.max(1, math.ceil(#items / slots))
         local page = getPage(key, pages)
-        local gap = pages == 1 and height >= #items * 2 + 2 and 2 or 1
-        local first = pages == 1 and height >= #items * gap + header+2 and header+2 or header+1
-        local inset = width >= 24 and 2 or 0
-        for row = 1, slots do
-            local item = items[(page - 1) * slots + row]
-            if item then button(first + (row - 1) * gap, item.label, item.action, item.value, 1 + inset, width - inset, item.enabled) end
+        local visible = {}
+        for i = (page - 1) * slots + 1, math.min(page * slots, #items) do
+            local item = items[i]
+            visible[#visible + 1] = {item.label, item.action, item.value, item.enabled}
         end
+        ui.choices(header + 1, height - (pages > 1 and 2 or 1), visible, false, theme.border)
         pager(key, page, pages, height - 1)
         footer("Back", back)
     end
@@ -221,8 +218,10 @@ local function build(width, height, state, api, context)
         text(innerX, labelRow, fit(title, innerW), innerW, true)
         if status and innerH >= 2 then
             local row = math.min(innerY + innerH - 1, labelRow + 1)
-            ui.style(innerX, row, innerW, 1, api.ui.contrast(statusColour or fill), statusColour or fill)
-            text(innerX, row, fit(status, innerW), innerW, true)
+            local badgeWidth = math.min(innerW, #status + 2)
+            local badgeX = innerX + math.floor((innerW - badgeWidth) / 2)
+            ui.style(badgeX, row, badgeWidth, 1, api.ui.contrast(statusColour or fill), statusColour or fill)
+            text(badgeX, row, fit(status, badgeWidth), badgeWidth, true)
         end
         if action then ui.hits[#ui.hits + 1] = {x1 = x, x2 = x + w - 1, y1 = y, y2 = y + h - 1, action = action, value = value} end
     end
@@ -271,8 +270,7 @@ local function build(width, height, state, api, context)
         local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-3)/5)))
         local footerY=height-depth+1
         if #state.boards == 0 then
-            tile({x = 1, y = 2, w = width, h = footerY - 2}, "+ Add view", width >= 22 and "IO side or custom grid" or nil,
-                "add", nil, accent)
+            ui.choices(2, footerY - 1, {{"+ Add view", "add", nil, true, accent}}, true)
         else
             grid(#state.boards, 3, MAX_VIEWS, "home", footerY-depth-1, 12, 3, function(index, rect)
                 local item, on = state.boards[index], 0
@@ -280,12 +278,12 @@ local function build(width, height, state, api, context)
                     local wire = wireFor(switch, all)
                     if wire and wire.value then on = on + 1 end
                 end
-                tile(rect, item.name, on .. " ON / " .. #item.buttons, "open", item.id, accent)
+                tile(rect, item.name, on .. " ON / " .. #item.buttons, "open", item.id, theme.border, accent)
             end)
             ui.button(footerY-depth, "+ Add view", "add", nil, nil, #state.boards < MAX_VIEWS, accent, nil, nil, depth)
         end
-        ui.button(footerY, "Scenes", "scenes", 1, math.floor(width/2), true, theme.border, nil, nil, depth)
-        ui.button(footerY, "Settings", "settings", math.floor(width/2)+1, width, true, theme.border, nil, nil, depth)
+        ui.buttonRow(footerY, {{"Scenes", "scenes", nil, true, theme.border},
+            {width<17 and "Setup" or "Settings", "settings"}}, depth)
     elseif screen == "sources" then
         local items = {{label = "+ Empty view", action = "empty"}}
         for _, client in ipairs(api.getIOClients()) do
@@ -309,7 +307,7 @@ local function build(width, height, state, api, context)
     elseif screen == "board" or screen == "switches" then
         ui.heading(screen == "switches" and "Edit switches" or board.name, accent)
         local all = outputs(api)
-        local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-2)/5)))
+        local depth=api.ui.secondaryHeight
         local y=height-depth+1
         grid(#board.buttons, board.columns, board.rows, "switches", y-1,
             (width < 20 or theme.density == "compact") and 5 or 7, 2, function(index, rect)
@@ -321,9 +319,8 @@ local function build(width, height, state, api, context)
                 tile(rect, switch.name, screen == "switches" and ("#" .. index .. " Edit") or status,
                     screen == "switches" and "editSwitch" or "toggle", switch.id, fill, statusColour)
             end)
-        local half=math.floor(width/2)
-        ui.button(y, "Back", screen=="board" and "home" or "edit", 1, screen=="board" and half or width, true, theme.border, nil, nil, depth)
-        if screen=="board" then ui.button(y,"Edit","edit",half+1,width,true,accent,nil,nil,depth) end
+        if screen=="board" then ui.buttonRow(y, {{"Back","home"},{"Edit","edit"}},depth)
+        else footer("Back","edit") end
     elseif screen == "edit" then
         local _, index = boardById(state, board.id)
         menu("View settings", {{label = "Rename view", action = "renameView"}, {label = "Edit switches", action = "switches"},

@@ -601,10 +601,13 @@ local function dashboard(ui,w,h,state,api)
         local gutter=w>=22 and 1 or 0
         local left=i==1 and 1 or half+1+gutter; local width=i==1 and half or w-half-gutter
         local bg=source(role).status=="ok" and 8192 or 2
-        ui.style(left,1,width,1,api.ui.contrast(bg),bg)
+        local inset=width>=11 and 1 or 0
+        local surface=inset==1 and state.settings.panel or bg
+        ui.style(left,1,width,1,api.ui.contrast(surface),surface)
+        if inset==1 then ui.style(left,1,1,1,nil,bg) end
         local label=w>=24 and (role=="farm" and "Farm: " or "Main: ")..status(role)
             or (role=="farm" and "F:" or "M:")..(short[source(role).status] or "ERR")
-        ui.put(left,1,label,width,true)
+        ui.put(left+inset,1,label,width-inset,true)
     end
     if not cards then return w>=36 and 3 or 2 end
     local count=w>=72 and 3 or 2
@@ -617,8 +620,8 @@ local function dashboard(ui,w,h,state,api)
         local last=2+cardRows
         ui.style(left,3,width,cardRows,api.ui.contrast(state.settings.panel),state.settings.panel)
         local accent=api.getAppColour(name)
-        ui.style(left,3,width,1,api.ui.contrast(accent),accent)
-        ui.put(left+1,3,({"HV OUTPUT","FARM STOCK","FARM MOVEMENT"})[i],width-2)
+        ui.style(left,3,1,cardRows,nil,accent)
+        ui.put(left+2,3,({"HV OUTPUT","FARM STOCK","FARM MOVEMENT"})[i],width-3)
         if i==1 then
             ui.put(left+1,detail,state.hv.item and Me.amount(hvAmount).." panels" or "Select HV panel type",width-2)
             ui.put(left+1,detail+1,hvRate and hvRateCaption(hvRate) or "Collecting "..rateProgress("hv").."/60s",width-2)
@@ -666,7 +669,7 @@ local function form(w,h,state,api,context)
         local col=math.max(9,math.floor(w/(fields+1)))
         local start=w-fields*col+1
         local top=dashboard(ui,w,h,state,api)
-        local depth=h>=14 and math.min(api.ui.controlHeight(h),math.max(1,math.floor((h-top-2)/3))) or 1
+        local depth=h>=14 and math.min(3,api.ui.controlHeight(h),math.max(1,math.floor((h-top-2)/3))) or 1
         local footer=h-depth+1
         if #rows>0 then rowH=math.max(rowH,math.min(api.ui.controlHeight(h),math.floor((footer-top)/#rows))) end
         local capacity=math.max(1,math.floor((footer-top)/rowH))
@@ -764,9 +767,9 @@ local function form(w,h,state,api,context)
             local wing=math.max(2,math.floor(w/8)); local mid=math.floor((w+2*wing)/2)
             ui.button(footer,"<","page",1,wing,page>1,128,nil,{key="overview",page=page-1},depth)
             ui.button(footer,">","page",wing+1,2*wing,page<pages,128,nil,{key="overview",page=page+1},depth)
-            ui.button(footer,"Pin item","pin",2*wing+1,mid,true,accent,nil,nil,depth)
+            ui.button(footer,mid-2*wing<8 and "Pin" or "Pin item","pin",2*wing+1,mid,true,accent,nil,nil,depth)
             ui.button(footer,"Menu","menu",mid+1,w,true,128,nil,nil,depth)
-        else ui.footer({{"Pin item","pin",nil,true,accent},{"Menu","menu"}},depth) end
+        else ui.footer({{w<16 and "Pin" or "Pin item","pin",nil,true,accent},{"Menu","menu"}},depth) end
         return ui.finish(true)
     elseif screen=="menu" then
         ui.menu("Solar farm menu",{{"ME sources","sources"},{"HV panel type / detection","chooseHV"},{"Graph/change: "..state.settings.window/60 .." minutes","window"},

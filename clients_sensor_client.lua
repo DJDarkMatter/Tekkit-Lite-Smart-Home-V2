@@ -1,5 +1,7 @@
 -- Generic OpenCCSensors bridge; all names/configuration stay in the root.
 local storage = dofile("lib_storage.lua")
+local Backup = dofile("lib_backup.lua")
+Backup.recover(storage)
 local Network = dofile("lib_network.lua")
 local Sensor = dofile("lib_sensor.lua")
 local args = {...}
@@ -22,6 +24,7 @@ config.bootCounter = math.floor(config.bootCounter) + 1
 assert(storage.save("configs_sensor.txt", config), "Cannot checkpoint sensor startup")
 config.bootId = config.clientId .. ":" .. config.bootCounter
 local net = Network.new(networkConfig, false)
+net.backupSettings = Backup.clientSettings("sensor", config, networkConfig)
 local client = Sensor.new(net, config)
 print("Sensor client: " .. config.clientId .. " (computer " .. net.id .. ")")
 client.tick(os.clock())

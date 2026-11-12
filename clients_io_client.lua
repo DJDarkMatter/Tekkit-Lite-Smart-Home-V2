@@ -1,5 +1,7 @@
 -- Run from the computer root. Configs survive program updates.
 local storage = dofile("lib_storage.lua")
+local Backup = dofile("lib_backup.lua")
+Backup.recover(storage)
 local Network = dofile("lib_network.lua")
 local IO = dofile("lib_io.lua")
 local networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
@@ -11,6 +13,7 @@ assert(type(config.announceInterval) == "number" and config.announceInterval >= 
 assert(type(config.timeout) == "number" and config.timeout > config.announceInterval, "Invalid timeout")
 assert(type(config.sides) == "table", "Invalid IO sides")
 local net = Network.new(networkConfig, false)
+net.backupSettings = Backup.clientSettings("io", config, networkConfig)
 local client = IO.new(net, config)
 net.ensureModem()
 client.clearOutputs()

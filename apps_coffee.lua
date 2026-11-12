@@ -229,8 +229,9 @@ local function build(width, height, state, api, context)
         button(height, "Cancel", "maintenance")
     else
         local inline = width >= 36 and height >= 8
-        local depth = math.min(api.ui.controlHeight(height), math.max(1, math.floor((height - 6) / (inline and 1 or 3))))
-        local limit = height - (inline and 1 or 3) * depth
+        local nav = api.ui.secondaryHeight
+        local depth = math.min(api.ui.controlHeight(height), math.max(1, inline and height-6 or math.floor((height-6-nav)/2)))
+        local limit = height - (inline and depth or 2*depth+nav)
         local remaining = state.phase == "harvest" and state.harvestRemaining or state.remainingTime
         local value = clock(remaining)
         ui.heading(state.phase == "harvest" and "Harvesting" or "Next harvest", accent)
@@ -255,15 +256,11 @@ local function build(width, height, state, api, context)
             local cardWidth = math.floor((width - 3) / 2)
             local cardRows = math.max(2, math.min(5, limit - infoRow))
             local function card(x, title, text)
-                text = text:sub(1, cardWidth)
-                local function put(y, label)
-                    local left = x + math.floor((cardWidth - #label) / 2)
-                    local line = ui.lines[y]
-                    ui.lines[y] = line:sub(1, left - 1) .. label .. line:sub(left + #label)
-                end
-                put(infoRow, title); put(infoRow + math.floor(cardRows / 2), text)
+                ui.put(x, infoRow, title, cardWidth, true)
+                ui.put(x, infoRow + math.floor(cardRows / 2), text, cardWidth, true)
                 ui.style(x, infoRow, cardWidth, cardRows, 1, 128)
-                ui.style(x, infoRow, cardWidth, 1, api.ui.contrast(accent), accent)
+                ui.style(x, infoRow, cardWidth, 1, 256)
+                ui.style(x, infoRow, 1, cardRows, nil, accent)
             end
             card(2, "PLAYER", presence)
             card(width - cardWidth, "TRIP / TOTAL", state.tripHarvests .. " / " .. state.totalHarvests)
@@ -284,15 +281,16 @@ local function build(width, height, state, api, context)
             if infoRow + 2 <= limit then ui.text(infoRow + 2, "Trip: " .. state.tripHarvests, true) end
         end
         if inline then
-            local third = math.floor((width - 2) / 3)
-            button(limit + 1, state.paused and "Resume" or "Pause", "pause", 1, third, true, accent, depth)
-            button(limit + 1, state.phase == "harvest" and "Active" or "Harvest now", "force", third + 2, 2 * third + 1, state.phase ~= "harvest", 128, depth)
-            button(limit + 1, "Menu", "menu", 2 * third + 3, width, true, 256, depth)
+            local menuX = width - math.min(12, math.floor(width / 5)) + 1
+            local half = math.floor((menuX - 3) / 2)
+            button(limit + 1, state.paused and "Resume" or "Pause", "pause", 1, half, true, accent, depth)
+            button(limit + 1, state.phase == "harvest" and "Active" or "Harvest now", "force", half + 2, menuX - 2, state.phase ~= "harvest", 128, depth)
+            button(height, "Menu", "menu", menuX, width, true, 128, nav)
         else
             button(limit + 1, state.paused and "Resume" or "Pause", "pause", nil, nil, true, accent, depth)
             button(limit + depth + 1, state.phase == "harvest" and (width >= 16 and "Harvest active" or "Active") or "Harvest now",
                 "force", nil, nil, state.phase ~= "harvest", 128, depth)
-            button(limit + 2 * depth + 1, "Menu", "menu", nil, nil, true, 256, depth)
+            button(limit + 2 * depth + 1, "Menu", "menu", nil, nil, true, 256, nav)
         end
         return ui.finish(true)
     end

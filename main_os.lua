@@ -2,7 +2,7 @@
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v48: starting")
+console.log("SmartHome OS v50: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -24,6 +24,7 @@ end
 local ok, err = pcall(function()
     Work.stage = "Loading OS configuration"
     storage = dofile("lib_storage.lua")
+    dofile("lib_backup.lua").recover(storage)
     Network = dofile("lib_network.lua")
     Server = dofile("lib_server.lua")
     networkConfig = storage.config("configs_network.txt", {networkId = "home", channel = 45231})
@@ -137,6 +138,11 @@ ok, err = Work.protect(function()
                 if action == "clear" then console.clear() end
                 for _, output in ipairs(lines) do console.log(output) end
                 if quit then console.finish(); return end
+            end
+            if server.restartAfterRestore then
+                console.finish()
+                if type(os.reboot) == "function" then os.reboot() end
+                return
             end
             if head > tail then pending, head, tail, overflow = {}, 1, 0, false
             else Work.check(8192) end

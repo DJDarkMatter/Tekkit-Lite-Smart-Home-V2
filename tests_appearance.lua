@@ -57,21 +57,21 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         for _,bank in ipairs({2,"123"}) do local k={bank=bank,draft=""}; Gui.typeKey(k,"1",4); equal(k.bank,bank) end
     end
 
-    function tests.v48_buttons_use_spare_rows_with_matching_hits_and_distinct_surfaces()
+    function tests.v49_primary_buttons_use_spare_rows_and_secondary_controls_stay_compact()
         local Gui = dofile("lib_gui.lua")
         for _, height in ipairs({6, 12, 28}) do
             local ui=Gui.form(24,height,{},2048)
             ui.menu("Actions",{{"First","first"},{"Second","second"},{"Third","third"}}, "actions",
-                {{"Back","back"},{"Next","next"}})
+                {{"Back","back"},{"Apply","apply"}})
             local lines, hits=ui.finish()
             local surface=Gui.new(24,height,1,32768)
             for _,style in ipairs(lines.styles) do
                 surface.style(style.x,style.y,style.width,style.height,style.fg,style.bg)
             end
             for _,hit in ipairs(hits) do
-                if height==6 then equal(hit.y1,hit.y2)
+                if height==6 or hit.action=="back" then equal(hit.y1,hit.y2)
                 elseif height==12 then assert(hit.y2>hit.y1)
-                else assert(hit.y2-hit.y1+1>=4) end
+                else assert(hit.y2-hit.y1+1>=3) end
                 for y=hit.y1,hit.y2 do equal(Gui.actionAt(hits,hit.x1,y),hit.action) end
             end
             for i=2,3 do
@@ -91,12 +91,18 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         assert(hits[1].y2>hits[1].y1)
     end
 
-    function tests.v48_launcher_layout_and_palette_accept_taps_below_labels()
+    function tests.v49_launcher_stays_single_column_and_layout_and_palette_keep_large_choices()
         local apps={}
         for i=1,12 do apps[i]={label="App "..i,value=i,enabled=true} end
-        local _,_,hits,_,pages=Desktop.menu({width=51,height=19},"Start",apps,1)
-        assert(hits[1].x2<hits[2].x1 and hits[1].y1==hits[2].y1 and pages==2)
-        equal(hits[2].item.value,2)
+        for _,size in ipairs({{51,19},{128,70}}) do
+            local rect,_,hits,_,pages=Desktop.menu({width=size[1],height=size[2]},"Start",apps,1)
+            equal(pages,1); assert(rect.width<=22 and rect.height<=14)
+            for i,hit in ipairs(hits) do
+                equal(hit.x1,rect.x); equal(hit.y1,hit.y2)
+                equal(hit.item.value,i)
+                if i>1 then equal(hit.y1,hits[i-1].y1+1) end
+            end
+        end
         local t=setup(true,58,25)
         local model=t.central.server.monitors["monitor_13:top"]
         t.touch("top",2,25)
@@ -105,7 +111,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             error("Missing menu item "..value)
         end
         local entry=menuItem("coffee",model)
-        assert(entry.y2>entry.y1)
+        equal(entry.y2,entry.y1)
         t.touch("top",entry.x2,entry.y2)
         local id,win=next(t.central.server.state.windows)
         equal(win.appName,"coffee")
@@ -125,7 +131,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             if hit.action=="colour" and hit.value==2048 then color=hit end
             if hit.action=="cancel" then back=hit end
         end
-        assert(color.y2>color.y1 and back.y2>back.y1)
+        assert(color.y2>color.y1); equal(back.y1,back.y2)
         local window=t.window(settings)
         t.touch("top",window.x+color.x2,window.y+color.y2)
         equal(t.api.getOSSettings().backgroundColour,2048)
@@ -250,7 +256,9 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         for stage=2,3 do
             io.stage=stage; local lines=IO.render(io,32,12,{})
             assert(lines[2]:find("io_12345",1,true)); if stage==3 then assert(lines[2]:find("bottom",1,true)) end
-            for _,hit in ipairs(io.hits) do if hit.action=="select" then assert(hit.y>=3 and hit.y<11) end end
+            local footer=12
+            for _,hit in ipairs(io.hits) do if hit.action=="prev" or hit.action=="back" then footer=math.min(footer,hit.y1) end end
+            for _,hit in ipairs(io.hits) do if hit.action=="select" then assert(hit.y1>=3 and hit.y2<footer) end end
             lines=IO.render(io,12,6,{}); assert(not lines[2]:find("io_12345",1,true))
         end
         local sensor=Sensor.new("source",{clientId="sensor_12345",side="top"},"ae")
@@ -570,7 +578,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         state.remainingTime = 1234
         local wiring = serialize(t.central.server.state.outputMap)
         t.click(settings, "appearance"); t.click(settings, "windowBorder"); t.click(settings, "colour", 16)
-        t.click(settings, "taskbar"); t.click(settings, "colour", 8192)
+        t.click(settings, "taskbar"); t.click(settings, "taskbarColour"); t.click(settings, "colour", 8192)
         local preferences = t.api.getOSSettings()
         equal(preferences.windowBorderColour, 16); equal(preferences.taskbarColour, 8192)
         for _, item in ipairs({{settings, t.top}, {coffee, t.left}}) do
@@ -603,7 +611,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.central.disk.files["configs_os_state.txt"], before)
         assert(t.central.server.dialogs[id].error)
         t.central.disk.failWrite = false; t.click(id, "colour", 2)
-        t.click(id, "taskbar")
+        t.click(id, "taskbar"); t.click(id, "taskbarColour")
         t.central.disk.failWrite = true; t.click(id, "colour", 1)
         equal(t.api.getOSSettings().taskbarColour, 128)
         t.central.disk.failWrite = false; t.click(id, "colour", 1)
@@ -619,11 +627,35 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.central.server.state.appStates.coffee.remainingTime, 4321)
     end
 
+    function tests.v49_taskbar_position_moves_windows_launcher_and_panes_and_survives_reboot()
+        local t=setup(true,64,27)
+        local coffee=t.open("coffee","left",1,1,43,16)
+        local settings=t.open("@settings","top",1,1,40,18)
+        local before=t.window(settings).relative.y
+        t.click(settings,"appearance"); t.click(settings,"taskbar"); t.click(settings,"taskbarPosition")
+        t.click(settings,"setTaskbarPosition","top")
+        equal(t.api.getOSSettings().taskbarPosition,"top")
+        equal(t.top.lines[1]:sub(1,3),"[+]")
+        equal(t.left.lines[1]:sub(1,3),"[+]")
+        equal(t.window(settings).y,2); equal(t.window(settings).relative.y,before)
+        equal(t.window(coffee).y,2)
+        assert(t.api.layoutWindow(settings,"maximize")); t.paint()
+        equal(t.window(settings).y,2); equal(t.window(settings).height,26)
+        t.touch("top",1,1)
+        local model=t.central.server.monitors["monitor_13:top"]
+        assert(model.launcher and model.menuHits[1].y>=3)
+        t.touch("top",1,1)
+        t.reboot()
+        equal(t.api.getOSSettings().taskbarPosition,"top"); equal(t.window(settings).y,2)
+        assert(t.api.setTaskbarPosition("bottom")); t.paint()
+        equal(t.window(settings).y,1); equal(t.top.lines[27]:sub(1,3),"[+]")
+    end
+
     function tests.appearance_os_colours_and_reset_button_fit_compact_settings_windows()
         local t = setup(false)
         local app = t.central.server.systemApps["@settings"]
         for _, width in ipairs({12, 20, 28}) do for _, height in ipairs({6, 8, 10}) do
-            for _, section in ipairs({"home", "appearance", "data", "screensavers"}) do
+            for _, section in ipairs({"home", "appearance", "taskbar", "taskbarPosition", "data", "screensavers"}) do
                 local lines = app.render(width, height, {}, t.api, {windowId = 1, view = {section = section}})
                 local occupied = {}
                 for _, hit in ipairs(lines.hits) do

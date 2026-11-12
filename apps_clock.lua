@@ -316,9 +316,7 @@ local function build(width,height,state,api,context)
     end
     local function footer(items,rows)
         rows=rows or 1
-        for i,item in ipairs(items) do
-            button(height-rows+1,item[1],item[2],item[3],1+math.floor((i-1)*width/#items),math.floor(i*width/#items),item[4],i%2==0 and 256 or 128,rows)
-        end
+        ui.buttonRow(height-rows+1,items,rows)
     end
     local function page(key,count,slots,row)
         local pages=math.max(1,math.ceil(count/slots))
@@ -334,7 +332,9 @@ local function build(width,height,state,api,context)
         ui.heading(title,accent)
         local slots=#items<=bottom-1 and bottom-1 or bottom-2
         local first=page(key,#items,slots,bottom)
-        for i=1,slots do local row=items[first+i]; if row then button(i+1,row[1],row[2],row[3],nil,nil,row[4],row[5]) end end
+        local choices={}
+        for i=first+1,math.min(first+slots,#items) do choices[#choices+1]=items[i] end
+        ui.choices(2,bottom-(#items>slots and 1 or 0),choices)
         footer(foot or {{"Back","home"}})
     end
     local function info(title,lines,key,back)
@@ -355,13 +355,52 @@ local function build(width,height,state,api,context)
     end
     if screen=="home" then
         local running=0; for _,timer in ipairs(state.timers) do if timer.status=="running" then running=running+1 end end
-        menu("Clock / "..api.getSystem().gameTime,{{"Alarms: "..#state.alarms,"alarms"},{"Timers: "..running.." running","timers"},
-            {"Stopwatch","stopwatch"},{"Settings","settings"}},"home",height-1,{{"Status","status"}})
+        local clock=api.getSystem()
+        local time=clock.gameTime or "?:??"
+        local day=clock.worldDay and "Day "..digits(clock.worldDay)
+        local digitRoom=math.min(10,height-(width>=28 and 11 or 17))
+        local readout=ui.readout(2,time,digitRoom,1,32768)
+        local header=readout>0 and readout+2 or 1
+        if readout>0 then
+            if day then ui.text(header,day,true); ui.style(1,header,width,1,256) end
+        else
+            local text=day and time.."  "..day or time
+            ui.text(1,#text<=width and text or time,true)
+            ui.style(1,1,width,1,api.ui.contrast(accent),accent)
+        end
+        local bottom=height-1
+        if bottom-header>=8 then bottom=bottom-1 end
+        ui.choices(header+1,bottom,{{"Alarms","alarms"},{"Timers","timers"},
+            {"Stopwatch","stopwatch"},{"World time","worldTime"}},true)
+        local counts={digits(#state.alarms).." set",digits(running).." running"}
+        for i,text in ipairs(counts) do
+            local hit=ui.hits[i]
+            local span=hit.x2-hit.x1+1
+            if hit.y<hit.y2 and #text<=span then
+                ui.put(hit.x1,hit.y+1,text,span,true)
+                ui.style(hit.x1,hit.y+1,span,1,256)
+            end
+        end
+        footer({{width>=17 and "Settings" or "Setup","settings"},{"Status","status"}})
+    elseif screen=="worldTime" then
+        local clock=api.getSystem()
+        ui.heading("World time",accent)
+        local value=clock.gameTime or "?:??"
+        local readout=height>=10 and ui.readout(2,value,height-5,api.ui.contrast(accent),accent) or 0
+        if readout==0 then
+            ui.text(2,value,true)
+            ui.style(1,2,width,1,api.ui.contrast(accent),accent)
+        end
+        local row=2+math.max(1,readout)
+        if clock.worldDay~=nil then ui.text(row,"Day "..digits(clock.worldDay),true); row=row+1 end
+        if value=="?:??" then ui.text(row,width>=20 and "Waiting for world time" or "Unavailable",true) end
+        footer({{"Back","home"}})
     elseif screen=="alarms" or screen=="timers" then
         local list=screen=="alarms" and state.alarms or state.timers
         ui.heading(screen=="alarms" and "World-time alarms" or "Timers / recent",accent)
         local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-4)/4)))
-        local bottom=height-2*depth
+        local nav=api.ui.secondaryHeight
+        local bottom=height-depth-nav
         local rowH=width>=32 and 1 or 2
         if #list>0 then rowH=math.min(math.max(rowH,depth),math.max(rowH,math.floor((bottom-2)/#list))) end
         local slots=math.max(1,math.floor((bottom-2)/rowH))
@@ -391,7 +430,7 @@ local function build(width,height,state,api,context)
         end
         if #list==0 then ui.text(2,screen=="alarms" and "No alarms" or "No timers",true) end
         button(bottom+1,screen=="alarms" and "+ Add alarm" or "+ Add timer","new",screen=="alarms" and "alarm" or "timer",nil,nil,#list<64,accent,depth)
-        footer({{"Back","home"}},depth)
+        footer({{"Back","home"}},nav)
     elseif screen=="detail" then
         local rows={}
         if kind=="alarm" then
@@ -460,7 +499,8 @@ local function build(width,height,state,api,context)
         ui.heading("Stopwatch / "..(sw.mode=="real" and "Real" or "Game"),accent)
         local label=stopwatchTime(sw.elapsed,sw.mode,width>=12)
         local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-5)/3)))
-        local bottom=height-2*depth
+        local nav=api.ui.secondaryHeight
+        local bottom=height-depth-nav
         local readout=width>=50 and height>=19 and ui.readout(2,label,math.floor((bottom-3)*.6),api.ui.contrast(accent),accent) or 0
         if readout==0 then ui.text(2,label,true); ui.style(1,2,width,1,api.ui.contrast(accent),accent) end
         local status=2+math.max(1,readout)
@@ -483,7 +523,7 @@ local function build(width,height,state,api,context)
         for i,row in ipairs(controls) do
             button(bottom+1,row[1],row[2],nil,1+math.floor((i-1)*width/3),math.floor(i*width/3),row[2]~="lap" or sw.running,i==1 and accent or 128,depth)
         end
-        footer({{"Back","home"},{sw.mode=="real" and "Real" or "Game","stopwatchMode",nil,not sw.running and sw.elapsed==0}},depth)
+        footer({{"Back","home"},{sw.mode=="real" and "Real" or "Game","stopwatchMode",nil,not sw.running and sw.elapsed==0}},nav)
     elseif screen=="delete" then
         ui.heading("Delete "..kind.."?",accent); ui.text(2,item.name,true)
         button(height-1,"Delete","confirmDelete",nil,nil,nil,true,16384); footer({{"Cancel","detail"}})

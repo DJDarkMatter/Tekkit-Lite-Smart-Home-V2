@@ -15,7 +15,8 @@ function app.init(state, api, context)
     if not state.presets then state.presets, state.nextId = {}, 1 end
 end
 local function build(w, h, state, api, view)
-    local ui = api.ui.form(w, h, view, api.getAppColour(name))
+    local accent = api.getAppColour(name)
+    local ui = api.ui.form(w, h, view, accent)
     local screen = view.screen or "home"
     local preset = find(state.presets, view.presetId)
     if (screen == "slot" or screen == "assign") and not (preset and find(preset.slots, view.slotId)) then
@@ -27,11 +28,11 @@ local function build(w, h, state, api, view)
     end
     screen = view.screen or "home"
     if screen == "home" then
-        local rows = {{"+ Save layout", "capture", nil, #state.presets < 24}}
+        local rows = {{"+ Save layout", "capture", nil, #state.presets < 24, accent}}
         for _, item in ipairs(state.presets) do rows[#rows + 1] = {item.name .. " / " .. #item.slots, "open", item.id} end
-        ui.menu("Window Presets", rows, "home", {{"Close", "close"}})
+        ui.menu(w<16 and "Presets" or "Window Presets", rows, "home", {{"Close", "close"}})
     elseif screen == "capture" then
-        ui.menu("Save layout", {{"This monitor", "captureScope", "one"}, {"All online monitors", "captureScope", "all"}}, "capture")
+        ui.menu("Save layout", {{"This monitor", "captureScope", "one"}, {"All online monitors", "captureScope", "all"}}, "capture", nil, true)
     elseif screen == "preview" then
         local plan, valid = api.previewWindowPreset(preset.slots, view.assignments or {})
         local rows = {}

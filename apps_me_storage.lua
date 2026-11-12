@@ -194,10 +194,7 @@ local function build(width, height, state, api, context)
     end
     local function footer(labels, depth)
         depth = depth or 1
-        for i, item in ipairs(labels) do
-            ui.button(height-depth+1, item[1], item[2], 1 + math.floor((i-1)*width/#labels), math.floor(i*width/#labels),
-                item[4], item[5] or (#labels > 1 and i % 2 == 0 and 256 or 128), nil, item[3], depth)
-        end
+        ui.buttonRow(height-depth+1, labels, depth)
     end
     local function page(count, slots, row)
         local pages = math.max(1, math.ceil(count / slots))
@@ -212,15 +209,17 @@ local function build(width, height, state, api, context)
         end
         return (view.page - 1)*slots
     end
-    local function list(title, items, bottom, reserved)
+    local function list(title, items, bottom)
         ui.heading(title, accent)
         local slots = math.max(1, bottom - 1)
         if #items > slots then slots = math.max(1, slots - 1) end
         local first = page(#items, slots, bottom)
-        for i = 1, slots do
-            local item = items[first+i]
-            if item then button(i+1, item.label, item.action, item.value, nil, nil, item.enabled, item.bg) end
+        local choices = {}
+        for i = first+1, math.min(first+slots,#items) do
+            local item = items[i]
+            choices[#choices+1] = {item.label,item.action,item.value,item.enabled,item.bg}
         end
+        ui.choices(2,bottom-(#items>slots and 1 or 0),choices)
     end
     local function info(title, lines, back)
         local wrapped = {}
@@ -251,9 +250,14 @@ local function build(width, height, state, api, context)
             local value = storage(api.getSensorReading(item.sensor, {profile="ae_storage"}))
             items[#items+1] = {label = item.name .. (value.percent and " "..percent(value.percent).."%" or " / "..value.status), action="open", value=item.id}
         end
-        if #items == 0 then items[1] = {label="Select an ME system", enabled=false} end
-        list("ME storage", items, height-2)
-        button(height-1, "+ Add system", "add", nil, nil, nil, #state.networks < 16, accent)
+        if #items == 0 then
+            ui.heading("ME storage", accent)
+            ui.choices(2, height-1, {{"+ Add system", "add", nil, true, accent}}, true)
+        else
+            local depth = math.min(3, api.ui.controlHeight(height))
+            list("ME storage", items, height-depth-1)
+            ui.button(height-depth, "+ Add system", "add", nil, nil, #state.networks < 16, accent, nil, nil, depth)
+        end
         footer({{"Settings","settings"}})
     elseif screen == "network" then
         local value = storage(api.getSensorReading(entry.sensor, {profile="ae_storage"}))
@@ -289,9 +293,10 @@ local function build(width, height, state, api, context)
             local span = math.floor((col+1)*width/columns)-x+1
             local y = 3+math.floor(row*available/usedRows)+row*gap
             local cardH = math.floor((row+1)*available/usedRows)-math.floor(row*available/usedRows)
-            local inset = span>=20 and 1 or 0
+            local inset = span>=math.max(17,#metric[1]+2) and 2 or 0
             ui.style(x,y,span,cardH,live and 1 or 256,128)
-            ui.style(x,y,span,1,api.ui.contrast(accent),accent)
+            ui.style(x,y,span,1,256)
+            if inset>0 then ui.style(x,y,1,cardH,nil,accent) end
             put(x+inset,y,metric[1],span-inset)
             local meter = cardH>=3 and first+i==1 and value.percent
             local meterRows = meter and (cardH>=5 and 2 or 1) or 0

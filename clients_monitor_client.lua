@@ -1,4 +1,6 @@
 local storage = dofile("lib_storage.lua")
+local Backup = dofile("lib_backup.lua")
+Backup.recover(storage)
 local Network = dofile("lib_network.lua")
 local Monitor = dofile("lib_monitor.lua")
 local args = {...}
@@ -19,6 +21,7 @@ for _, offset in pairs(config.touchOffsets) do
         and math.abs(offset.x) <= 3 and math.abs(offset.y) <= 3, "Invalid touch offset")
 end
 local net = Network.new(networkConfig, false)
+net.backupSettings = Backup.clientSettings("monitor", config, networkConfig)
 local client = Monitor.new(net, config)
 print("Monitor client: " .. config.clientId)
 client.scan()

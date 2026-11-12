@@ -6,6 +6,18 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
+## Updating to v50
+
+App screens use dark panels, quieter section headers and gaps between controls. Short groups of actions can use a grid on wider windows. Clock opens with a live readout and four main tools above the compact footer.
+
+Install the v50 central server and update your installed apps. See [update commands and changed files](documentation_update_v50.md). Clients already using v49 can keep their current role files.
+
+## Updating to v49
+
+The **Entire OS** backup now includes the app programs, enabled list, saved app configuration, windows, and settings reported by updated clients. Start is compact, the taskbar can sit at either edge, and Clock has a World time page.
+
+Run `inst server` and use `inst apps` to install the twelve release apps, or choose individual `inst app NAME` updates. See [backup, restore, and update instructions](documentation_update_v49.md).
+
 ## Updating to v48
 
 Buttons, pickers, keyboards and alerts use the available character rows for larger touch targets. Larger app windows give readouts, cards, grids and plots more room. Compact windows keep their paginated layouts.
@@ -94,7 +106,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty-five runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v48`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+`install.lua` is a self-contained installer containing all twenty-six runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v50`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
 
 On a computer, run:
 
@@ -345,11 +357,11 @@ reboot
 
 For touch input, use advanced monitors. All attached monitors become independent desktops, e.g. `monitor_13:top` and `monitor_13:left`. A replacement monitor on the same side keeps that desktop's identity. Adjust `textScale` in `configs_monitor.txt` if needed.
 
-The desktop initially has no user apps. `[+]` always offers **OS settings**, where Background, Window border and Taskbar colors can be selected and saved for all monitors. There is no branding text on the background. The optional Screensaver app is explicitly opened from Start; it is separate from the static background preference. Finish the console-based IO connection test before installing user-specific apps. Role installation never installs a switchboard or coffee timer; `inst app NAME` is an explicit opt-in. The OS loads a user app only when its name is explicitly set to `true` in `enabledApps` in `configs_os.txt`; an old auto-populated app registry does not enable it. The switchboard test fixture is `tests_fixtures_switchboard.lua` and is not installed.
+The desktop initially has no user apps. `[+]` always offers **OS settings**, where Background, Window border, and Taskbar color and position can be saved for all monitors. There is no branding text on the background. The optional Screensaver app is explicitly opened from Start; it is separate from the static background preference. Finish the console-based IO connection test before installing user-specific apps. Role installation never installs a switchboard or coffee timer; `inst app NAME` is an explicit opt-in. The OS loads a user app only when its name is explicitly set to `true` in `enabledApps` in `configs_os.txt`; an old auto-populated app registry does not enable it. The switchboard test fixture is `tests_fixtures_switchboard.lua` and is not installed.
 
 The taskbar's clock reads Minecraft world time from the OS computer's built-in `os.time()`; no time sensor or extra computer is required. This is the in-game day/night clock, not real-world local time. If that API is unavailable, an online sensor's `gameTime` value remains a fallback. The original `?:??` appeared because the earlier OS waited exclusively for that unimplemented sensor source.
 
-Every monitor has a bottom taskbar with `[+]`, local window buttons, overflow arrows and a clock when space permits. The title is at the far left on the selected window-border color, with contrasting text; controls are at the far right: `-` minimize, `#` layouts, red `X` close this view. A normal app stops after its last view closes across all monitors; Coffee is a background service and keeps running. The layout flyout first offers grid diagrams (1×1 through 3×3), then a separate position screen. Fullscreen, Restore, Resize, Move and Cancel stay on the first level. Fullscreen hides the frame/taskbar until the very top-right cell is tapped. Click title text for Move, choose a coarse position, then use one-cell arrows on the green preview. Arrows disappear at workspace boundaries. Place picks another coarse position; OK commits and Cancel discards. See [desktop controls](documentation_desktop.md).
+Every monitor has a top or bottom taskbar with `[+]`, local window buttons, overflow arrows and a clock when space permits. The title is at the far left on the selected window-border color, with contrasting text; controls are at the far right: `-` minimize, `#` layouts, red `X` close this view. A normal app stops after its last view closes across all monitors; Coffee is a background service and keeps running. The layout flyout first offers grid diagrams (1×1 through 3×3), then a separate position screen. Fullscreen, Restore, Resize, Move and Cancel stay on the first level. Fullscreen hides the frame/taskbar until the very top-right cell is tapped. Click title text for Move, choose a coarse position, then use one-cell arrows on the green preview. Arrows disappear at workspace boundaries. Place picks another coarse position; OK commits and Cancel discards. See [desktop controls](documentation_desktop.md).
 
 Coffee's Pause/Resume, Harvest now and Menu controls remain available at every supported size. Menu has Settings, Stats and Maintenance without duplicate routes. Wide windows put the main controls in one row; roomy windows add a graphical timer. The main view shows player presence and harvest counts; timing configuration and wiring stay in Settings. Each app should offer UI color in its Settings; the OS supplies a reusable palette and saves one shared accent per app. Coffee uses it for its heading, timer and primary control.
 

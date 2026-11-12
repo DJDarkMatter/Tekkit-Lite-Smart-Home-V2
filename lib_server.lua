@@ -9,6 +9,7 @@ local SensorHub = dofile("lib_sensor_server.lua")
 local SensorPicker = dofile("lib_sensor_picker.lua")
 local IOHistory = dofile("lib_io_history.lua")
 local Inbox = dofile("lib_alert_inbox.lua")
+local Backup = dofile("lib_backup.lua")
 local systemColours = {background = {field = "backgroundColour", title = "Background"},
     windowBorder = {field = "windowBorderColour", title = "Window border"}, taskbar = {field = "taskbarColour", title = "Taskbar"}}
 local defaultAppearance = {backgroundColour = 2048, windowBorderColour = 128, taskbarColour = 128}
@@ -93,20 +94,7 @@ local function sameSnapshot(a, b)
     return true
 end
 
-local function validState(value)
-    for _, key in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
-        if value[key] ~= nil and type(value[key]) ~= "table" then return false end
-    end
-    for name, mapping in pairs(value.outputMap or {}) do
-        if type(name) ~= "string" or type(mapping) ~= "table" or type(mapping.clientId) ~= "string"
-            or not sideSet[mapping.side] or (mapping.color ~= nil and not colour(mapping.color)) then return false end
-    end
-    for id, entries in pairs(value.managedSides or {}) do
-        if type(id) ~= "string" or type(entries) ~= "table" then return false end
-        for side, enabled in pairs(entries) do if not sideSet[side] or enabled ~= true then return false end end
-    end
-    return true
-end
+local validState = Backup.validState
 
 local function validApp(app)
     if type(app) ~= "table" then return false end
@@ -141,6 +129,7 @@ function Server.new(net, storage, config, logger)
     for field, value in pairs(defaultAppearance) do
         if not colour(state.appearance[field]) then state.appearance[field] = value end
     end
+    if state.appearance.taskbarPosition ~= "top" then state.appearance.taskbarPosition = "bottom" end
     local appColours = {}
     if type(state.appearance.appColours) == "table" then
         for name, value in pairs(state.appearance.appColours) do
@@ -148,7 +137,7 @@ function Server.new(net, storage, config, logger)
         end
     end
     state.appearance.appColours = appColours
-    for _, key in ipairs({"clientNames", "uptimeHistory", "alertHistory", "archivedRoutes"}) do
+    for _, key in ipairs({"clientNames", "uptimeHistory", "alertHistory", "archivedRoutes", "clientConfigs"}) do
         if type(state[key]) ~= "table" then state[key] = {} end
     end
     state.notificationSequence = tonumber(state.notificationSequence) or 0
@@ -231,12 +220,13 @@ function Server.new(net, storage, config, logger)
         return windows
     end
     function server.save(forgetPrevious)
+        if server.restartAfterRestore then return true end
         local previousStage = Work.stage
         Work.stage = "Saving OS state"
         local saved = {}
         for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides",
             "nextWindowId", "bootCounter", "desktops", "desktopVersion", "appearance",
-            "clientNames", "uptimeHistory", "alertHistory", "archivedRoutes", "notificationSequence"}) do
+            "clientNames", "uptimeHistory", "alertHistory", "archivedRoutes", "notificationSequence", "clientConfigs"}) do
             saved[name] = state[name]
         end
         saved.windows = saveWindows()
@@ -286,7 +276,8 @@ function Server.new(net, storage, config, logger)
 
     function api.getOSSettings()
         return {backgroundMode = "solid", backgroundColour = state.appearance.backgroundColour,
-            windowBorderColour = state.appearance.windowBorderColour, taskbarColour = state.appearance.taskbarColour}
+            windowBorderColour = state.appearance.windowBorderColour, taskbarColour = state.appearance.taskbarColour,
+            taskbarPosition = state.appearance.taskbarPosition or "bottom"}
     end
     function api.getAppColour(name) return state.appearance.appColours[name] or 2048 end
     local function saveAppearance(change)
@@ -307,6 +298,17 @@ function Server.new(net, storage, config, logger)
     function api.setTaskbarColour(value)
         if not colour(value) then return false, "Choose a CC color" end
         return saveAppearance(function(appearance) appearance.taskbarColour = value end)
+    end
+    function api.setTaskbarPosition(position)
+        if position ~= "top" and position ~= "bottom" then return false, "Choose Top or Bottom" end
+        local ok, err = saveAppearance(function(appearance) appearance.taskbarPosition = position end)
+        if not ok then return false, err end
+        for id, monitor in pairs(server.monitors) do
+            monitor.taskbarPosition = position
+            monitor.launcher, monitor.layoutMenu, monitor.placement, monitor.inbox = nil, nil, nil, nil
+            invalidateInput(id)
+        end
+        return true
     end
     local systemColourSetters = {background = api.setBackgroundColour,
         windowBorder = api.setWindowBorderColour, taskbar = api.setTaskbarColour}
@@ -949,7 +951,9 @@ function Server.new(net, storage, config, logger)
         return first
     end
     local function notificationModel(item, monitor)
-        local available = not monitor.fullscreen and monitor.height >= 5 and monitor.height-1 or monitor.height
+        local area = not monitor.fullscreen and monitor.height >= 5 and Desktop.area(monitor)
+            or {y = 1, height = monitor.height}
+        local available = area.height
         local width = math.min(monitor.width >= 60 and 48 or 34, monitor.width)
         local inner = math.max(1,width-2)
         local rows,remaining = {},item.message
@@ -960,7 +964,7 @@ function Server.new(net, storage, config, logger)
         until remaining==""
         local depth = math.min(3, Gui.controlHeight(available))
         local height = math.min(available, math.max(5,math.min(4,#rows)+3+depth))
-        local x,y = 1+math.floor((monitor.width-width)/2),1+math.floor((available-height)/2)
+        local x,y = 1+math.floor((monitor.width-width)/2),area.y+math.floor((available-height)/2)
         local bottom = y+height-(height>=3 and 2 or 1)
         local top = math.max(y,bottom-depth+1)
         local inset = width>=3 and 1 or 0
@@ -1056,7 +1060,8 @@ function Server.new(net, storage, config, logger)
         fit(win, monitor)
         if not app.fullscreenOnly and not x and not y then
             local existing, placed = windowsFor(monitorId), false
-            for cy = 1, monitor.height - win.height do
+            local area = Desktop.area(monitor)
+            for cy = area.y, area.y + area.height - win.height do
                 for cx = 1, monitor.width - win.width + 1 do
                     local free = true
                     for _, other in ipairs(existing) do
@@ -1507,24 +1512,32 @@ function Server.new(net, storage, config, logger)
     local function backupBundle(target)
         local path = backupPath(target)
         if not path then return nil end
-        return storage.load(path, function(bundle)
-            return bundle.version == 1 and bundle.target == target and type(bundle.time) == "string"
-                and type(bundle.data) == "table" and validState(bundle.data)
-                and type(bundle.data.appStates) == "table" and type(bundle.data.outputMap) == "table"
-                and type(bundle.data.windows) == "table" and type(bundle.data.appearance) == "table"
-                and type(bundle.data.archivedRoutes) == "table" and type(bundle.data.alertHistory) == "table"
-        end)
+        return storage.load(path, function(bundle) return Backup.valid(bundle, target) end)
     end
     local function backupInfo(target)
         local bundle = backupBundle(target)
-        if not bundle then return nil end
+        local path = backupPath(target)
+        if not bundle then return path and Backup.exists(path) and "Unreadable backup" or nil end
         local day = bundle.day and "Day " .. bundle.day .. " " or ""
-        return day .. bundle.time .. " / " .. #sortedKeys(bundle.data.windows) .. " windows"
+        local windows = #sortedKeys(bundle.data.windows)
+        if target ~= "@all" then return day .. bundle.time .. " / " .. windows .. " windows" end
+        if bundle.version == 1 then
+            local configured = 0
+            for name, appState in pairs(bundle.data.appStates) do
+                if name ~= "@settings" and type(appState) == "table" and next(appState) then configured = configured + 1 end
+            end
+            return "Legacy: " .. configured .. " saved apps / " .. windows .. " windows"
+        end
+        local clients = 0
+        for _, group in pairs(bundle.data.clientConfigs) do
+            if type(group) == "table" then clients = clients + #sortedKeys(group) end
+        end
+        return #sortedKeys(bundle.programs) .. " apps / " .. clients .. " clients / " .. windows .. " windows"
     end
     local function listBackups()
         local result, found = {}, {}
         local function include(id)
-            if not found[id] and backupBundle(id) then
+            if not found[id] and Backup.exists(backupPath(id)) then
                 result[#result + 1] = {id = id, label = id == "@all" and "Entire OS" or appTitle(id)}
                 found[id] = true
             end
@@ -1573,7 +1586,17 @@ function Server.new(net, storage, config, logger)
         end
         local bundle = stamp()
         bundle.target, bundle.version, bundle.data = target, 1, data
-        local ok, err = storage.save(path, bundle, true)
+        if all then
+            local ok, programs, startup = Work.call(Backup.capturePrograms)
+            if not ok then return false, programs end
+            bundle.version, bundle.programs, bundle.startup = 2, programs, startup
+            bundle.osConfig, bundle.network = copy(config), copy(net.config)
+            bundle.transportBoot = net.bootCounter
+            data.outputs, data.managedSides = copy(state.outputs), copy(state.managedSides)
+            data.appRegistry, data.clientConfigs = copy(state.appRegistry), copy(state.clientConfigs)
+            data.bootCounter, data.notificationSequence = state.bootCounter, state.notificationSequence
+        end
+        local ok, err = storage.save(path, bundle)
         if ok then log("Backup saved to " .. path) end
         return ok, err
     end
@@ -1581,6 +1604,15 @@ function Server.new(net, storage, config, logger)
     local function restoreBackup(target)
         local bundle = backupBundle(target)
         if not bundle then return false, "Backup missing or unreadable" end
+        if target == "@all" then
+            local saved, saveError = server.save()
+            if not saved then return false, saveError end
+            local ok, restored, err = Work.call(Backup.restoreServer, bundle, storage)
+            if not ok or not restored then return false, ok and err or restored end
+            server.restartAfterRestore = true
+            log("Restored " .. backupPath(target) .. "; restarting OS")
+            return true, "Restarting OS"
+        end
         local data = bundle.data
         local all, desktop = target == "@all", target == "@all" or target == "@settings"
         local function owns(name) return all or name == target end
@@ -1770,6 +1802,8 @@ function Server.new(net, storage, config, logger)
     local function renderMonitor(id, monitor)
         local desktopColour = state.appearance.backgroundColour
         local borderColour, taskbarColour = state.appearance.windowBorderColour, state.appearance.taskbarColour
+        monitor.taskbarPosition = state.appearance.taskbarPosition or "bottom"
+        local area, barY = Desktop.area(monitor), Desktop.taskbarY(monitor)
         local surface = Gui.new(monitor.width, monitor.height, Gui.contrast(desktopColour), desktopColour)
         local appHits, previousHits = {}, monitor.appHits or {}
         local function write(x, y, text, limit)
@@ -1837,13 +1871,13 @@ function Server.new(net, storage, config, logger)
         if not fullscreen then
             local taskbar
             taskbar, monitor.taskbar = Desktop.taskbar(windowsFor(id, true), monitor, server.gameTime, desktopState(id), active)
-            write(1, monitor.height, taskbar)
-            surface.style(1, monitor.height, monitor.width, 1, Gui.contrast(taskbarColour), taskbarColour)
+            write(1, barY, taskbar)
+            surface.style(1, barY, monitor.width, 1, Gui.contrast(taskbarColour), taskbarColour)
         end
         for _, hit in ipairs(monitor.taskbar) do
             if (hit.action == "launcher" and monitor.launcher) or (hit.action == "window" and hit.id == active) then
                 local highlight = Gui.contrast(taskbarColour)
-                surface.style(hit.x1, monitor.height, hit.x2 - hit.x1 + 1, 1, Gui.contrast(highlight), highlight)
+                surface.style(hit.x1, barY, hit.x2 - hit.x1 + 1, 1, Gui.contrast(highlight), highlight)
             end
         end
         if not fullscreen and (monitor.launcher or monitor.layoutMenu) then
@@ -1912,11 +1946,11 @@ function Server.new(net, storage, config, logger)
             if placement.kind == "custom" and placement.point then
                 hint = placement.error or ((placement.first and "2:" or "1:") .. placement.point.x .. "," .. placement.point.y .. " OK")
             end
-            write(1, 1, hint .. string.rep(" ", monitor.width))
-            write(1, monitor.height, "[OK][Cancel]" .. string.rep(" ", math.max(0, monitor.width - 12)))
-            surface.style(1, 1, monitor.width, 1, 1, 128)
-            surface.style(1, monitor.height, 4, 1, 1, 8192)
-            surface.style(5, monitor.height, 8, 1, 1, 16384)
+            write(1, area.y, hint .. string.rep(" ", monitor.width))
+            write(1, barY, "[OK][Cancel]" .. string.rep(" ", math.max(0, monitor.width - 12)))
+            surface.style(1, area.y, monitor.width, 1, 1, 128)
+            surface.style(1, barY, 4, 1, 1, 8192)
+            surface.style(5, barY, 8, 1, 1, 16384)
             placement.hits = {}
             local function drawArrows(hits, background)
                 for _, hit in ipairs(hits) do
@@ -1934,21 +1968,21 @@ function Server.new(net, storage, config, logger)
                 surface.fill(placement.pad.x, placement.pad.y, placement.pad.width, placement.pad.height, 1, 128)
                 drawArrows(placement.hits, 2048)
                 local ready = not placement.first or placement.valid
-                surface.style(1, monitor.height, 4, 1, 1, ready and 8192 or 128)
+                surface.style(1, barY, 4, 1, 1, ready and 8192 or 128)
             end
             if placement.kind == "move" and rect or placement.kind == "custom" and placement.point then
                 local x = monitor.width - 4
-                surface.write(x, 1, "Place", 32768, 256)
-                placement.hits[#placement.hits + 1] = {x1 = x, x2 = monitor.width, y = 1, action = "place"}
+                surface.write(x, area.y, "Place", 32768, 256)
+                placement.hits[#placement.hits + 1] = {x1 = x, x2 = monitor.width, y = area.y, action = "place"}
             end
         end
         monitor.inboxModel = nil
         if not fullscreen and monitor.inbox then
             local model = Inbox.render(monitor, state.alertHistory, api)
             monitor.inboxModel = model
-            for y = 1, model.height do write(model.x, y, model.lines[y], model.width) end
+            for y = 1, model.height do write(model.x, model.y + y - 1, model.lines[y], model.width) end
             for _, style in ipairs(model.lines.styles) do
-                surface.style(model.x + style.x - 1, style.y, style.width, style.height or 1, style.fg, style.bg)
+                surface.style(model.x + style.x - 1, model.y + style.y - 1, style.width, style.height or 1, style.fg, style.bg)
             end
         end
         local notification = firstNotification()
@@ -2002,6 +2036,7 @@ function Server.new(net, storage, config, logger)
     local function touch(id, x, y)
         local monitor = server.monitors[id]
         if not integer(x, 1, monitor.width) or not integer(y, 1, monitor.height) then return end
+        local area, barY = Desktop.area(monitor), Desktop.taskbarY(monitor)
         local notification = firstNotification()
         if notification then
             local popup=monitor.notification
@@ -2024,7 +2059,7 @@ function Server.new(net, storage, config, logger)
         if placement then
             local win = state.windows[placement.windowId]
             if not win then monitor.placement = nil; return end
-            if y == monitor.height then
+            if y == barY then
                 if x >= 5 and x <= 12 then monitor.placement = nil
                 elseif x <= 4 and placement.kind == "custom" and placement.point and not placement.first then
                     placement.first, placement.point, placement.pad = placement.point, nil, nil
@@ -2060,7 +2095,7 @@ function Server.new(net, storage, config, logger)
             if placement.kind == "move" then
                 if placement.preview then return end
                 placement.preview = {x = math.max(1, math.min(x, monitor.width - win.width + 1)),
-                    y = math.max(1, math.min(y, monitor.height - win.height)), width = win.width, height = win.height}
+                    y = math.max(area.y, math.min(y, area.y + area.height - win.height)), width = win.width, height = win.height}
             else
                 if placement.point then return end
                 placement.point = {x = x, y = y}
@@ -2071,7 +2106,7 @@ function Server.new(net, storage, config, logger)
             placement.error = placement.preview and not placement.valid and "Does not fit" or nil
             return
         end
-        if not fullscreen and y == monitor.height then
+        if not fullscreen and y == barY then
             for _, hit in ipairs(monitor.taskbar or {}) do
                 if x >= hit.x1 and x <= hit.x2 then
                     monitor.layoutMenu = nil
@@ -2229,9 +2264,25 @@ function Server.new(net, storage, config, logger)
             if message.clientType == "relay" then client.forwarded = message.forwarded end
             if reconnect then client.inputs, client.values = {}, {} end
             group[id] = client
+            if type(message.backupSettings) == "table" then
+                local role = message.clientType
+                local record = Backup.clientSettings(role, message.backupSettings.config, message.backupSettings.network)
+                local base, side = id:match("^(.*):([^:]+)$")
+                if record and record.network.networkId == net.config.networkId and record.network.channel == net.config.channel
+                    and (role == "monitor" and base == record.config.clientId and sideSet[side]
+                        or role ~= "monitor" and record.config.clientId == id) then
+                    if type(state.clientConfigs[role]) ~= "table" then state.clientConfigs[role] = {} end
+                    record.computerId = message.sender
+                    if integer(message.backupSettings.transportBoot, 1, 2147483646) then
+                        record.transportBoot = message.backupSettings.transportBoot
+                    end
+                    state.clientConfigs[role][record.config.clientId] = record
+                end
+            end
             if message.clientType == "monitor" then
                 if reconnect or client.width ~= message.width or client.height ~= message.height then invalidateInput(id) end
                 client.width, client.height = message.width, message.height
+                client.taskbarPosition = state.appearance.taskbarPosition or "bottom"
                 client.touchProtocol = message.touchProtocol == 1
                 client.lastRender = nil -- Periodic full repaint also recovers a lost frame.
             elseif message.clientType == "io" then
@@ -2334,7 +2385,7 @@ function Server.new(net, storage, config, logger)
                     invalidateInput(id)
                     touch(id, message.x, message.y)
                 else client.lastRender = nil end -- Recover a lost reply without applying an old tap twice.
-                server.refreshMonitors(false)
+                if not server.restartAfterRestore then server.refreshMonitors(false) end
             end
         elseif message.type == "resize" then
             local client = registered(server.monitors, message, replyChannel)

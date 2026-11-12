@@ -66,11 +66,12 @@ function app.init(state, api, context)
     if not state.views then state.views, state.nextId = {}, 1 end
 end
 local function build(w, h, state, api, view)
-    local ui = api.ui.form(w, h, view, api.getAppColour(name))
+    local accent = api.getAppColour(name)
+    local ui = api.ui.form(w, h, view, accent)
     local screen = view.screen or "home"
     local selected = find(state.views, view.viewId)
     if screen == "home" then
-        local rows = {{"Used by apps", "used"}, {"Client side", "clients"}, {"+ New view", "new", nil, #state.views < 32}}
+        local rows = {{"Used by apps", "used"}, {"Client side", "clients"}, {"+ New view", "new", nil, #state.views < 32, accent}}
         for _, item in ipairs(state.views) do rows[#rows + 1] = {item.name, "open", item.id} end
         ui.menu("IO Scope", rows, "home", {{"Close", "close"}})
     elseif screen == "clients" then
@@ -87,7 +88,7 @@ local function build(w, h, state, api, view)
         ui.menu(api.clientName(view.clientId), rows, "sides", {{"Back", "clients"}})
     elseif screen == "direction" then
         ui.menu(view.side .. " wires", {{"Outputs", "directionPick", "output"}, {"Inputs", "directionPick", "input"}},
-            "direction", {{"Back", "sides"}})
+            "direction", {{"Back", "sides"}}, true)
     elseif screen == "trace" then
         local session = api.getSystem().session
         if view.historySession ~= session then view.historySession, view.finish = session, nil end
@@ -96,12 +97,12 @@ local function build(w, h, state, api, view)
         local finish = view.finish or os.clock()
         local keys = math.max(5, math.min(23, math.floor(w * .38)))
         local span = w - keys
-        ui.heading(title, 2048)
+        ui.heading(title, accent)
         local edge = view.finish and ("-" .. math.floor(math.max(0, os.clock() - finish)) .. "s") or "Now"
         local from = seconds + (view.finish and math.floor(math.max(0, os.clock() - finish)) or 0)
         ui.put(keys + 1, 2, "-" .. from .. "s", math.max(0, span - #edge - 1))
         ui.put(w - #edge + 1, 2, edge, #edge)
-        local footer = math.min(api.ui.controlHeight(h), math.max(1, math.floor((h - 3) / 4)))
+        local footer = math.min(3, api.ui.controlHeight(h), math.max(1, math.floor((h - 3) / 4)))
         local bottom = h - footer
         local pages = #entries > bottom - 2
         local slots = bottom - (pages and 3 or 2)
@@ -121,17 +122,18 @@ local function build(w, h, state, api, view)
                 local badge = address.direction == "input" and "I " or "O "
                 local keyColor = address.color or 256
                 ui.button(y, badge .. label, "lane", 1, keys, true, keyColor, nil, lane(address), depth)
+                local center = y + math.floor((depth-1)/2)
                 local col = 1
                 while col <= #trace do
                     local char = trace:sub(col, col)
                     local last = col
                     while last < #trace and trace:sub(last + 1, last + 1) == char do last = last + 1 end
                     local glyph = char == "?" and "." or char == "0" and "_" or char == "|" and "|" or " "
-                    ui.put(keys + col, i + 2, glyph:rep(last - col + 1), last - col + 1)
+                    ui.put(keys + col, center, glyph:rep(last - col + 1), last - col + 1)
                     ui.style(keys + col, y, last - col + 1, depth, char == "?" and 128 or 1, ink[char])
                     col = last + 1
                 end
-                if not view.finish and current == "p" then ui.put(w, y+math.floor((depth-1)/2), "?", 1) end
+                if not view.finish and current == "p" then ui.put(w, center, "?", 1) end
             end
         end
         if #entries == 0 then ui.put(1, 3, "No lines yet", w, true) end

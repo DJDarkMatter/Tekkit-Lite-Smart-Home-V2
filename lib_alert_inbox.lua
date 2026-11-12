@@ -1,11 +1,14 @@
 -- Monitor-local sidebar over the desktop. History is owned by the OS.
 local Inbox = {}
+local Desktop = dofile("lib_desktop.lua")
 
 function Inbox.render(monitor, entries, api)
     local view = monitor.inbox
     local small = monitor.width < 34 or monitor.height < 10
+    local area = Desktop.area(monitor)
     local width, height = small and monitor.width or math.min(38, math.floor(monitor.width * .48)),
-        small and monitor.height or monitor.height - 1
+        small and monitor.height or area.height
+    local y = small and 1 or area.y
     local x = monitor.width - width + 1
     local ui = api.ui.form(width, height, view, 2048)
     local selected
@@ -27,13 +30,13 @@ function Inbox.render(monitor, entries, api)
         ui.menu("Alert inbox", rows, "alerts", {{"Back", "close"}})
     end
     ui.finish()
-    return {x = x, width = width, height = height, lines = ui.lines, hits = ui.hits}
+    return {x = x, y = y, width = width, height = height, lines = ui.lines, hits = ui.hits}
 end
 
 function Inbox.touch(monitor, model, api, x, y)
-    if x < model.x or y > model.height then return false end
+    if x < model.x or y < model.y or y >= model.y + model.height then return false end
     local view = monitor.inbox
-    local action, value = api.ui.actionAt(model.hits, x - model.x + 1, y)
+    local action, value = api.ui.actionAt(model.hits, x - model.x + 1, y - model.y + 1)
     if action == "close" then monitor.inbox = nil
     elseif action == "list" then view.selected = nil
     elseif action == "details" then view.selected, view.pages.details = value, 1

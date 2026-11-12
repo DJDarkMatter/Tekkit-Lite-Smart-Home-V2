@@ -300,10 +300,7 @@ local function build(width,height,state,api,context)
     end
     local function footer(items,depth)
         depth=depth or 1
-        for i,item in ipairs(items) do
-            ui.button(height-depth+1,item[1],item[2],1+math.floor((i-1)*width/#items),math.floor(i*width/#items),item[4],
-                item[5] or (#items>1 and i%2==0 and 256 or 128),nil,item[3],depth)
-        end
+        ui.buttonRow(height-depth+1,items,depth)
     end
     local function page(key,count,slots,row)
         view.pages=view.pages or {}
@@ -324,7 +321,9 @@ local function build(width,height,state,api,context)
         ui.heading(title,accent)
         local slots=#items<=height-2 and height-2 or height-3
         local first=page(key,#items,slots,height-1)
-        for i=1,slots do local item=items[first+i]; if item then button(i+1,item[1],item[2],item[3],nil,nil,item[4],item[5]) end end
+        local choices={}
+        for i=first+1,math.min(first+slots,#items) do choices[#choices+1]=items[i] end
+        ui.choices(2,height-(#items>slots and 2 or 1),choices)
         footer({{"Back",back}})
     end
     local function info(title,lines,key,back)
@@ -394,11 +393,12 @@ local function build(width,height,state,api,context)
         ui.hits[#ui.hits+1]={x1=rect.x,x2=rect.x+rect.w-1,y1=rect.y,y2=rect.y+rect.h-1,action=action,value=value}
     end
     if screen=="home" then
-        ui.heading("ME monitor views",accent)
+        ui.heading(width<16 and "ME views" or "ME monitor views",accent)
         local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-3)/5)))
-        local y=height-depth+1
+        local nav=api.ui.secondaryHeight
+        local y=height-nav+1
         if #state.boards==0 then
-            monitorTile({x=1,y=2,w=width,h=y-2},"+ Add view","","add",nil,"ok",accent)
+            ui.choices(2,y-1,{{"+ Add view","add",nil,true,accent}},true)
         else
             grid(#state.boards,width>=32 and 2 or 1,MAX_VIEWS,"home",y-depth-1,12,3,function(index,rect)
                 local item=state.boards[index]; local assigned=0
@@ -407,11 +407,11 @@ local function build(width,height,state,api,context)
             end)
             ui.button(y-depth,"+ Add view","add",nil,nil,#state.boards<MAX_VIEWS,accent,nil,nil,depth)
         end
-        footer({{"Settings","settings"}},depth)
+        footer({{"Settings","settings"}},nav)
     elseif screen=="board" or screen=="tiles" then
         local data=source(board)
         local rates=screen=="board" and board.showRates~=false
-        local depth=math.min(api.ui.controlHeight(height),math.max(1,math.floor((height-3)/5)))
+        local depth=api.ui.secondaryHeight
         local bottom=height-depth
         ui.heading(screen=="tiles" and "Choose a tile" or board.name,data.status=="ok" and accent or 2)
         if board.layout=="list" then
