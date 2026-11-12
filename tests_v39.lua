@@ -39,7 +39,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         end
         return app
     ]]
-    local function setup(apps, width, height)
+    local function setup(apps, width, height, monitorDisk)
         local bus = newBus()
         local central = bus.computer(10, "server", {apps = {}, enabledApps = {}})
         local config = unserialize(central.disk.files["configs_os.txt"])
@@ -52,7 +52,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         central:start()
         local bridge = bus.computer(11, "io", {modemSide = "right"}):start()
         local top, left = monitor(width or 64, height or 26), monitor(15, 10)
-        local display = bus.computer(13, "monitor", {monitors = {top = top, left = left}}):start()
+        local display = bus.computer(13, "monitor", {disk = monitorDisk, monitors = {top = top, left = left}}):start()
         bus.advance(2)
         local t = {bus = bus, central = central, bridge = bridge, top = top, left = left, display = display}
         function t.reload() t.server, t.api, t.state = t.central.server, t.central.server.api, t.central.server.state end
@@ -285,7 +285,19 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local trace, value = t.api.getIOTrace(address, t.central.env.os.clock(), 10, 10)
         equal(value, "0"); assert(trace:find("|", 1, true), "Short pulse disappeared between timeline cells")
         local id = t.open("io_scope", "top", 55, 20, 1, 1)
-        t.click(id, "used"); t.click(id, "lane", function(wire) return wire.direction == "input" end)
+        t.click(id, "used")
+        local content = t.lines(id)
+        local lanes = 0
+        for _, hit in ipairs(content.hits) do
+            if hit.action == "lane" then
+                lanes = lanes + 1
+                assert(hit.y2 > hit.y1)
+                assert(content[hit.y]:sub(hit.x2 + 1):find("[_.|]"),
+                    "Trace glyphs should be centered in their own lane")
+            end
+        end
+        equal(lanes, 2)
+        t.click(id, "lane", function(wire) return wire.direction == "input" end)
         assert(table.concat(t.lines(id)):find("coffee", 1, true))
         t.click(id, "trace"); t.click(id, "menu"); t.click(id, "saveAs"); t.click(id, "saveText")
         equal(#t.state.appStates.io_scope.views[1].lanes, 2)
@@ -830,6 +842,123 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             if window.appName == "wires" then equal(t.server.views[wid].exampleView, "open"); return end
         end
         error("Restored window missing")
+    end
+
+    function tests.v49_entire_backup_restores_apps_routes_views_and_device_settings_on_a_clean_install()
+        local names={"clock","coffee","io_scope","logic_sandbox","me_monitor","me_storage","notes",
+            "reactors","screensaver","solar_farm","switchboard","window_presets"}
+        local sources={wires=wires}
+        for _,name in ipairs(names) do sources[name]=true end
+        local monitorDisk={dirs={[""]=true},files={["configs_monitor.txt"]=serialize({clientId="monitor_13",textScale=1,
+            announceInterval=3,timeout=18,touchOffsets={left={x=2,y=-1}}})}}
+        local t=setup(sources,nil,nil,monitorDisk)
+        local disk=t.central.disk
+        disk.files["main_os.lua"]=read("main_os.lua")
+        disk.files.startup='shell.run("main_os.lua")'
+        assert(t.api.setTaskbarPosition("top"))
+        assert(t.api.setClientName("monitor_13:top","Kitchen"))
+        local id=t.open("wires","top",38,14,3,4)
+        t.click(id,"configure")
+        t.server.views[id].exampleView="saved selection"
+        local coffee=t.state.appStates.coffee
+        coffee.paused,coffee.remainingTime,coffee.config.countdown=true,317,791
+        coffee.playerInput={clientId="io_11",side="left",color=4}
+        local settingsId=t.open(settings,"top",50,20,1,2)
+        t.click(settingsId,"data"); t.click(settingsId,"backupMenu"); t.click(settingsId,"backupList")
+        t.click(settingsId,"selectScope",scope("@all"))
+        local backup=assert(disk.files["backup_os_all.txt"])
+        local snapshot=assert(unserialize(backup))
+        equal(snapshot.version,2); equal(snapshot.programs.wires,wires)
+        for _,name in ipairs(names) do equal(snapshot.programs[name],read("apps_"..name..".lua")) end
+        equal(snapshot.data.appStates.coffee.playerInput.color,4)
+        equal(snapshot.data.clientConfigs.monitor.monitor_13.config.touchOffsets.left.x,2)
+        equal(snapshot.data.clientConfigs.io.io_11.config.safeOff,true)
+        assert(t.api.setOutput("fixture_shared",false))
+        assert(t.api.setOutput("fixture_only",false))
+        t.bus.advance(2)
+        equal(t.bridge.bundled.front,0)
+
+        local fresh=t.bus.computer(10,"server")
+        fresh.env.shell={dir=function() return "" end}
+        local install=assert(fresh.env.loadfile("install.lua"))
+        install("server","--startup")
+        fresh.disk.files["backup_os_all.txt"]=backup
+        local existing=serialize({appearance={backgroundColour=8}, appStates={notes={marker="existing"}}})
+        fresh.disk.files["configs_os_state.txt"]=existing
+        local move=fresh.env.fs.move
+        fresh.env.fs.move=function(from,to)
+            if from=="configs_os_state.txt.restore_new" then error("Simulated restore swap failure") end
+            return move(from,to)
+        end
+        assert(not pcall(install,"restore"))
+        equal(fresh.disk.files["configs_os_state.txt"],existing)
+        equal(fresh.disk.files["apps_wires.lua"],nil)
+        equal(fresh.disk.files["restore_pending.txt"],nil)
+        fresh.env.fs.move=move
+        install("restore","server")
+        equal(fresh.disk.files["configs_os_state.txt.before_restore"],existing)
+        fresh:start(); t.bus.advance(6)
+        local server=fresh.server
+        for _,name in ipairs(names) do assert(server.apps[name],"Missing restored app "..name) end
+        equal(server.state.appStates.coffee.config.countdown,791)
+        equal(server.state.appStates.coffee.remainingTime,317)
+        equal(server.state.appStates.coffee.playerInput.side,"left")
+        equal(server.state.appStates.wires.example,42)
+        equal(server.api.getOutput("fixture_only"),true)
+        equal(server.api.clientName("monitor_13:top"),"Kitchen")
+        equal(server.api.getOSSettings().taskbarPosition,"top")
+        equal(t.bridge.bundled.front,3)
+        local windowId
+        for wid,window in pairs(server.state.windows) do if window.appName=="wires" then windowId=wid end end
+        assert(windowId)
+        equal(server.views[windowId].exampleView,"saved selection")
+        equal(server.state.windows[windowId].monitorId,"monitor_13:top")
+
+        local replacement=t.bus.computer(23,"monitor",{monitors={top=monitor(64,26)}})
+        replacement.env.shell={dir=function() return "" end}
+        local clientInstall=assert(replacement.env.loadfile("install.lua"))
+        clientInstall("monitor","--startup")
+        replacement.disk.files["backup_os_all.txt"]=backup
+        clientInstall("restore","monitor","monitor_13")
+        local config=assert(unserialize(replacement.disk.files["configs_monitor.txt"]))
+        equal(config.clientId,"monitor_13"); equal(config.textScale,1)
+        equal(config.touchOffsets.left.x,2); equal(config.touchOffsets.left.y,-1)
+    end
+
+    function tests.v49_legacy_entire_backup_retains_app_state_and_windows_until_programs_are_installed()
+        local t=setup({notes=true})
+        local id=t.open("notes","top",34,14,1,1)
+        local notes=t.state.appStates.notes
+        notes.notes={{id=1,name="Saved note",lines={{id=1,text="Original setup"}}}}
+        notes.nextNote,notes.nextLine=2,2
+        t.server.views[id].screen,t.server.views[id].noteId="note",1
+        local settingsId=t.open(settings,"top",42,19,1,1)
+        t.click(settingsId,"data"); t.click(settingsId,"backupMenu"); t.click(settingsId,"backupList")
+        t.click(settingsId,"selectScope",scope("@all"))
+        local bundle=assert(unserialize(t.central.disk.files["backup_os_all.txt"]))
+        bundle.version,bundle.programs,bundle.osConfig,bundle.network=1,nil,nil,nil
+        local fresh=t.bus.computer(10,"server")
+        fresh.env.shell={dir=function() return "" end}
+        local install=assert(fresh.env.loadfile("install.lua"))
+        install("server","--startup")
+        fresh.disk.files["backup_os_all.txt"]=serialize(bundle)
+        fresh.disk.files["configs_transport.txt"]=t.central.disk.files["configs_transport.txt"]
+        fresh.disk.files["configs_os_state.txt"]=serialize({bootCounter=t.state.bootCounter})
+        fresh:start(); t.bus.advance(6)
+        t.central=fresh; t.reload()
+        local restore=t.open(settings,"top",44,20,1,1)
+        t.click(restore,"data"); t.click(restore,"backupMenu"); t.click(restore,"restoreList")
+        t.click(restore,"selectScope",scope("@all")); t.click(restore,"commit")
+        assert(fresh.server.restartAfterRestore)
+        local saved=assert(unserialize(fresh.disk.files["configs_os_state.txt"]))
+        equal(saved.appStates.notes.notes[1].name,"Saved note")
+        equal(saved.windows[id].viewState.noteId,1)
+        equal(fresh.disk.files["apps_notes.lua"],nil)
+        fresh.disk.files["incoming.lua"]=read("apps_notes.lua")
+        install("app","notes","--file","incoming.lua")
+        t.reboot()
+        equal(t.state.appStates.notes.notes[1].lines[1].text,"Original setup")
+        equal(t.server.views[id].noteId,1)
     end
 
     function tests.v39_delete_app_releases_owned_routes_and_preserves_data_for_reinstall()
