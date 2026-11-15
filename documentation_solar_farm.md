@@ -2,6 +2,8 @@
 
 In **Menu → ME sources**, select the farm inventory and the main inventory. Farm supplies the item list. Main supplies finished HV panels. **HV panel type / detection** can select an exact item if several variants are present. The app can automatically select a unique HV item once it appears.
 
+If a Farm poll returns an error after a good reading, the overview holds the last good reading for up to five seconds. **Menu → Source status** shows the retry and its error message. A sustained error appears on the overview. The first good Farm reading after the interruption sets a fresh baseline for farm and combined rates.
+
 ## Production and stock
 
 The **HV output** card shows stock on Main and observed arrivals per minute and per hour. The first estimate requires one complete observation minute. It updates at the end of each further minute and uses the latest five completed live minutes at most. The item details also show the last complete minute's count and the time covered by the rate. A withdrawal does not count as a finished panel. After a reading gap, the next valid snapshot sets the baseline.

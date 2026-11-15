@@ -156,7 +156,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         t.sensor.active=false
         t.central=t.bus.computer(10,"server",{disk=t.central.disk}):start(); t.reload(); t.paint()
         equal(t.view(t.id).screen,"source"); equal(t.view(other).screen,"network"); equal(t.view(other).page,page)
-        local saved=unserialize(t.central.disk.files["configs_os_state.txt"])
+        local saved=t.central.savedState()
         equal(saved.appStates.me_storage.networks[1].UsedBytes,nil)
         assert(t.api.getSensorReading(t.state.networks[1].sensor).status~="ok")
         t.sensor=t.bus.computer(14,"sensor",{disk=t.sensor.disk,sensors={top=t.ae,bottom=t.inv}}):start()

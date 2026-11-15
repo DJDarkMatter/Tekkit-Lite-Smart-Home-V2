@@ -16,7 +16,9 @@ function Picker.render(dialog, width, height, clients, clientName)
         return false
     end
     if dialog.stage == 1 then
-        for _, client in ipairs(clients) do list[#list + 1] = {label = label(client.id) .. (client.online and " +" or " -"), value = client.id} end
+        for _, client in ipairs(clients) do
+            list[#list + 1] = {label = label(client.id) .. (client.online and " +" or " -"), value = {value = client.id}}
+        end
     elseif dialog.stage == 2 then
         for _, client in ipairs(clients) do if client.id == chosen.clientId then
             selectedClient = client
@@ -24,7 +26,7 @@ function Picker.render(dialog, width, height, clients, clientName)
                 local enabled = compatible(port)
                 local detail = port.status ~= "ok" and port.status or port.cardKind
                 list[#list + 1] = {label = port.side .. " / " .. detail .. (not enabled and port.status == "ok" and " (other card)" or ""),
-                    value = port.side, card = port.card, enabled = enabled}
+                    value = {value = port.side, card = port.card}, enabled = enabled}
             end
         end end
     elseif dialog.stage == 3 then
@@ -34,7 +36,8 @@ function Picker.render(dialog, width, height, clients, clientName)
                 for _, target in ipairs(port.targets) do
                     if not dialog.filter or dialog.filter == "reactor" and (target.kind == "reactor" or target.type == "Unknown")
                         or dialog.filter ~= "reactor" and port.cardKind == dialog.filter then
-                        list[#list + 1] = {label = target.key .. " " .. target.label, value = target.key, targetType = target.type}
+                        list[#list + 1] = {label = target.key .. " " .. target.label,
+                            value = {value = target.key, targetType = target.type}}
                     end
                 end
             end end
@@ -46,22 +49,18 @@ function Picker.render(dialog, width, height, clients, clientName)
         ui.heading("Use sensor?", 2048)
         ui.text(2, label(chosen.clientId)); ui.text(3, chosen.side .. " / " .. chosen.target)
         if height >= 7 then ui.text(4, chosen.targetType or "") end
-        if dialog.error then ui.text(height - 2, dialog.error) end
-        ui.button(height - 1, "Back", "back")
-        ui.button(height, "Use", "use", 1, math.floor(width / 2), true, 32)
-        ui.button(height, "Cancel", "cancel", math.floor(width / 2) + 1, width)
+        local depth = height >= 9 and 2 or 1
+        if dialog.error then ui.text(height - depth - 1, dialog.error) end
+        ui.button(height - depth, "Back", "back")
+        ui.buttonRow(height - depth + 1, {{"Use", "use", nil, true, 32}, {"Cancel", "cancel"}}, depth)
     else
         local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {label(chosen.clientId),chosen.side} or {label(chosen.clientId)},width,height)
         local header = path and 2 or 1
-        local slots = #list<=height-header-1 and height-header-1 or height-header-2
-        local pages = math.max(1, math.ceil(#list / slots))
-        dialog.page = math.max(1, math.min(dialog.page, pages))
-        ui.heading(({"Sensor client", "Sensor side", "Select target"})[dialog.stage], 2048)
+        local page, pages = ui.pickerList(header + 1, list, dialog.page)
+        dialog.page = page
+        local title = ({"Sensor client", "Sensor side", "Select target"})[dialog.stage]
+        ui.heading(title .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), 2048)
         if path then ui.text(2,path); ui.style(1,2,width,1,256,32768) end
-        for row = 1, slots do
-            local item = list[(dialog.page - 1) * slots + row]
-            if item then ui.button(row + header, item.label, "select", nil, nil, item.enabled ~= false, nil, nil, item) end
-        end
         if #list == 0 then
             local message = "No sensor clients yet"
             if dialog.stage == 2 then
@@ -75,14 +74,8 @@ function Picker.render(dialog, width, height, clients, clientName)
             end
             ui.text(header+1, message)
         end
-        if pages > 1 then
-            ui.button(height - 1, "< Prev", "prev", 1, math.floor(width / 2), dialog.page > 1)
-            ui.button(height - 1, "Next >", "next", math.floor(width / 2) + 1, width, dialog.page < pages, nil, nil, pages)
-        end
-        ui.button(height, "Back", "back", 1, math.floor(width / 2))
-        ui.button(height, "Cancel", "cancel", math.floor(width / 2) + 1, width)
     end
-    ui.finish()
+    ui.finish(true)
     dialog.hits = ui.hits
     return ui.lines
 end

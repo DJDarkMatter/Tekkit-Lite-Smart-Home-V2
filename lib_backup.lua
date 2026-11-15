@@ -2,6 +2,7 @@
 -- announcements carry only the settings used by each supported client role.
 local Backup = {}
 local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
+local Codec = rawget(_G, "__smarthomeCodec") or dofile("lib_codec.lua")
 local statePath, journalPath = "configs_os_state.txt", "restore_pending.txt"
 local transportPath = "configs_transport.txt"
 local roles = {io = true, monitor = true, sensor = true, relay = true}
@@ -89,25 +90,19 @@ function Backup.clientSettings(role, config, network)
     return {config = result, network = net}
 end
 
-local function readFile(path)
-    local file = fs.open(path, "r")
-    if not file then return nil end
-    local contents = file.readAll()
-    file.close()
-    return contents
-end
-
-function Backup.capturePrograms()
+function Backup.capturePrograms(storage)
     local programs = {}
     for _, path in ipairs(fs.list("")) do
         local name = path:match("^apps_([%w_-]+)%.lua$")
         if appName(name) and not fs.isDir(path) then
-            programs[name] = assert(readFile(path), "Cannot back up " .. path)
+            programs[name] = assert(storage.readBytes(path), "Cannot back up " .. path)
             Work.check(#programs[name])
         end
     end
     local startup
-    if fs.exists("startup") and not fs.isDir("startup") then startup = assert(readFile("startup"), "Cannot back up startup") end
+    if fs.exists("startup") and not fs.isDir("startup") then
+        startup = assert(storage.readBytes("startup"), "Cannot back up startup")
+    end
     return programs, startup
 end
 
@@ -129,6 +124,50 @@ function Backup.valid(bundle, target)
     return true
 end
 
+local function encode(bundle)
+    local contents = Work.serialize(bundle)
+    local packed = bundle.target == "@all" and Codec.pack(contents)
+    if not packed then return contents end
+    packed.version = 3
+    local encoded = Work.serialize(packed)
+    return #encoded < #contents and encoded or contents
+end
+
+local function decode(value)
+    if value.version ~= 3 then return value end
+    return textutils.unserialize(Codec.unpack(value))
+end
+
+function Backup.load(storage, path, target, completedOnly)
+    local bundle
+    local raw, source = storage.load(path, function(value, candidate)
+        if completedOnly and candidate == path .. ".tmp" then return false end
+        local ok, decoded = Work.call(decode, value)
+        if ok and Backup.valid(decoded, target) then bundle = decoded; return true end
+        return false
+    end)
+    return bundle, source, raw
+end
+
+function Backup.save(storage, path, bundle)
+    return Work.call(function()
+        local contents = encode(bundle)
+        local previous, source, raw = Backup.load(storage, path, bundle.target)
+        local temporary = path .. ".tmp"
+        -- Keep a verified prior snapshot before opening the main file in write
+        -- mode. A complete temporary file from an old failed move counts here.
+        if previous and source ~= path .. ".bak" then
+            local bytes = raw.version == 3 and storage.readBytes(source) or encode(previous)
+            storage.writeVerified(path .. ".bak", bytes)
+        end
+        if source ~= path and fs.exists(temporary) and not fs.isDir(temporary) then fs.delete(temporary) end
+        -- Older fs.move can copy the entire staged file again. Write the final
+        -- file directly now that any previous snapshot has its own copy.
+        storage.writeVerified(path, contents)
+        if fs.exists(temporary) and not fs.isDir(temporary) then pcall(fs.delete, temporary) end
+    end)
+end
+
 function Backup.exists(path)
     return fs.exists(path) or fs.exists(path .. ".tmp") or fs.exists(path .. ".bak")
 end
@@ -140,7 +179,9 @@ end
 
 -- The journal exists only while renames can be incomplete. Its presence on
 -- boot rolls the local computer back before loading any restored settings.
-function Backup.recover(storage)
+function Backup.recover(storage, installing)
+    assert(installing or not fs.exists("install_pending.txt"),
+        "Update interrupted. Run the same inst command again.")
     if not fs.exists(journalPath) then return end
     local journal = assert(storage.load(journalPath), "Unreadable restore journal")
     for i = #journal, 1, -1 do
@@ -171,7 +212,7 @@ local function replace(storage, files, suffix)
     local paths, journal = {}, {}
     for path, contents in pairs(files) do
         assert(restorePath(path) and not fs.isDir(path), "Invalid restore target: " .. path)
-        if readFile(path) ~= contents then paths[#paths + 1] = path end
+        if storage.readBytes(path) ~= contents then paths[#paths + 1] = path end
     end
     table.sort(paths)
     if #paths == 0 then return true end
@@ -203,10 +244,6 @@ local function replace(storage, files, suffix)
     return true
 end
 
-function Backup.installApps(storage, sources)
-    return replace(storage, sources, ".pre_update")
-end
-
 local function includeTransport(storage, files, saved)
     if not integer(saved, 0, 2147483646) then return end
     local transport = storage.load(transportPath) or {}
@@ -222,7 +259,7 @@ function Backup.restoreServer(bundle, storage)
     assert(fs.exists("main_os.lua"), "Install the server role first")
     local data, files = bundle.data, {}
     local config = storage.load("configs_os.txt") or {}
-    local previous = storage.load(config.saveFile or statePath, Backup.validState) or {}
+    local previous = storage.loadState(config.saveFile or statePath, Backup.validState) or {}
     if bundle.version == 2 then
         config = bundle.osConfig
         for _, key in ipairs({"tickInterval", "saveInterval", "clientTimeout", "retryInterval"}) do

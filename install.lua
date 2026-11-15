@@ -1,9 +1,10 @@
--- SmartHome OS installer: bundled-v50
+-- SmartHome OS installer: bundled-v53
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
 -- User apps: inst apps [--ref REF] or inst app NAME [--ref REF] (GitHub)
 -- Entire OS backup: inst restore [BACKUP_FILE]
+-- Storage diagnostics: inst space
 -- Alternatives: inst app NAME PASTE_ID   or   inst app NAME --file PATH
 -- OS/client installation is offline. Apps are fetched only on request.
 local sources = {
@@ -106,26 +107,220 @@ end
 rawset(_G, "__smarthomeWork", Work)
 return Work
 ]=],
+    ["lib_codec.lua"] = [=[-- Pack repeated text in bounded blocks using printable ASCII for old CraftOS.
+local Codec = rawget(_G, "__smarthomeCodec")
+if Codec then return Codec end
+Codec = {}
+local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
+local blockSize, maxPackedBytes = 32768, 8 * 1024 * 1024
+local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+local code = {}
+for i = 1, #alphabet do code[alphabet:byte(i)] = i - 1 end
+local function digit(n) return alphabet:sub(n + 1, n + 1) end
+
+local function packBlock(block)
+    local pieces, positions, at, spent = {}, {}, 1, 0
+    while at <= #block do
+        local prefix = block:sub(at, at + 4)
+        local previous = positions[prefix]
+        positions[prefix] = at
+        local limit, length = math.min(69, #block - at + 1), 1
+        if previous and limit >= 6 and block:byte(previous + 5) == block:byte(at + 5) then
+            length = 6
+            while length < limit and block:byte(previous + length) == block:byte(at + length) do
+                length = length + 1
+            end
+            local distance = at - previous - 1
+            pieces[#pieces + 1] = "~" .. digit(math.floor(distance / 4096))
+                .. digit(math.floor(distance / 64) % 64) .. digit(distance % 64) .. digit(length - 6)
+        else
+            local byte = block:byte(at)
+            if byte == 126 then pieces[#pieces + 1] = "~~"
+            elseif byte < 32 or byte > 126 then
+                pieces[#pieces + 1] = "~." .. digit(math.floor(byte / 64)) .. digit(byte % 64)
+            else pieces[#pieces + 1] = block:sub(at, at) end
+        end
+        at, spent = at + length, spent + length
+        if spent >= 128 then Work.check(spent * 2); spent = 0 end
+    end
+    return table.concat(pieces)
+end
+
+local function unpackBlock(block, expected)
+    assert(type(block) == "string" and #block <= expected * 4, "Invalid backup block")
+    local pieces, length, at, spent = {}, 0, 1, 0
+    while at <= #block do
+        local token, count = block:byte(at), 1
+        if token ~= 126 then
+            pieces[length + 1] = block:sub(at, at)
+            at = at + 1
+        else
+            local a, b, c, d = block:byte(at + 1, at + 4)
+            if a == 126 then pieces[length + 1], at = "~", at + 2
+            elseif a == 46 then
+                assert(code[b] and code[b] < 4 and code[c], "Invalid backup byte")
+                pieces[length + 1], at = string.char(code[b] * 64 + code[c]), at + 4
+            else
+                assert(code[a] and code[b] and code[c] and code[d], "Invalid backup reference")
+                local distance = code[a] * 4096 + code[b] * 64 + code[c] + 1
+                count = code[d] + 6
+                assert(distance <= length and length + count <= expected, "Backup reference out of bounds")
+                for i = 1, count do pieces[length + i] = pieces[length + i - distance] end
+                at = at + 5
+            end
+        end
+        length, spent = length + count, spent + count
+        assert(length <= expected, "Backup block is too long")
+        if spent >= 128 then Work.check(spent * 2); spent = 0 end
+    end
+    assert(length == expected, "Incomplete backup block")
+    return table.concat(pieces)
+end
+
+function Codec.checksum(contents)
+    local a, b = 1, 0
+    for i = 1, #contents do
+        a = (a + contents:byte(i)) % 65521
+        b = (b + a) % 65521
+        if i % 256 == 0 then Work.check(512) end
+    end
+    return b * 65536 + a
+end
+
+function Codec.pack(contents)
+    if #contents < 4096 or #contents > maxPackedBytes then return nil end
+    local blocks = {}
+    for i = 1, #contents, blockSize do blocks[#blocks + 1] = packBlock(contents:sub(i, i + blockSize - 1)) end
+    return {bytes = #contents, checksum = Codec.checksum(contents), blocks = blocks}
+end
+
+function Codec.unpack(value)
+    local size = value.bytes
+    assert(type(size) == "number" and size == math.floor(size) and size >= 1 and size <= maxPackedBytes
+        and type(value.blocks) == "table" and #value.blocks == math.ceil(size / blockSize), "Invalid packed data")
+    local blocks = {}
+    for i, block in ipairs(value.blocks) do
+        blocks[i] = unpackBlock(block, math.min(blockSize, size - (i - 1) * blockSize))
+    end
+    local contents = table.concat(blocks)
+    assert(Codec.checksum(contents) == value.checksum, "Checksum did not match")
+    return contents
+end
+
+rawset(_G, "__smarthomeCodec", Codec)
+return Codec
+]=],
     ["lib_storage.lua"] = [=[-- Lua 5.1 / ComputerCraft 1.5. Only plain, serializable data belongs here.
 local storage = {}
 local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
+local Codec = rawget(_G, "__smarthomeCodec") or dofile("lib_codec.lua")
 local validatedContents = {}
+local checkpoints = {}
 
-local function readTable(path)
+function storage.readBytes(path)
     if not fs.exists(path) or fs.isDir(path) then return nil end
     local file = fs.open(path, "r")
     if not file then return nil end
     local contents = file.readAll()
     file.close()
+    return contents
+end
+
+local function readTable(path)
+    local contents = storage.readBytes(path)
+    if not contents then return nil end
     local ok, value = pcall(textutils.unserialize, contents)
-    if ok and type(value) == "table" then validatedContents[path] = contents; return value end
+    if ok and type(value) == "table" then validatedContents[path] = contents; return value, contents end
 end
 
 function storage.load(path, validate)
     for _, candidate in ipairs({path, path .. ".tmp", path .. ".bak"}) do
-        local value = readTable(candidate)
-        if value and (not validate or validate(value)) then return value, candidate end
+        local value, contents = readTable(candidate)
+        if value and (not validate or validate(value, candidate, contents)) then return value, candidate, contents end
     end
+end
+
+function storage.freeSpace(path)
+    if not fs.getFreeSpace then return nil end
+    local directory = path:match("^(.*)/[^/]+$") or ""
+    local bytes = fs.getFreeSpace(directory ~= "" and directory or "/")
+    if type(bytes) == "number" then return bytes end
+end
+
+function storage.writeVerified(path, contents)
+    assert(not fs.isDir(path), "Cannot replace directory " .. path)
+    local directory = path:match("^(.*)/[^/]+$") or ""
+    if directory ~= "" and not fs.exists(directory) then fs.makeDir(directory) end
+    local available = storage.freeSpace(path)
+    local existing = fs.exists(path) and (fs.getSize and fs.getSize(path) or #(storage.readBytes(path) or "")) or 0
+    if available and available + existing < #contents then
+        error("Not enough disk space for " .. path .. " (need " .. (#contents - existing)
+            .. " bytes free, have " .. available .. ")", 0)
+    end
+    local file = assert(fs.open(path, "w"), "Cannot write " .. path)
+    local wrote, err = pcall(file.write, contents)
+    local closed, closeError = pcall(file.close)
+    if not wrote or not closed or storage.readBytes(path) ~= contents then
+        pcall(fs.delete, path)
+        error("Write failed for " .. path .. ": " .. tostring(err or closeError or "incomplete file"), 0)
+    end
+end
+
+local function compactState(contents)
+    if #contents < 16384 then return contents end
+    local packed = Codec.pack(contents)
+    if not packed then return contents end
+    packed.format = "smarthome-os-state"
+    local encoded = Work.serialize(packed)
+    return #encoded < #contents and encoded or contents
+end
+
+function storage.loadState(path, validate)
+    local state, payload
+    local _, source, contents = storage.load(path, function(value, _, raw)
+        local decoded = raw
+        if value.format == "smarthome-os-state" then
+            local ok, result = Work.call(Codec.unpack, value)
+            if not ok then return false end
+            decoded, value = result, textutils.unserialize(result)
+        end
+        if type(value) ~= "table" or validate and not validate(value) then return false end
+        state, payload = value, decoded
+        return true
+    end)
+    checkpoints[path] = source == path and {raw = contents, payload = payload} or nil
+    return state, source, contents, payload
+end
+
+-- Rotate the previous verified state directly into its recovery file. The
+-- primary can then be replaced with two files' worth of space and no move.
+function storage.saveState(path, value, validate, forgetPrevious)
+    return Work.call(function()
+        local payload = Work.serialize(value)
+        local recovery, temporary = path .. ".bak", path .. ".tmp"
+        local source, raw, previous
+        local checkpoint = checkpoints[path]
+        if checkpoint and checkpoint.raw == storage.readBytes(path) then
+            source, raw, previous = path, checkpoint.raw, checkpoint.payload
+        else
+            local _
+            _, source, raw, previous = storage.loadState(path, validate)
+        end
+        if source and source ~= temporary and fs.exists(temporary) and not fs.isDir(temporary) then fs.delete(temporary) end
+        if source and source ~= recovery then
+            local bytes = raw == previous and compactState(previous) or raw
+            if storage.readBytes(recovery) ~= bytes then storage.writeVerified(recovery, bytes) end
+        end
+        if source == path and previous == payload and not forgetPrevious then return end
+        local contents = compactState(payload)
+        storage.writeVerified(path, contents)
+        checkpoints[path] = {raw = contents, payload = payload}
+        local cleared, err = pcall(function()
+            if forgetPrevious and fs.exists(recovery) and not fs.isDir(recovery) then fs.delete(recovery) end
+            if fs.exists(temporary) and not fs.isDir(temporary) then fs.delete(temporary) end
+        end)
+        if not cleared then return "State saved. Recovery cleanup failed: " .. tostring(err) end
+    end)
 end
 
 function storage.save(path, value, forgetPrevious)
@@ -196,6 +391,7 @@ return storage
 -- announcements carry only the settings used by each supported client role.
 local Backup = {}
 local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
+local Codec = rawget(_G, "__smarthomeCodec") or dofile("lib_codec.lua")
 local statePath, journalPath = "configs_os_state.txt", "restore_pending.txt"
 local transportPath = "configs_transport.txt"
 local roles = {io = true, monitor = true, sensor = true, relay = true}
@@ -283,25 +479,19 @@ function Backup.clientSettings(role, config, network)
     return {config = result, network = net}
 end
 
-local function readFile(path)
-    local file = fs.open(path, "r")
-    if not file then return nil end
-    local contents = file.readAll()
-    file.close()
-    return contents
-end
-
-function Backup.capturePrograms()
+function Backup.capturePrograms(storage)
     local programs = {}
     for _, path in ipairs(fs.list("")) do
         local name = path:match("^apps_([%w_-]+)%.lua$")
         if appName(name) and not fs.isDir(path) then
-            programs[name] = assert(readFile(path), "Cannot back up " .. path)
+            programs[name] = assert(storage.readBytes(path), "Cannot back up " .. path)
             Work.check(#programs[name])
         end
     end
     local startup
-    if fs.exists("startup") and not fs.isDir("startup") then startup = assert(readFile("startup"), "Cannot back up startup") end
+    if fs.exists("startup") and not fs.isDir("startup") then
+        startup = assert(storage.readBytes("startup"), "Cannot back up startup")
+    end
     return programs, startup
 end
 
@@ -323,6 +513,50 @@ function Backup.valid(bundle, target)
     return true
 end
 
+local function encode(bundle)
+    local contents = Work.serialize(bundle)
+    local packed = bundle.target == "@all" and Codec.pack(contents)
+    if not packed then return contents end
+    packed.version = 3
+    local encoded = Work.serialize(packed)
+    return #encoded < #contents and encoded or contents
+end
+
+local function decode(value)
+    if value.version ~= 3 then return value end
+    return textutils.unserialize(Codec.unpack(value))
+end
+
+function Backup.load(storage, path, target, completedOnly)
+    local bundle
+    local raw, source = storage.load(path, function(value, candidate)
+        if completedOnly and candidate == path .. ".tmp" then return false end
+        local ok, decoded = Work.call(decode, value)
+        if ok and Backup.valid(decoded, target) then bundle = decoded; return true end
+        return false
+    end)
+    return bundle, source, raw
+end
+
+function Backup.save(storage, path, bundle)
+    return Work.call(function()
+        local contents = encode(bundle)
+        local previous, source, raw = Backup.load(storage, path, bundle.target)
+        local temporary = path .. ".tmp"
+        -- Keep a verified prior snapshot before opening the main file in write
+        -- mode. A complete temporary file from an old failed move counts here.
+        if previous and source ~= path .. ".bak" then
+            local bytes = raw.version == 3 and storage.readBytes(source) or encode(previous)
+            storage.writeVerified(path .. ".bak", bytes)
+        end
+        if source ~= path and fs.exists(temporary) and not fs.isDir(temporary) then fs.delete(temporary) end
+        -- Older fs.move can copy the entire staged file again. Write the final
+        -- file directly now that any previous snapshot has its own copy.
+        storage.writeVerified(path, contents)
+        if fs.exists(temporary) and not fs.isDir(temporary) then pcall(fs.delete, temporary) end
+    end)
+end
+
 function Backup.exists(path)
     return fs.exists(path) or fs.exists(path .. ".tmp") or fs.exists(path .. ".bak")
 end
@@ -334,7 +568,9 @@ end
 
 -- The journal exists only while renames can be incomplete. Its presence on
 -- boot rolls the local computer back before loading any restored settings.
-function Backup.recover(storage)
+function Backup.recover(storage, installing)
+    assert(installing or not fs.exists("install_pending.txt"),
+        "Update interrupted. Run the same inst command again.")
     if not fs.exists(journalPath) then return end
     local journal = assert(storage.load(journalPath), "Unreadable restore journal")
     for i = #journal, 1, -1 do
@@ -365,7 +601,7 @@ local function replace(storage, files, suffix)
     local paths, journal = {}, {}
     for path, contents in pairs(files) do
         assert(restorePath(path) and not fs.isDir(path), "Invalid restore target: " .. path)
-        if readFile(path) ~= contents then paths[#paths + 1] = path end
+        if storage.readBytes(path) ~= contents then paths[#paths + 1] = path end
     end
     table.sort(paths)
     if #paths == 0 then return true end
@@ -397,10 +633,6 @@ local function replace(storage, files, suffix)
     return true
 end
 
-function Backup.installApps(storage, sources)
-    return replace(storage, sources, ".pre_update")
-end
-
 local function includeTransport(storage, files, saved)
     if not integer(saved, 0, 2147483646) then return end
     local transport = storage.load(transportPath) or {}
@@ -416,7 +648,7 @@ function Backup.restoreServer(bundle, storage)
     assert(fs.exists("main_os.lua"), "Install the server role first")
     local data, files = bundle.data, {}
     local config = storage.load("configs_os.txt") or {}
-    local previous = storage.load(config.saveFile or statePath, Backup.validState) or {}
+    local previous = storage.loadState(config.saveFile or statePath, Backup.validState) or {}
     if bundle.version == 2 then
         config = bundle.osConfig
         for _, key in ipairs({"tickInterval", "saveInterval", "clientTimeout", "retryInterval"}) do
@@ -590,10 +822,18 @@ function Network.new(config, isServer, logger)
     assert(config.relayEnabled == nil or type(config.relayEnabled) == "boolean", "Invalid relayEnabled setting")
     local storage = dofile("lib_storage.lua")
     local path = "configs_transport.txt"
-    local boot = storage.config(path, {bootCounter = 0})
-    assert(integer(boot.bootCounter, 0, 2147483646), "Invalid transport boot counter")
+    local function validBoot(value) return integer(value.bootCounter, 0, 2147483647) end
+    local boot = storage.loadState(path, validBoot)
+    if not boot then
+        for _, suffix in ipairs({"", ".tmp", ".bak"}) do
+            assert(not fs.exists(path .. suffix), "Unreadable transport boot counter: " .. path .. suffix)
+        end
+        boot = {bootCounter = 0}
+    end
+    assert(boot.bootCounter < 2147483647, "Transport boot counter exhausted")
     boot.bootCounter = boot.bootCounter + 1
-    assert(storage.save(path, boot), "Cannot checkpoint network startup")
+    local saved, err = storage.saveState(path, boot, validBoot)
+    assert(saved, "Cannot checkpoint network startup: " .. tostring(err))
     local net = {id = os.getComputerID(), config = config, isServer = isServer, bootCounter = boot.bootCounter}
     if filterLegacyRednet(net.id) then log("CraftOS 1.5 Rednet channel filter active") end
     -- Destination IDs still disambiguate computers if reply channels collide.
@@ -988,16 +1228,14 @@ local function expandRows(lines, hits, width, height)
         free = free - sizes[y]
     end
     if free == 0 then return end
-    local remaining = free
-    -- Give available rows to the content and actions before navigation.
-    for depth = 2, target do
-        for y = 1, height do
-            if remaining > 0 and controls[y] and not locked[y] then
-                sizes[y], remaining = depth, remaining - 1
-            end
-        end
-    end
-    if remaining == free then return end
+    local count = 0
+    for y = 1, height do if controls[y] and not locked[y] then count = count + 1 end end
+    if count == 0 then return end
+    local added = math.min(target - 1, math.floor(free / count))
+    if added == 0 then return end
+    -- A partially filled group of taller rows makes equal choices look different.
+    for y = 1, height do if controls[y] and not locked[y] then sizes[y] = 1 + added end end
+    local remaining = free - added * count
     local first, last, centre, rows = {}, {}, {}, {}
     local row, blanks = 1, 0
     local empty = string.rep(" ", width)
@@ -1075,75 +1313,16 @@ local function wrapButtons(lines, hits)
     end
 end
 
--- Use dark gutters for adjoining controls that have no room for a gap.
-local function separateButtons(lines, hits, height)
-    local starts, ends, empty, striped = {}, {}, {}, {}
-    local function seam(hit, x, y, w, h)
-        lines.styles[#lines.styles + 1] = {x=x,y=y,width=w,height=h,bg=hit.paint.bg==32768 and 128 or 32768}
-    end
-    local function blank(x1, x2, first, last)
-        for y = first, last do
-            if lines[y]:sub(x1, x2):find("%S") then return false end
-        end
-        return true
-    end
-    for _, hit in ipairs(hits) do
-        if hit.paint then
-            local top, bottom = hit.y1 or hit.y, hit.y2 or hit.y
-            starts[top], ends[bottom] = starts[top] or {}, ends[bottom] or {}
-            table.insert(starts[top], hit); table.insert(ends[bottom], hit)
-        end
-    end
-    for y = 1, height do
-        local row = starts[y]
-        if row then
-            table.sort(row, function(a,b) return a.x1 < b.x1 end)
-            for index, hit in ipairs(row) do
-                local paint = hit.paint
-                local left = row[index - 1]
-                local above
-                for _, previous in ipairs(ends[y - 1] or empty) do
-                    if previous.x1 <= hit.x2 and previous.x2 >= hit.x1 and previous.paint.bg == paint.bg then
-                        above = previous
-                        break
-                    end
-                end
-                if above then
-                    local x1, x2 = math.max(above.x1, hit.x1), math.min(above.x2, hit.x2)
-                    if blank(x1,x2,y,y) then seam(hit,x1,y,x2-x1+1,1)
-                    elseif blank(x1,x2,y-1,y-1) then seam(above,x1,y-1,x2-x1+1,1)
-                    elseif paint.bg == 128 and above.x1 == hit.x1 and above.x2 == hit.x2 then
-                        paint.bg, paint.fg = 32768, 1
-                    elseif not striped[above] then
-                        if blank(hit.x1,hit.x1,y,y) then seam(hit,hit.x1,y,1,1) end
-                        if blank(hit.x2,hit.x2,y,y) then seam(hit,hit.x2,y,1,1) end
-                        striped[hit] = true
-                    end
-                end
-                if left and left.x2 + 1 == hit.x1 and left.paint.bg == paint.bg then
-                    local bottom = math.min(left.y2 or left.y, hit.y2 or hit.y)
-                    if blank(hit.x1,hit.x1,y,bottom) then seam(hit,hit.x1,y,1,bottom-y+1)
-                    elseif blank(left.x2,left.x2,y,bottom) then seam(left,left.x2,y,1,bottom-y+1)
-                    elseif paint.bg == 128 then
-                        paint.bg, paint.fg = 32768, 1
-                    end
-                end
-            end
-        end
-    end
-end
-
 function Gui.finish(lines, width, height, fixed)
     local hits = lines.hits or {}
     lines.touchLayout = true
     if #hits > 0 then
         styleSecondary(lines, hits)
-        if not fixed and not lines.arrangedChoices then
+        if not fixed and not lines.fixedLayout then
             expandRows(lines, hits, width, height)
             styleSecondary(lines, hits)
         end
         wrapButtons(lines, hits)
-        separateButtons(lines, hits, height)
     end
     return lines, hits
 end
@@ -1252,17 +1431,18 @@ function Gui.content(width, height)
     end
     function ui.buttonRow(y, items, depth)
         local count = #items
+        if count == 0 then return end
         local gap = width >= count * 7 - 1 and 1 or 0
-        local span = width - (count - 1) * gap
+        local span = math.floor((width - (count - 1) * gap) / count)
+        local gutters = width - count * span
         for i, item in ipairs(items) do
-            local left = 1 + math.floor((i - 1) * span / count) + (i - 1) * gap
-            local right = math.floor(i * span / count) + (i - 1) * gap
-            ui.button(y, item[1], item[2], left, right, item[4], item[5], nil, item[3], depth)
+            local left = 1 + (i - 1) * span + math.floor((i - 1) * gutters / math.max(1, count - 1))
+            ui.button(y, item[1], item[2], left, left + span - 1, item[4], item[5], nil, item[3], depth)
         end
     end
     -- Ordered lists stay in one column. Short sets of actions can opt into
     -- two columns when their labels fit. Gaps are outside the touch targets.
-    function ui.choices(top, bottom, items, tiles, panel)
+    function ui.choices(top, bottom, items, tiles, panel, pageSize)
         if #items == 0 then return end
         panel = panel or 128
         local inset = width >= 32 and 2 or width >= 20 and 1 or 0
@@ -1276,18 +1456,18 @@ function Gui.content(width, height)
                 if #item[1] > math.floor((span - 2) / 2) then columns = 1; break end
             end
         end
-        local rows = math.ceil(#items / columns)
+        local rows = math.ceil((pageSize or #items) / columns)
         local room = bottom - top + 1
         if not tiles and room >= rows * 3 then top, room = top + 1, room - 1 end
         local gap = room >= rows * 3 - 1 and 1 or 0
         local depth = math.min(3, math.floor((room - (rows - 1) * gap) / rows))
-        local horizontal = columns == 2 and 2 or 0
-        local cells = span - horizontal
+        local cellWidth = columns == 2 and math.floor((span - 2) / 2) or span
+        local horizontal = span - columns * cellWidth
         if tiles then top = top + math.floor((room - rows * depth - (rows - 1) * gap) / 2) end
         for i, item in ipairs(items) do
             local row, col = math.floor((i - 1) / columns), (i - 1) % columns
-            local x1 = left + math.floor(col * cells / columns) + col * horizontal
-            local x2 = left + math.floor((col + 1) * cells / columns) + col * horizontal - 1
+            local x1 = left + col * (cellWidth + horizontal)
+            local x2 = x1 + cellWidth - 1
             local y = top + row * (depth + gap)
             local secondary = isSecondary(item[1], item[2])
             local buttonDepth = secondary and 1 or depth
@@ -1300,7 +1480,34 @@ function Gui.content(width, height)
                 ui.put(x1 + pad, hit.y, item[1], x2 - x1 + 1 - pad)
             end
         end
-        ui.lines.arrangedChoices = true
+        ui.lines.fixedLayout = true
+    end
+    function ui.pickerList(top, items, page)
+        local room = height - top
+        local paged = #items > room
+        local slots = math.max(1, room - (paged and 1 or 0))
+        local pages = math.max(1, math.ceil(#items / slots))
+        page = math.max(1, math.min(page, pages))
+        local first = (page - 1) * slots
+        local size = math.min(#items, slots)
+        local rows = {}
+        local swatches = items[#items] and items[#items].colour
+        for i = first + 1, math.min(first + slots, #items) do
+            local item = items[i]
+            rows[#rows + 1] = {(swatches and "  " or "") .. item.label, "select", item.value, item.enabled, 128}
+        end
+        local hitStart = #ui.hits
+        local bottom = math.min(height - (paged and 2 or 1), top + 3 * size - 1)
+        ui.choices(top, bottom, rows, false, nil, size)
+        for i = 1, #rows do
+            local item, hit = items[first + i], ui.hits[hitStart + i]
+            if item.colour then ui.style(hit.x1, hit.y1, 2, hit.y2 - hit.y1 + 1, nil, item.colour) end
+        end
+        if paged then
+            ui.buttonRow(height - 1, {{"< Prev", "prev", nil, page > 1}, {"Next >", "next", pages, page < pages}})
+        end
+        ui.buttonRow(height, {{"Back", "back"}, {"Cancel", "cancel"}})
+        return page, pages
     end
     function ui.finish(fixed)
         ui.lines.hits = ui.hits
@@ -1320,7 +1527,7 @@ function Gui.menu(width, height, title, items, page, back, accent)
         local item = items[i]
         visible[#visible + 1] = {item.label, item.action, item.value, item.enabled, item.bg}
     end
-    ui.choices(2, height - (pages > 1 and 2 or 1), visible)
+    ui.choices(2, height - (pages > 1 and 2 or 1), visible, false, nil, math.min(#items, slots))
     if pages > 1 then
         local half = math.floor(width / 2)
         ui.button(height - 1, "< Prev", "previous", 1, half, page > 1)
@@ -1340,21 +1547,24 @@ function Gui.palette(width, height, current, title, swatchBottom)
     local bottom = swatchBottom or (adaptive and height - footer or 1 + 4 * math.min(2, math.floor((height-2)/4)))
     local available = bottom - 1
     local rowGap = available >= 11 and 1 or 0
-    local rows = available - rowGap * 3
+    local depth = math.floor((available - rowGap * 3) / 4)
+    local yStart = 2 + math.floor((available - 4 * depth - 3 * rowGap) / 2)
+    local columnGap = width >= 15 and 1 or 0
+    local swatchWidth = math.floor((width - 3 * columnGap) / 4)
+    local xStart = 1 + math.floor((width - 4 * swatchWidth - 3 * columnGap) / 2)
     local short = {"White", "Orange", "Mag.", "Sky", "Yellow", "Lime", "Pink", "Gray", "L.gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
     for index = 0, 15 do
         local col, row = index % 4, math.floor(index / 4)
-        local x = 1 + math.floor(col * (width + 1) / 4)
-        local right = math.floor((col + 1) * (width + 1) / 4) - 1
-        local y = 2 + math.floor(row * rows / 4) + row * rowGap
-        local depth = math.floor((row + 1) * rows / 4) - math.floor(row * rows / 4)
+        local x = xStart + col * (swatchWidth + columnGap)
+        local right = x + swatchWidth - 1
+        local y = yStart + row * (depth + rowGap)
         local colour = 2 ^ index
         local label = colour == current and "*" or right - x >= 5 and short[index + 1] or ""
         local hit = ui.button(y, label, "colour", x, right, true, colour, nil, colour, depth)
         -- A black swatch needs a visible edge against the palette background.
         if colour == 32768 then
             ui.style(x, y, 1, depth, nil, 128)
-            ui.style(right, y, 1, depth, nil, 128)
+            if swatchWidth >= 3 then ui.style(right, y, 1, depth, nil, 128) end
         end
         hit.paint = nil
     end
@@ -1373,10 +1583,14 @@ function Gui.keyboard(ui, width, height, k, accent, footer)
     local pages = mode == "123" and math.ceil(#chars / (columns * 3)) or math.ceil(10 / columns)
     k.page, k.pages = math.max(1, math.min(k.page or 1, pages)), pages
     ui.heading(k.draft == "" and "Type here" or k.draft:sub(-width), accent)
-    local keyWidth = math.floor(width / columns)
-    local controlRows = math.min(Gui.controlHeight(height), math.max(1, math.floor((height - 4) / 4)))
-    local gap, rowGap = width >= 30 and 1 or 0, height - 2 * controlRows >= 8 and 1 or 0
-    local available = height - 1 - 2 * controlRows + rowGap
+    local controlRows = math.min(3, math.max(1, math.floor((height - 2) / 6)))
+    local footerGap = height >= 12 and 1 or 0
+    local available = height - 1 - 2 * controlRows - footerGap
+    local gap, rowGap = width >= 30 and 1 or 0, available >= 9 and 1 or 0
+    local keyWidth = math.floor((width - (columns - 1) * gap) / columns)
+    local keyDepth = math.floor((available - 3 * rowGap) / 3)
+    local spare = available - 3 * (keyDepth + rowGap)
+    local top = 2 + math.ceil(spare / 2)
     for row = 1, 3 do
         local start = (k.page - 1) * columns + 1
         local keys = letterRows[row]:sub(start, start + columns - 1)
@@ -1385,29 +1599,26 @@ function Gui.keyboard(ui, width, height, k, accent, footer)
             start = ((k.page - 1) * 3 + row - 1) * columns + 1
             keys = chars:sub(start, start + columns - 1)
         end
-        local left = 1 + math.floor((width - #keys * keyWidth + gap) / 2)
-        local y1 = 2 + math.floor((row - 1) * available / 3)
-        local y2 = 1 + math.floor(row * available / 3) - rowGap
+        local left = 1 + math.floor((width - #keys * (keyWidth + gap) + gap) / 2)
+        local y = top + (row - 1) * (keyDepth + rowGap)
         for column = 1, #keys do
-            local x1 = left + (column - 1) * keyWidth
-            local span = keyWidth - gap
+            local x1 = left + (column - 1) * (keyWidth + gap)
             local key = keys:sub(column, column)
-            local bg = (row + column) % 2 == 0 and 128 or 256
-            ui.button(y1, key, "key", x1, x1 + span - 1, true, bg, nil, key, y2 - y1 + 1)
+            local bg = (gap > 0 or (row + column) % 2 == 0) and 128 or 256
+            ui.button(y, key, "key", x1, x1 + keyWidth - 1, true, bg, nil, key, keyDepth)
         end
     end
-    local controls = {{bankName[nextBank[k.bank]] or "ABC", "bank"},
+    local controls = {{bankName[nextBank[k.bank]] or "ABC", "bank", nil, true, accent},
         {width >= 20 and "Space" or "Sp", "space"}, {"Del", "backspace"}}
     if pages > 1 then controls[4] = {k.page .. "/" .. pages, "keyPage"} end
-    for index, row in ipairs(controls) do
-        ui.button(height - 2 * controlRows + 1, row[1], row[2], 1 + math.floor((index - 1) * width / #controls),
-            math.floor(index * width / #controls), true, row[2] == "bank" and accent or nil, nil, nil, controlRows)
-    end
+    ui.buttonRow(height - 2 * controlRows + 1 - footerGap, controls, controlRows)
     footer = footer or {{"Set", "saveText"}, {"Clr", "clearText"}, {"Back", k.back}}
+    local actions = {}
     for index, row in ipairs(footer) do
-        ui.button(height - controlRows + 1, row[1], row[2], 1 + math.floor((index - 1) * width / #footer),
-            math.floor(index * width / #footer), row[4], index == 1 and accent or nil, nil, row[3], controlRows)
+        actions[index] = {row[1], row[2], row[3], row[4], index == 1 and accent or nil}
     end
+    ui.buttonRow(height - controlRows + 1, actions, controlRows)
+    ui.lines.fixedLayout = true
 end
 
 -- Common app forms keep drawing and hit regions together at 12x6 and above.
@@ -1420,7 +1631,18 @@ function Gui.form(width,height,view,accent,background,panel)
     end
     function ui.footer(rows, depth)
         -- A screen can replace the default Back footer supplied by info().
-        for i=#ui.hits,1,-1 do if (ui.hits[i].y2 or ui.hits[i].y)==height then table.remove(ui.hits,i) end end
+        for i = #ui.hits, 1, -1 do
+            local hit = ui.hits[i]
+            if (hit.y2 or hit.y) == height then
+                if hit.paint then
+                    labelAt(ui.lines, hit.x1, hit.x2, hit.y, "")
+                    for index = #ui.lines.styles, 1, -1 do
+                        if ui.lines.styles[index] == hit.paint then table.remove(ui.lines.styles, index); break end
+                    end
+                end
+                table.remove(ui.hits, i)
+            end
+        end
         depth=depth or 1
         local items = {}
         for i, row in ipairs(rows) do
@@ -1455,7 +1677,7 @@ function Gui.form(width,height,view,accent,background,panel)
         local first = ui.page(key,#rows,slots,bottom)
         local visible = {}
         for i = first + 1, math.min(first + slots, #rows) do visible[#visible + 1] = rows[i] end
-        ui.choices(2, bottom - (paged and 1 or 0), visible, tiles, panel)
+        ui.choices(2, bottom - (paged and 1 or 0), visible, tiles, panel, math.min(#rows, slots))
         ui.footer(footer, depth)
     end
     function ui.info(title,lines,key,back)
@@ -1847,8 +2069,10 @@ function Settings.new(actions)
             if draft.mode == "reset" and draft.final then title = w >= 20 and "Are you really sure?" or "Really sure?"
             elseif draft.mode == "delete" then title = "Delete app?"
             elseif draft.mode == "restore" then title = "Restore data?"
-            elseif draft.mode == "backup" then title = "Replace backup?" end
-            ui.heading(draft.error and "Action failed" or title, 16384)
+            elseif draft.mode == "backup" then title = draft.replacing and "Replace backup?" or "Create backup?" end
+            local backup = draft.mode == "backup"
+            local heading = draft.error and (backup and "Backup failed" or "Action failed") or title
+            ui.heading(heading, backup and not draft.error and 2048 or 16384)
             ui.put(1, 2, draft.label, w, true)
             local message = draft.error or draft.detail
             if message then ui.put(1, 3, message, w); ui.put(1, 4, message:sub(w + 1), w)
@@ -1861,9 +2085,10 @@ function Settings.new(actions)
                 ui.action(h, "Cancel", "cancel")
             else
                 local button = draft.mode == "reset" and (draft.final and "Erase all" or "Delete data")
-                    or draft.mode == "delete" and "Uninstall" or draft.mode == "backup" and "Replace" or "Restore"
+                    or draft.mode == "delete" and "Uninstall"
+                    or backup and (draft.replacing and "Replace" or "Create") or "Restore"
                 ui.action(h - 1, "Cancel", "cancel")
-                ui.action(h, button, "commit", nil, nil, nil, true, 16384)
+                ui.action(h, button, "commit", nil, nil, nil, true, backup and 2048 or 16384)
             end
         elseif section == "home" then
             ui.menu(app.title, {{"Appearance", "appearance"}, {"System overview", "overview"},
@@ -1957,11 +2182,15 @@ function Settings.new(actions)
             view.keyboard = nil
         elseif action == "selectScope" then
             local mode = value.mode
-            local info = (mode == "restore" or mode == "backup") and actions.backupInfo(value.id) or nil
+            local info = (mode == "restore" or mode == "backup") and actions.backupInfo(value.id, mode == "backup") or nil
             if mode == "backup" and not info then
                 local ok, err = actions.backup(value.id)
-                view.status = ok and "Backup saved" or tostring(err)
-            else pending[id] = {target = value.id, label = value.label, mode = mode, detail = info} end
+                if ok then view.status = "Backup saved"
+                else pending[id] = {target = value.id, label = value.label, mode = mode, error = tostring(err)} end
+            else
+                pending[id] = {target = value.id, label = value.label, mode = mode, detail = info,
+                    replacing = mode == "backup"}
+            end
         elseif action == "confirmAgain" then pending[id].final = true
         elseif action == "cancel" then pending[id] = nil
         elseif action == "commit" then
@@ -2365,14 +2594,9 @@ function Picker.render(dialog, width, height, clients, api, testing)
     local label = api and api.clientName or function(id) return id end
     local ui = Gui.content(width, height)
     ui.style(1, 1, width, height, 1, 32768)
-    local half = math.floor(width / 2)
     local text = ui.text
-    local function button(row, x1, x2, label, action, value, enabled)
-        local bg = action == "cancel" and 16384 or action == "use" and 32 or 128
-        ui.button(row, label, action, x1, x2, enabled, bg, nil, value)
-    end
     if dialog.stage == 4 then
-        text(1, "Use this " .. dialog.direction .. "?")
+        ui.heading("Use this " .. dialog.direction .. "?", 2048)
         text(2, label(dialog.chosen.clientId) or "No IO client")
         text(3, "Side: " .. (dialog.chosen.side or "?"))
         local wire = colorName(dialog.chosen.color)
@@ -2383,39 +2607,25 @@ function Picker.render(dialog, width, height, clients, api, testing)
             text(4, #summary <= width and summary or wire:sub(1, width - #status - 1) .. " " .. status)
         else text(4, wire) end
         if dialog.error then text(4, dialog.error) end
+        local depth = height >= 9 and 2 or 1
+        local actions = {{"< Back", "back"}}
         if dialog.direction == "output" and api then
-            button(height - 1, 1, half, "< Back", "back")
-            button(height - 1, half + 1, width, testing and "Wait" or "Test", "test", nil, not testing)
-        else button(height - 1, 1, width, "< Back", "back") end
-        button(height, 1, half, "Use", "use")
-        button(height, half + 1, width, "Cancel", "cancel")
+            actions[2] = {testing and "Wait" or "Test", "test", nil, not testing}
+        end
+        ui.buttonRow(height - depth, actions)
+        ui.buttonRow(height - depth + 1, {{"Use", "use", nil, true, 32}, {"Cancel", "cancel"}}, depth)
     else
         local titles = {"Select IO", "Select side", "Select wire"}
         local list = choices(dialog, clients, label)
         local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {label(dialog.chosen.clientId),dialog.chosen.side} or {label(dialog.chosen.clientId)},width,height)
         local header = path and 2 or 1
-        local slots = #list <= height-header-1 and height-header-1 or math.max(1,height-header-2)
-        local pages = math.max(1, math.ceil(#list / slots))
-        dialog.page = math.max(1, math.min(dialog.page, pages))
-        text(1, titles[dialog.stage] .. (pages > 1 and (" " .. dialog.page .. "/" .. pages) or ""))
+        local page, pages = ui.pickerList(header + 1, list, dialog.page)
+        dialog.page = page
+        ui.heading(titles[dialog.stage] .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), 2048)
         if path then text(2,path); ui.style(1,2,width,1,256,32768) end
-        for row = 1, slots do
-            local item = list[(dialog.page - 1) * slots + row]
-            if item then
-                button(row + header, 1, width, (item.colour and "  " or "") .. item.label, "select", item.value)
-                if item.colour then ui.style(1, row + header, 2, 1, nil, item.colour) end
-            end
-        end
         if #list == 0 then text(header+1, "No IO clients") end
-        if pages > 1 then
-            button(height - 1, 1, half, "< Prev", "prev", nil, dialog.page > 1)
-            button(height - 1, half + 1, width, "Next >", "next", pages, dialog.page < pages)
-        end
-        button(height, 1, half, "Back", "back")
-        button(height, half + 1, width, "Cancel", "cancel")
     end
-    ui.style(1, 1, width, 1, 1, 2048)
-    local lines, hits = ui.finish()
+    local lines, hits = ui.finish(true)
     dialog.hits = hits
     return lines
 end
@@ -2790,13 +3000,14 @@ end
 function Desktop.menu(monitor, title, items, page, anchor)
     local area = Desktop.area(monitor)
     local width = math.min(area.width, anchor and 26 or 22)
-    local depth = anchor and math.min(4, Gui.controlHeight(area.height)) or 1
+    local depth = anchor and math.min(4, Gui.controlHeight(area.height)) or area.height >= 17 and 2 or 1
+    local pagerDepth = anchor and depth or 1
     local slots = math.max(1, math.floor((area.height - 1) / depth))
     if not anchor then slots = math.min(slots, 16) end
-    if #items > slots then slots = math.max(1, slots - 1) end
+    if #items > slots then slots = math.max(1, math.min(slots, math.floor((area.height - 1 - pagerDepth) / depth))) end
     local pages = math.max(1, math.ceil(#items / slots))
     page = clamp(page or 1, 1, pages)
-    local height = math.min(area.height, 1 + (math.max(1, math.min(#items, slots)) + (pages > 1 and 1 or 0)) * depth)
+    local height = math.min(area.height, 1 + math.max(1, math.min(#items, slots)) * depth + (pages > 1 and pagerDepth or 0))
     local lastY = area.y + area.height - height
     local origin = monitor.taskbarPosition == "top" and area.y or lastY
     local rect = {x = clamp(anchor and anchor.x or 1, 1, area.width - width + 1),
@@ -2809,14 +3020,13 @@ function Desktop.menu(monitor, title, items, page, anchor)
         if item then
             local hit = ui.button(2 + (slot-1)*depth, item.label, "item", 1, width,
                 item.enabled, slot % 2 == 0 and 128 or 256, nil, nil, depth)
-            hit.item = item
+            hit.item, hit.secondary = item, false
         end
     end
     if #items == 0 then ui.text(2, "No apps", true) end
     if pages > 1 then
-        local half = math.floor(width / 2)
-        ui.button(height - depth + 1, "< Prev", "previous", 1, half, page > 1, nil, nil, nil, depth)
-        ui.button(height - depth + 1, "Next >", "next", half + 1, width, page < pages, nil, nil, nil, depth)
+        ui.buttonRow(height - pagerDepth + 1, {{"< Prev", "previous", nil, page > 1},
+            {"Next >", "next", nil, page < pages}}, pagerDepth)
     end
     ui.finish(true)
     for _, hit in ipairs(ui.hits) do
@@ -2946,7 +3156,7 @@ end
 
 function Server.new(net, storage, config, logger)
     local log = logger or print
-    local loaded, source = storage.load(config.saveFile, validState)
+    local loaded, source = storage.loadState(config.saveFile, validState)
     local state = loaded or {}
     for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
         if type(state[name]) ~= "table" then state[name] = {} end
@@ -2974,7 +3184,7 @@ function Server.new(net, storage, config, logger)
     state.appStates["@settings"] = type(state.appStates["@settings"]) == "table" and state.appStates["@settings"] or {}
     local server = {state = state, monitors = {}, ioClients = {}, sensorClients = {}, relayClients = {}, apps = {},
         systemApps = {}, gameTime = "?:??", playerOnline = false,
-        lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}, notifications = {}}
+        lastSave = 0, lastSaveAttempt = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}, notifications = {}}
     local clientGroups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients, relay = server.relayClients}
     local api, errors, installedApps = {}, {}, {}
     local history, ioTests, ioPulses = IOHistory.new(), {}, {}
@@ -3032,8 +3242,10 @@ function Server.new(net, storage, config, logger)
         end
     end
     state.desktopVersion = 2
-    state.bootCounter = (tonumber(state.bootCounter) or 0) + 1
-    server.session = tostring(net.id) .. ":" .. state.bootCounter
+    state.bootCounter = math.max((tonumber(state.bootCounter) or 0) + 1, net.bootCounter)
+    -- The transport epoch is persisted before the modem starts. Its prefix
+    -- distinguishes these sessions from the old state checkpoint counters.
+    server.session = tostring(net.id) .. ":net:" .. net.bootCounter
     local sensors = SensorHub.new(net, server.sensorClients, server.session)
     server.sensors = sensors
     if source and source ~= config.saveFile then log("Recovered state from " .. source) end
@@ -3051,6 +3263,7 @@ function Server.new(net, storage, config, logger)
     end
     function server.save(forgetPrevious)
         if server.restartAfterRestore then return true end
+        server.lastSaveAttempt = os.clock()
         local previousStage = Work.stage
         Work.stage = "Saving OS state"
         local saved = {}
@@ -3060,7 +3273,7 @@ function Server.new(net, storage, config, logger)
             saved[name] = state[name]
         end
         saved.windows = saveWindows()
-        local ok, err = storage.save(config.saveFile, saved, forgetPrevious)
+        local ok, err = storage.saveState(config.saveFile, saved, validState, forgetPrevious)
         if ok then
             server.lastSave = os.clock()
             if err then log(err) end
@@ -4339,15 +4552,14 @@ function Server.new(net, storage, config, logger)
         if target == "@settings" then return "backup_os_settings.txt" end
         if type(target) == "string" and target:match("^[%w_-]+$") then return "backup_app_" .. target .. ".txt" end
     end
-    local function backupBundle(target)
+    local function backupBundle(target, completedOnly)
         local path = backupPath(target)
         if not path then return nil end
-        return storage.load(path, function(bundle) return Backup.valid(bundle, target) end)
+        return Backup.load(storage, path, target, completedOnly)
     end
-    local function backupInfo(target)
-        local bundle = backupBundle(target)
-        local path = backupPath(target)
-        if not bundle then return path and Backup.exists(path) and "Unreadable backup" or nil end
+    local function backupInfo(target, completedOnly)
+        local bundle = backupBundle(target, completedOnly)
+        if not bundle then return nil end
         local day = bundle.day and "Day " .. bundle.day .. " " or ""
         local windows = #sortedKeys(bundle.data.windows)
         if target ~= "@all" then return day .. bundle.time .. " / " .. windows .. " windows" end
@@ -4417,7 +4629,7 @@ function Server.new(net, storage, config, logger)
         local bundle = stamp()
         bundle.target, bundle.version, bundle.data = target, 1, data
         if all then
-            local ok, programs, startup = Work.call(Backup.capturePrograms)
+            local ok, programs, startup = Work.call(Backup.capturePrograms, storage)
             if not ok then return false, programs end
             bundle.version, bundle.programs, bundle.startup = 2, programs, startup
             bundle.osConfig, bundle.network = copy(config), copy(net.config)
@@ -4426,7 +4638,7 @@ function Server.new(net, storage, config, logger)
             data.appRegistry, data.clientConfigs = copy(state.appRegistry), copy(state.clientConfigs)
             data.bootCounter, data.notificationSequence = state.bootCounter, state.notificationSequence
         end
-        local ok, err = storage.save(path, bundle)
+        local ok, err = Backup.save(storage, path, bundle)
         if ok then log("Backup saved to " .. path) end
         return ok, err
     end
@@ -5230,10 +5442,8 @@ function Server.new(net, storage, config, logger)
 
     function server.start()
         logUptime(tostring(net.id), "os", true, os.clock())
-        -- A persisted boot generation prevents stale output commands after an OS reboot.
-        local ok, err, archived = archiveAppRoutesAndWindows("level_emitter", true)
+        local ok, err = archiveAppRoutesAndWindows("level_emitter", true)
         assert(ok, err)
-        if not archived then assert(server.save(), "Cannot checkpoint OS startup") end
         for _, file in ipairs(fs.list("")) do
             local name = file:match("^uninstall_([%w_-]+)%.lua$")
             if name and not fs.isDir(file) then
@@ -5320,7 +5530,7 @@ function Server.new(net, storage, config, logger)
         end
         server.refreshMonitors(false)
         -- Keep checkpoints within one second even when an older config says 30.
-        if now - server.lastSave >= math.min(config.saveInterval, 1) then server.save() end
+        if now - server.lastSaveAttempt >= math.min(config.saveInterval, 1) then server.save() end
     end
     function server.nextTickInterval()
         local interval=config.tickInterval or 0.5
@@ -6012,7 +6222,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v50: starting")
+console.log("SmartHome OS v53: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -7087,7 +7297,9 @@ function Picker.render(dialog, width, height, clients, clientName)
         return false
     end
     if dialog.stage == 1 then
-        for _, client in ipairs(clients) do list[#list + 1] = {label = label(client.id) .. (client.online and " +" or " -"), value = client.id} end
+        for _, client in ipairs(clients) do
+            list[#list + 1] = {label = label(client.id) .. (client.online and " +" or " -"), value = {value = client.id}}
+        end
     elseif dialog.stage == 2 then
         for _, client in ipairs(clients) do if client.id == chosen.clientId then
             selectedClient = client
@@ -7095,7 +7307,7 @@ function Picker.render(dialog, width, height, clients, clientName)
                 local enabled = compatible(port)
                 local detail = port.status ~= "ok" and port.status or port.cardKind
                 list[#list + 1] = {label = port.side .. " / " .. detail .. (not enabled and port.status == "ok" and " (other card)" or ""),
-                    value = port.side, card = port.card, enabled = enabled}
+                    value = {value = port.side, card = port.card}, enabled = enabled}
             end
         end end
     elseif dialog.stage == 3 then
@@ -7105,7 +7317,8 @@ function Picker.render(dialog, width, height, clients, clientName)
                 for _, target in ipairs(port.targets) do
                     if not dialog.filter or dialog.filter == "reactor" and (target.kind == "reactor" or target.type == "Unknown")
                         or dialog.filter ~= "reactor" and port.cardKind == dialog.filter then
-                        list[#list + 1] = {label = target.key .. " " .. target.label, value = target.key, targetType = target.type}
+                        list[#list + 1] = {label = target.key .. " " .. target.label,
+                            value = {value = target.key, targetType = target.type}}
                     end
                 end
             end end
@@ -7117,22 +7330,18 @@ function Picker.render(dialog, width, height, clients, clientName)
         ui.heading("Use sensor?", 2048)
         ui.text(2, label(chosen.clientId)); ui.text(3, chosen.side .. " / " .. chosen.target)
         if height >= 7 then ui.text(4, chosen.targetType or "") end
-        if dialog.error then ui.text(height - 2, dialog.error) end
-        ui.button(height - 1, "Back", "back")
-        ui.button(height, "Use", "use", 1, math.floor(width / 2), true, 32)
-        ui.button(height, "Cancel", "cancel", math.floor(width / 2) + 1, width)
+        local depth = height >= 9 and 2 or 1
+        if dialog.error then ui.text(height - depth - 1, dialog.error) end
+        ui.button(height - depth, "Back", "back")
+        ui.buttonRow(height - depth + 1, {{"Use", "use", nil, true, 32}, {"Cancel", "cancel"}}, depth)
     else
         local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {label(chosen.clientId),chosen.side} or {label(chosen.clientId)},width,height)
         local header = path and 2 or 1
-        local slots = #list<=height-header-1 and height-header-1 or height-header-2
-        local pages = math.max(1, math.ceil(#list / slots))
-        dialog.page = math.max(1, math.min(dialog.page, pages))
-        ui.heading(({"Sensor client", "Sensor side", "Select target"})[dialog.stage], 2048)
+        local page, pages = ui.pickerList(header + 1, list, dialog.page)
+        dialog.page = page
+        local title = ({"Sensor client", "Sensor side", "Select target"})[dialog.stage]
+        ui.heading(title .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), 2048)
         if path then ui.text(2,path); ui.style(1,2,width,1,256,32768) end
-        for row = 1, slots do
-            local item = list[(dialog.page - 1) * slots + row]
-            if item then ui.button(row + header, item.label, "select", nil, nil, item.enabled ~= false, nil, nil, item) end
-        end
         if #list == 0 then
             local message = "No sensor clients yet"
             if dialog.stage == 2 then
@@ -7146,14 +7355,8 @@ function Picker.render(dialog, width, height, clients, clientName)
             end
             ui.text(header+1, message)
         end
-        if pages > 1 then
-            ui.button(height - 1, "< Prev", "prev", 1, math.floor(width / 2), dialog.page > 1)
-            ui.button(height - 1, "Next >", "next", math.floor(width / 2) + 1, width, dialog.page < pages, nil, nil, pages)
-        end
-        ui.button(height, "Back", "back", 1, math.floor(width / 2))
-        ui.button(height, "Cancel", "cancel", math.floor(width / 2) + 1, width)
     end
-    ui.finish()
+    ui.finish(true)
     dialog.hits = ui.hits
     return ui.lines
 end
@@ -7361,324 +7564,479 @@ ok, err = Work.protect(function()
 end)
 finish(ok, err)
 ]=],
+    ["tools_install_update.lua"] = [=[-- Shared by the bundled and small installers. Only the install plan occupies
+-- extra disk space. Source and rollback bytes stay in memory while installing.
+local Update = {}
+local Work = assert(rawget(_G, "__smarthomeWork"))
+local Codec = assert(rawget(_G, "__smarthomeCodec"))
+local journalPath = "install_pending.txt"
+local planPath = "install_plan.txt"
+
+function Update.signature(contents)
+    return #contents .. "/" .. string.format("%.0f", Codec.checksum(contents))
+end
+
+function Update.pending(storage)
+    if not fs.exists(journalPath) then return nil end
+    assert(not fs.isDir(journalPath), "Install marker is a directory: " .. journalPath)
+    local contents = storage.readBytes(planPath)
+    local pending = contents and textutils.unserialize(contents)
+    assert(type(pending) == "table" and pending.version == 1 and type(pending.command) == "string"
+        and type(pending.targets) == "table" and type(pending.references) == "table"
+        and type(pending.settings) == "table", "Unreadable install record: " .. planPath)
+    return pending
+end
+
+function Update.programCopies(storage, bundledPaths)
+    local copies, verified, bytes = {}, {}, 0
+    for _, path in ipairs(fs.list("")) do
+        local name = path:match("^(.*)%.pre_update$") or path:match("^(.*)%.download$")
+        if not name and not fs.exists("restore_pending.txt") then name = path:match("^(.*)%.restore_new$") end
+        if name and (bundledPaths[name] or name:match("^apps_[%w_-]+%.lua$")) and not fs.isDir(path) then
+            if verified[name] == nil then
+                local active = storage.readBytes(name)
+                verified[name] = active and #active > 0 and loadstring(active, name) ~= nil or false
+            end
+            if verified[name] then
+                copies[#copies + 1] = path
+                bytes = bytes + (fs.getSize and fs.getSize(path) or #(storage.readBytes(path) or ""))
+            end
+            Work.check(256)
+        end
+    end
+    return copies, bytes
+end
+
+local function removeProgramCopies(storage, bundledPaths)
+    local copies = Update.programCopies(storage, bundledPaths)
+    for _, path in ipairs(copies) do fs.delete(path) end
+    if #copies > 0 then print("Removed " .. #copies .. " old program copies") end
+end
+
+local function finish()
+    if fs.exists(journalPath) then fs.delete(journalPath) end
+    if fs.exists(planPath) then pcall(fs.delete, planPath) end
+end
+
+local function preflight(storage, changes, journalBytes)
+    local available = storage.freeSpace(journalPath)
+    if not available then return end
+    local used, peak = journalBytes, journalBytes
+    for _, change in ipairs(changes) do
+        used = used + #change.contents - #(change.previous or "")
+        peak = math.max(peak, used)
+    end
+    if available < peak then
+        error("Not enough disk space for install (need " .. peak .. " bytes free, have " .. available .. ")", 0)
+    end
+end
+
+function Update.apply(storage, files, sources, command, pending, references, bundledPaths)
+    local plan = {version = 1, command = command, targets = {}, references = references, settings = {}}
+    local changes, unchanged = {}, 0
+    for _, path in ipairs(files) do
+        assert(not path:find("/", 1, true) and not fs.isDir(path), "Invalid install target " .. path)
+        local contents = assert(sources[path], "Missing install source " .. path)
+        plan.targets[path] = Update.signature(contents)
+        if not references[path] and path:match("^configs_[%w_-]+%.txt$") then plan.settings[path] = contents end
+        local previous = storage.readBytes(path)
+        if previous == contents then unchanged = unchanged + 1
+        else changes[#changes + 1] = {path = path, contents = contents, previous = previous} end
+    end
+    if pending then
+        for path, signature in pairs(plan.targets) do
+            assert(pending.targets[path] == signature, "Install source changed: " .. path)
+        end
+        for path in pairs(pending.targets) do assert(plan.targets[path], "Missing source to resume " .. path) end
+    end
+
+    -- Earlier releases saved a second copy of each replaced program. Reclaim
+    -- those and stale download files only when the installed program compiles.
+    if not pending then
+        assert(not fs.isDir(planPath), "Install plan is a directory: " .. planPath)
+        if fs.exists(planPath) then fs.delete(planPath) end
+        removeProgramCopies(storage, bundledPaths)
+    end
+    if #changes == 0 then
+        finish()
+        if pending then removeProgramCopies(storage, bundledPaths) end
+        return 0, unchanged
+    end
+
+    local journal = not pending and Work.serialize(plan)
+    preflight(storage, changes, journal and #journal or 0)
+    if journal then
+        -- An incomplete plan has no marker and can be discarded on retry.
+        storage.writeVerified(planPath, journal)
+        storage.writeVerified(journalPath, "")
+    end
+    local started = 0
+    local ok, err = Work.call(function()
+        for index, change in ipairs(changes) do
+            started = index
+            storage.writeVerified(change.path, change.contents)
+            print("Installed " .. change.path)
+            Work.check(#change.contents)
+        end
+    end)
+    if not ok then
+        local rolledBack = Work.call(function()
+            -- Delete additions first so restoring the previous versions can
+            -- reuse their space. A failed rollback leaves the plan to resume.
+            for index = 1, started do
+                local change = changes[index]
+                if not change.previous and fs.exists(change.path) then fs.delete(change.path) end
+            end
+            for index = started, 1, -1 do
+                local change = changes[index]
+                if change.previous and storage.readBytes(change.path) ~= change.previous then
+                    storage.writeVerified(change.path, change.previous)
+                end
+            end
+        end)
+        if rolledBack and not pending then finish(); error(err, 0) end
+        error(tostring(err) .. "\nUpdate pending. Run " .. command .. " again to resume.", 0)
+    end
+    finish()
+    local cleaned, cleanupError = Work.call(removeProgramCopies, storage, bundledPaths)
+    if not cleaned then print("Installed. Could not remove old program copies: " .. tostring(cleanupError)) end
+    return #changes, unchanged
+end
+
+return Update
+]=],
 }
 local catalog = {"clock", "coffee", "io_scope", "logic_sandbox", "me_monitor", "me_storage", "notes", "reactors", "screensaver", "solar_farm", "switchboard", "window_presets"}
 local workChunk = assert(loadstring(sources["lib_work.lua"], "lib_work.lua"))
 setfenv(workChunk, getfenv(1))
-workChunk()
+local Work = workChunk()
 local args = {...}
-local role, autorun = args[1], false
-local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v50")
-local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
-local appsUsage = "Usage: inst apps [--ref REF]"
-local restoreUsage = "Usage: inst restore [FILE] | inst restore io|monitor|sensor|relay CLIENT_ID [FILE]"
-local appMode = role == "app" or role == "apps"
-if not entry[role] and not appMode and role ~= "restore" then
-    print("Usage: inst server|io|monitor|sensor|relay [--startup]")
-    print(appUsage)
-    print(appsUsage)
-    print(restoreUsage)
-    return
-end
-assert(shell.dir() == "", "Run cd / first")
-local function bundled(name)
-    local chunk = assert(loadstring(sources[name], name))
-    setfenv(chunk, getfenv(1))
-    return chunk()
-end
-local storage = bundled("lib_storage.lua")
-local backup = bundled("lib_backup.lua")
-backup.recover(storage)
-if role == "restore" then
-    local target, id, path = args[2], args[3], args[4]
-    if entry[target] and target ~= "server" then
-        assert(id and not args[5], restoreUsage)
-    else
-        assert(not path and (target == "server" or not id), restoreUsage)
-        if target == "server" then path = id else path = target end
-        target = "server"
-    end
-    path = path or "backup_os_all.txt"
-    local bundle = assert(storage.load(path, function(value) return backup.valid(value, "@all") end),
-        "Entire OS backup missing or unreadable: " .. path)
-    local ok, err
-    if target == "server" then ok, err = backup.restoreServer(bundle, storage)
-    else ok, err = backup.restoreClient(bundle, storage, target, id) end
-    assert(ok, err)
-    print("Restored " .. target .. " from " .. path)
-    print("Run reboot to load the restored settings")
-    return
-end
-local function appSource(name, source, parameter)
-    local github = source == nil or source == "--ref"
-    local ref = source == "--ref" and parameter or "main"
-    assert(not github or ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)
-        and ref:sub(1, 1) ~= "/" and ref:sub(-1) ~= "/", "Invalid GitHub branch or commit")
-    local path = "apps_" .. name .. ".lua"
-    local contents
-    if github then
-        assert(http and type(http.get) == "function", "HTTP is disabled; GitHub app downloads need HTTP enabled")
-        local url = "https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/" .. ref .. "/" .. path
-        print("Downloading " .. path .. " from GitHub (" .. ref .. ")")
-        local function download(address)
-            -- A child coroutine catches native request errors without preventing
-            -- http.get from yielding on Lua 5.1. Terminate still aborts the install.
-            local request = coroutine.create(function() return http.get(address) end)
-            local result = {coroutine.resume(request)}
-            while result[1] and coroutine.status(request) ~= "dead" do
-                result = {coroutine.resume(request, os.pullEvent(result[2]))}
-            end
-            if not result[1] then return nil, "Request error: " .. tostring(result[2]) end
-            local response = result[2] or result[4] -- Newer CC may return an error handle.
-            if not response then return nil, tostring(result[3] or "No response; CC supplied no reason") end
-            -- Reading/closing response handles does not yield, unlike http.get.
-            local ok, code, body = pcall(function()
-                return response.getResponseCode and response.getResponseCode() or 200, response.readAll()
-            end)
-            local closed, closeError = pcall(response.close)
-            if not ok then return nil, "Cannot read response: " .. tostring(code) end
-            if not closed then return nil, "Cannot close response: " .. tostring(closeError) end
-            if code ~= 200 then return nil, "GitHub returned HTTP " .. tostring(code) end
-            if not result[2] then return nil, tostring(result[3] or "HTTP request failed") end
-            if type(body) ~= "string" or #body == 0 then return nil, "Empty app source" end
-            return body
-        end
-        local function checkLua(body)
-            if body == nil then return nil end
-            local chunk, err = loadstring(body, path)
-            if not chunk then return nil, "Invalid app Lua: " .. tostring(err) end
-            return body
-        end
-        local function apiSource(body)
-            -- Read only GitHub's known base64 content field; no JSON API or
-            -- execution of downloaded text is needed on old ComputerCraft.
-            if not body:match('"type"%s*:%s*"file"') or not body:match('"encoding"%s*:%s*"base64"')
-                or body:match('"name"%s*:%s*"([^"]*)"') ~= path then
-                return nil, "GitHub API did not return the requested base64 file"
-            end
-            local encoded = body:match('"content"%s*:%s*"([^"]*)"')
-            if not encoded then return nil, "GitHub API response has no file content" end
-            encoded = encoded:gsub("\\n", ""):gsub("\\r", ""):gsub("\\/", "/"):gsub("%s", "")
-            local padding = encoded:match("=*$")
-            local data = encoded:sub(1, #encoded - #padding)
-            if #encoded % 4 ~= 0 or #padding > 2 or data:find("[^A-Za-z0-9+/]") then
-                return nil, "Invalid base64 in GitHub API response"
-            end
-            local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-            local output, value, bits = {}, 0, 0
-            for index = 1, #data do
-                value, bits = value * 64 + alphabet:find(data:sub(index, index), 1, true) - 1, bits + 6
-                if bits >= 8 then
-                    bits = bits - 8
-                    output[#output + 1] = string.char(math.floor(value / 2 ^ bits))
-                    value = value % 2 ^ bits
-                end
-            end
-            local decoded = table.concat(output)
-            if value ~= 0 or tonumber(body:match('"size"%s*:%s*(%d+)')) ~= #decoded then
-                return nil, "GitHub API file size/encoding mismatch"
-            end
-            if #decoded == 0 then return nil, "Empty app source" end
-            return decoded
-        end
-        local rawError, apiError, body
-        local apiUrl = "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/"
-            .. path .. "?ref=" .. ref
-        body, apiError = download(apiUrl)
-        if body then contents, apiError = apiSource(body) end
-        if contents then contents, apiError = checkLua(contents) end
-        if contents then
-            print("Downloaded via GitHub API")
-        else
-            print("GitHub API failed; trying raw download")
-            contents, rawError = download(url)
-            if contents then contents, rawError = checkLua(contents) end
-            if not contents then
-                print("Raw: " .. tostring(rawError))
-                print("API: " .. tostring(apiError))
-                print("No response from both? Ask the server admin to check GitHub HTTPS access and the Java/server log.")
-                error("GitHub app download failed; installed files were not changed", 0)
-            end
-            print("Downloaded via GitHub raw")
-        end
-    elseif source == "--file" then
-        local file = assert(fs.open(parameter, "r"), "Cannot read app source: " .. parameter)
-        contents = file.readAll(); file.close()
-    else
-        local temporary = path .. ".download"
-        if fs.exists(temporary) then fs.delete(temporary) end
-        assert(shell.run("pastebin", "get", source, temporary) and fs.exists(temporary), "Pastebin app download failed")
-        local file = assert(fs.open(temporary, "r"), "Cannot read downloaded app")
-        contents = file.readAll(); file.close()
-        fs.delete(temporary)
-    end
-    assert(type(contents) == "string" and #contents > 0, "Empty app source")
-    local chunk, err = loadstring(contents, path)
-    assert(chunk, "Invalid app Lua: " .. tostring(err))
-    return path, contents
-end
-
-local files
-if appMode then
-    local names, source, parameter
-    if role == "apps" then
-        assert(not args[2] or args[2] == "--ref" and args[3] and not args[4], appsUsage)
-        names, source, parameter = catalog, args[2], args[3]
-    else
-        local name = args[2]
-        source, parameter = args[3], args[4]
-        assert(type(name) == "string" and name:match("^[%w_-]+$"), "Specify a simple app name without .lua")
-        assert(not source and not parameter
-            or (source == "--file" or source == "--ref") and parameter and not args[5]
-            or source and source:match("^%w+$") and not parameter, appUsage)
-        assert(name ~= "system", "System Overview is built into Settings")
-        assert(name ~= "level_emitter", "Level Emitter has been retired. Use Logic Sandbox for item rules.")
-        names = {name}
-    end
-    assert(fs.exists("main_os.lua") and fs.exists("lib_server.lua"), "Install apps on the central OS computer")
-    local configPath = "configs_os.txt"
-    local settings = storage.load(configPath)
-    if not settings then
-        assert(not backup.exists(configPath), "Unreadable OS settings")
-        settings = {}
-    end
-    if settings.enabledApps == nil then settings.enabledApps = {} end
-    assert(type(settings.enabledApps) == "table", "Invalid enabledApps setting")
-    files = {}
-    local downloads = {}
-    for _, name in ipairs(names) do
-        local path, contents = appSource(name, source, parameter)
-        downloads[path], sources[path] = contents, contents
-        files[#files + 1] = path
-        settings.enabledApps[name] = true
-    end
-    sources[configPath] = textutils.serialize(settings)
-    if role == "apps" then
-        downloads[configPath] = sources[configPath]
-        assert(backup.installApps(storage, downloads))
-        print("Installed and enabled " .. #names .. " SmartHome apps")
-        print("Restart the central OS to load them")
+local function install()
+    local role, autorun = args[1], false
+    local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
+    print("SmartHome installer: bundled-v53")
+    local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
+    local appsUsage = "Usage: inst apps [--ref REF]"
+    local restoreUsage = "Usage: inst restore [FILE] | inst restore io|monitor|sensor|relay CLIENT_ID [FILE]"
+    local appMode = role == "app" or role == "apps"
+    if not entry[role] and not appMode and role ~= "restore" and role ~= "space" then
+        print("Usage: inst server|io|monitor|sensor|relay [--startup]")
+        print(appUsage)
+        print(appsUsage)
+        print(restoreUsage)
+        print("inst space")
         return
     end
-    files[#files + 1] = configPath
-else
-    for index = 2, #args do
-        assert(args[index] == "--startup", "Usage: inst server|io|monitor|sensor|relay [--startup]")
-        autorun = true
+    assert(shell.dir() == "", "Run cd / first")
+    local function bundled(name)
+        local chunk = assert(loadstring(sources[name], name))
+        setfenv(chunk, getfenv(1))
+        return chunk()
     end
-    files = {"lib_work.lua", "lib_storage.lua", "lib_backup.lua", "lib_network.lua"}
-    if role == "server" or role == "monitor" then files[#files + 1] = "lib_gui.lua" end
-    if role == "server" then
-        files[#files + 1] = "lib_me.lua"
-        files[#files + 1] = "lib_console.lua"
-        files[#files + 1] = "lib_settings.lua"
-        files[#files + 1] = "lib_system.lua"
-        files[#files + 1] = "lib_alert_inbox.lua"
-        files[#files + 1] = "lib_io_history.lua"
-        files[#files + 1] = "lib_io_picker.lua"
-        files[#files + 1] = "lib_desktop.lua"
-        files[#files + 1] = "lib_server.lua"
-        files[#files + 1] = "lib_sensor_data.lua"
-        files[#files + 1] = "lib_sensor_server.lua"
-        files[#files + 1] = "lib_sensor_picker.lua"
-    elseif role == "io" then files[#files + 1] = "lib_io.lua"
-    elseif role == "sensor" then files[#files + 1] = "lib_sensor_data.lua"; files[#files + 1] = "lib_sensor.lua"
-    elseif role == "relay" then files[#files + 1] = "lib_relay.lua"
-    else files[#files + 1] = "lib_monitor.lua" end
-    files[#files + 1] = entry[role]
-    if autorun then
-        sources.startup = 'shell.setDir("/")\nshell.run("' .. entry[role] .. '")\n'
-        files[#files + 1] = "startup"
+    bundled("lib_codec.lua")
+    local storage = bundled("lib_storage.lua")
+    local backup = bundled("lib_backup.lua")
+    local update = bundled("tools_install_update.lua")
+    local bundledPaths = {["install.lua"] = true}
+    for path in pairs(sources) do bundledPaths[path] = true end
+    local pending = update.pending(storage)
+    if role == "space" then
+        local available = storage.freeSpace("install_pending.txt")
+        local copies, bytes = update.programCopies(storage, bundledPaths)
+        print(available and ("Free disk space: " .. available .. " bytes") or "Free disk space unavailable")
+        print("Old program copies: " .. #copies .. " / " .. bytes .. " bytes")
+        if pending then print("Pending update: " .. pending.command) end
+        return
     end
-end
-if not appMode then
-    -- Upgrade old folder-based installations without resetting IDs, apps or state.
-    -- Existing flat files take precedence; old files remain recovery copies.
-    local function existsAny(path)
-        return fs.exists(path) or fs.exists(path .. ".tmp") or fs.exists(path .. ".bak")
+    local command = "inst " .. table.concat(args, " ")
+    assert(not pending or pending.command == command, pending and ("Resume the update with " .. pending.command))
+    backup.recover(storage, true)
+    if role == "restore" then
+        local target, id, path = args[2], args[3], args[4]
+        if entry[target] and target ~= "server" then
+            assert(id and not args[5], restoreUsage)
+        else
+            assert(not path and (target == "server" or not id), restoreUsage)
+            if target == "server" then path = id else path = target end
+            target = "server"
+        end
+        path = path or "backup_os_all.txt"
+        local bundle = assert(backup.load(storage, path, "@all"),
+            "Entire OS backup missing or unreadable: " .. path)
+        local ok, err
+        if target == "server" then ok, err = backup.restoreServer(bundle, storage)
+        else ok, err = backup.restoreClient(bundle, storage, target, id) end
+        assert(ok, err)
+        print("Restored " .. target .. " from " .. path)
+        print("Run reboot to load the restored settings")
+        return
     end
-    local function addFile(path, contents)
-        sources[path] = contents
+    local function appSource(name, source, parameter)
+        local github = source == nil or source == "--ref"
+        local ref = source == "--ref" and parameter or "main"
+        assert(not github or ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)
+            and ref:sub(1, 1) ~= "/" and ref:sub(-1) ~= "/", "Invalid GitHub branch or commit")
+        local path = "apps_" .. name .. ".lua"
+        local contents
+        if github then
+            assert(http and type(http.get) == "function", "HTTP is disabled; GitHub app downloads need HTTP enabled")
+            local url = "https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/" .. ref .. "/" .. path
+            print("Downloading " .. path .. " from GitHub (" .. ref .. ")")
+            local function download(address)
+                -- A child coroutine catches native request errors without preventing
+                -- http.get from yielding on Lua 5.1. Terminate still aborts the install.
+                local request = coroutine.create(function() return http.get(address) end)
+                local result = {coroutine.resume(request)}
+                while result[1] and coroutine.status(request) ~= "dead" do
+                    result = {coroutine.resume(request, os.pullEvent(result[2]))}
+                end
+                if not result[1] then return nil, "Request error: " .. tostring(result[2]) end
+                local response = result[2] or result[4] -- Newer CC may return an error handle.
+                if not response then return nil, tostring(result[3] or "No response; CC supplied no reason") end
+                -- Reading/closing response handles does not yield, unlike http.get.
+                local ok, code, body = pcall(function()
+                    return response.getResponseCode and response.getResponseCode() or 200, response.readAll()
+                end)
+                local closed, closeError = pcall(response.close)
+                if not ok then return nil, "Cannot read response: " .. tostring(code) end
+                if not closed then return nil, "Cannot close response: " .. tostring(closeError) end
+                if code ~= 200 then return nil, "GitHub returned HTTP " .. tostring(code) end
+                if not result[2] then return nil, tostring(result[3] or "HTTP request failed") end
+                if type(body) ~= "string" or #body == 0 then return nil, "Empty app source" end
+                return body
+            end
+            local function checkLua(body)
+                if body == nil then return nil end
+                local chunk, err = loadstring(body, path)
+                if not chunk then return nil, "Invalid app Lua: " .. tostring(err) end
+                return body
+            end
+            local function apiSource(body)
+                -- Read only GitHub's known base64 content field; no JSON API or
+                -- execution of downloaded text is needed on old ComputerCraft.
+                if not body:match('"type"%s*:%s*"file"') or not body:match('"encoding"%s*:%s*"base64"')
+                    or body:match('"name"%s*:%s*"([^"]*)"') ~= path then
+                    return nil, "GitHub API did not return the requested base64 file"
+                end
+                local encoded = body:match('"content"%s*:%s*"([^"]*)"')
+                if not encoded then return nil, "GitHub API response has no file content" end
+                encoded = encoded:gsub("\\n", ""):gsub("\\r", ""):gsub("\\/", "/"):gsub("%s", "")
+                local padding = encoded:match("=*$")
+                local data = encoded:sub(1, #encoded - #padding)
+                if #encoded % 4 ~= 0 or #padding > 2 or data:find("[^A-Za-z0-9+/]") then
+                    return nil, "Invalid base64 in GitHub API response"
+                end
+                local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+                local output, value, bits = {}, 0, 0
+                for index = 1, #data do
+                    value, bits = value * 64 + alphabet:find(data:sub(index, index), 1, true) - 1, bits + 6
+                    if bits >= 8 then
+                        bits = bits - 8
+                        output[#output + 1] = string.char(math.floor(value / 2 ^ bits))
+                        value = value % 2 ^ bits
+                    end
+                    if index % 256 == 0 then Work.check(2048) end
+                end
+                local decoded = table.concat(output)
+                if value ~= 0 or tonumber(body:match('"size"%s*:%s*(%d+)')) ~= #decoded then
+                    return nil, "GitHub API file size/encoding mismatch"
+                end
+                if #decoded == 0 then return nil, "Empty app source" end
+                return decoded
+            end
+            local rawError, apiError, body
+            local apiUrl = "https://api.github.com/repos/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/contents/"
+                .. path .. "?ref=" .. ref
+            body, apiError = download(apiUrl)
+            if body then contents, apiError = apiSource(body) end
+            if contents then contents, apiError = checkLua(contents) end
+            if contents then
+                print("Downloaded via GitHub API")
+            else
+                print("GitHub API failed; trying raw download")
+                contents, rawError = download(url)
+                if contents then contents, rawError = checkLua(contents) end
+                if not contents then
+                    print("Raw: " .. tostring(rawError))
+                    print("API: " .. tostring(apiError))
+                    print("No response from both? Ask the server admin to check GitHub HTTPS access and the Java/server log.")
+                    error("GitHub app download failed; installed files were not changed", 0)
+                end
+                print("Downloaded via GitHub raw")
+            end
+        elseif source == "--file" then
+            local file = assert(fs.open(parameter, "r"), "Cannot read app source: " .. parameter)
+            contents = file.readAll(); file.close()
+        else
+            local temporary = path .. ".download"
+            if fs.exists(temporary) then fs.delete(temporary) end
+            assert(shell.run("pastebin", "get", source, temporary) and fs.exists(temporary), "Pastebin app download failed")
+            local file = assert(fs.open(temporary, "r"), "Cannot read downloaded app")
+            contents = file.readAll(); file.close()
+            fs.delete(temporary)
+        end
+        assert(type(contents) == "string" and #contents > 0, "Empty app source")
+        local chunk, err = loadstring(contents, path)
+        assert(chunk, "Invalid app Lua: " .. tostring(err))
+        return path, contents
+    end
+
+    local files, references = {}, {}
+    local function addFile(path, contents, original)
+        sources[path], references[path] = contents, original
         for _, present in ipairs(files) do if present == path then return end end
         files[#files + 1] = path
     end
-    local function readTable(path)
-        local value = storage.load(path)
-        assert(value or not existsAny(path), "Unreadable saved data: " .. path)
-        return value
-    end
-    local function migrate(target, legacy)
-        if existsAny(target) then return readTable(target), false end
-        if not existsAny(legacy) then return nil, false end
-        local value = assert(readTable(legacy))
-        addFile(target, textutils.serialize(value))
-        print("Migrating " .. legacy .. " to " .. target)
-        return value, true
-    end
-    migrate("configs_network.txt", "Configs/network.txt")
-    if role == "io" then migrate("configs_io.txt", "Configs/io.txt")
-    elseif role == "sensor" then migrate("configs_sensor.txt", "Configs/sensor.txt")
-    elseif role == "relay" then migrate("configs_relay.txt", "Configs/relay.txt")
-    elseif role == "monitor" then migrate("configs_monitor.txt", "Configs/monitor.txt")
-    else
-        local settings, migrated = migrate("configs_os.txt", "Configs/os.txt")
-        local legacyState = settings and settings.saveFile or "Configs/os_state.txt"
-        assert(type(legacyState) == "string", "Invalid saved state path")
-        migrate("configs_os_state.txt", legacyState)
-        if settings then
-            if settings.saveFile and settings.saveFile ~= "configs_os_state.txt" then
-                settings.saveFile = "configs_os_state.txt"
-                addFile("configs_os.txt", textutils.serialize(settings))
+    if appMode then
+        local names, source, parameter
+        if role == "apps" then
+            assert(not args[2] or args[2] == "--ref" and args[3] and not args[4], appsUsage)
+            names, source, parameter = catalog, args[2], args[3]
+        else
+            local name = args[2]
+            source, parameter = args[3], args[4]
+            assert(type(name) == "string" and name:match("^[%w_-]+$"), "Specify a simple app name without .lua")
+            assert(not source and not parameter
+                or (source == "--file" or source == "--ref") and parameter and not args[5]
+                or source and source:match("^%w+$") and not parameter, appUsage)
+            assert(name ~= "system", "System Overview is built into Settings")
+            assert(name ~= "level_emitter", "Level Emitter has been retired. Use Logic Sandbox for item rules.")
+            names = {name}
+        end
+        assert(fs.exists("main_os.lua") and fs.exists("lib_server.lua"), "Install apps on the central OS computer")
+        local configPath = "configs_os.txt"
+        for _, name in ipairs(names) do
+            local path, contents = appSource(name, source, parameter)
+            addFile(path, contents)
+        end
+        if not pending then
+            local settings = storage.load(configPath)
+            if not settings then
+                assert(not backup.exists(configPath), "Unreadable OS settings")
+                settings = {}
             end
-            if migrated then
-                assert(settings.enabledApps == nil or type(settings.enabledApps) == "table", "Invalid enabledApps setting")
-                for name, enabled in pairs(settings.enabledApps or {}) do
-                    if enabled == true and name ~= "system" and name ~= "level_emitter" then
-                        assert(type(name) == "string" and name:match("^[%w_-]+$"), "Invalid enabled app name")
-                        local path, oldPath = "apps_" .. name .. ".lua", "Apps/" .. name .. ".lua"
-                        if not fs.exists(path) and fs.exists(oldPath) then
-                            local file = assert(fs.open(oldPath, "r"), "Cannot read legacy app: " .. oldPath)
-                            local contents = file.readAll(); file.close()
-                            addFile(path, contents)
-                            print("Migrating enabled app: " .. name)
+            if settings.enabledApps == nil then settings.enabledApps = {} end
+            assert(type(settings.enabledApps) == "table", "Invalid enabledApps setting")
+            local changed = false
+            for _, name in ipairs(names) do
+                if settings.enabledApps[name] ~= true then changed = true; settings.enabledApps[name] = true end
+            end
+            if changed then addFile(configPath, Work.serialize(settings)) end
+        end
+    else
+        for index = 2, #args do
+            assert(args[index] == "--startup", "Usage: inst server|io|monitor|sensor|relay [--startup]")
+            autorun = true
+        end
+        -- Add the codec and then the startup guard before changing other files.
+        files = {"lib_codec.lua", "lib_backup.lua", "lib_work.lua", "lib_storage.lua", "lib_network.lua"}
+        if role == "server" or role == "monitor" then files[#files + 1] = "lib_gui.lua" end
+        if role == "server" then
+            files[#files + 1] = "lib_me.lua"
+            files[#files + 1] = "lib_console.lua"
+            files[#files + 1] = "lib_settings.lua"
+            files[#files + 1] = "lib_system.lua"
+            files[#files + 1] = "lib_alert_inbox.lua"
+            files[#files + 1] = "lib_io_history.lua"
+            files[#files + 1] = "lib_io_picker.lua"
+            files[#files + 1] = "lib_desktop.lua"
+            files[#files + 1] = "lib_server.lua"
+            files[#files + 1] = "lib_sensor_data.lua"
+            files[#files + 1] = "lib_sensor_server.lua"
+            files[#files + 1] = "lib_sensor_picker.lua"
+        elseif role == "io" then files[#files + 1] = "lib_io.lua"
+        elseif role == "sensor" then files[#files + 1] = "lib_sensor_data.lua"; files[#files + 1] = "lib_sensor.lua"
+        elseif role == "relay" then files[#files + 1] = "lib_relay.lua"
+        else files[#files + 1] = "lib_monitor.lua" end
+        files[#files + 1] = entry[role]
+        if autorun then
+            sources.startup = 'shell.setDir("/")\nshell.run("' .. entry[role] .. '")\n'
+            files[#files + 1] = "startup"
+        end
+    end
+    if pending then
+        for path, original in pairs(pending.references) do
+            addFile(path, assert(storage.readBytes(original), "Cannot resume migration from " .. original), original)
+        end
+        for path, contents in pairs(pending.settings) do addFile(path, contents) end
+    elseif not appMode then
+        -- Upgrade old folder-based installations without resetting IDs, apps or state.
+        -- Existing flat files take precedence; old files remain recovery copies.
+        local function existsAny(path)
+            return fs.exists(path) or fs.exists(path .. ".tmp") or fs.exists(path .. ".bak")
+        end
+        local function readTable(path)
+            local value, source, contents = storage.load(path)
+            assert(value or not existsAny(path), "Unreadable saved data: " .. path)
+            return value, source, contents
+        end
+        local function migrate(target, legacy)
+            if existsAny(target) then return readTable(target), false end
+            if not existsAny(legacy) then return nil, false end
+            local value, source, contents = readTable(legacy)
+            addFile(target, assert(contents), source)
+            print("Migrating " .. legacy .. " to " .. target)
+            return value, true
+        end
+        migrate("configs_network.txt", "Configs/network.txt")
+        if role == "io" then migrate("configs_io.txt", "Configs/io.txt")
+        elseif role == "sensor" then migrate("configs_sensor.txt", "Configs/sensor.txt")
+        elseif role == "relay" then migrate("configs_relay.txt", "Configs/relay.txt")
+        elseif role == "monitor" then migrate("configs_monitor.txt", "Configs/monitor.txt")
+        else
+            local settings, migrated = migrate("configs_os.txt", "Configs/os.txt")
+            local legacyState = settings and settings.saveFile or "Configs/os_state.txt"
+            assert(type(legacyState) == "string", "Invalid saved state path")
+            migrate("configs_os_state.txt", legacyState)
+            if settings then
+                if settings.saveFile and settings.saveFile ~= "configs_os_state.txt" then
+                    settings.saveFile = "configs_os_state.txt"
+                    addFile("configs_os.txt", Work.serialize(settings))
+                end
+                if migrated then
+                    assert(settings.enabledApps == nil or type(settings.enabledApps) == "table", "Invalid enabledApps setting")
+                    for name, enabled in pairs(settings.enabledApps or {}) do
+                        if enabled == true and name ~= "system" and name ~= "level_emitter" then
+                            assert(type(name) == "string" and name:match("^[%w_-]+$"), "Invalid enabled app name")
+                            local path, oldPath = "apps_" .. name .. ".lua", "Apps/" .. name .. ".lua"
+                            if not fs.exists(path) and fs.exists(oldPath) then
+                                addFile(path, assert(storage.readBytes(oldPath), "Cannot read legacy app: " .. oldPath), oldPath)
+                                print("Migrating enabled app: " .. name)
+                            end
                         end
                     end
                 end
             end
         end
     end
-end
--- Check every file before replacing any installed program.
-for _, path in ipairs(files) do
-    local contents = assert(sources[path], "Missing bundled file: " .. path)
-    if path:match("%.lua$") or path == "startup" then
-        local chunk, err = loadstring(contents, path)
-        assert(chunk, "Invalid Lua: " .. path .. ": " .. tostring(err))
-    else assert(type(textutils.unserialize(contents)) == "table", "Invalid settings: " .. path) end
-end
-for _, path in ipairs(files) do
-    assert(not path:find("/", 1, true), "Install targets must be root filenames")
-    local file = assert(fs.open(path .. ".download", "w"), "Cannot stage " .. path)
-    file.write(sources[path])
-    file.close()
-end
-for _, path in ipairs(files) do
-    if fs.exists(path) then
-        if fs.exists(path .. ".pre_update") then fs.delete(path .. ".pre_update") end
-        fs.move(path, path .. ".pre_update")
+    -- Check every file before replacing any installed program.
+    for _, path in ipairs(files) do
+        local contents = assert(sources[path], "Missing bundled file: " .. path)
+        if path:match("%.lua$") or path == "startup" then
+            local chunk, err = loadstring(contents, path)
+            assert(chunk, "Invalid Lua: " .. path .. ": " .. tostring(err))
+        else assert(type(textutils.unserialize(contents)) == "table", "Invalid settings: " .. path) end
+        Work.check(#contents)
     end
-    fs.move(path .. ".download", path)
-    print("Installed " .. path)
+    local changed, unchanged = update.apply(storage, files, sources, command, pending, references, bundledPaths)
+    print(changed .. " files updated, " .. unchanged .. " already current")
+    if appMode then
+        print(role == "app" and ("Installed and enabled user app: " .. args[2])
+            or ("Installed and enabled " .. #catalog .. " SmartHome apps"))
+        print("Restart the central OS to load it")
+        return
+    end
+    print("Installed " .. role .. " from the bundled files")
+    if autorun then
+        print("Autorun enabled")
+        print("Run reboot to start automatically")
+    else print("Autorun unchanged; add --startup to enable it") end
+    print("Start with: " .. entry[role])
 end
-if role == "app" then
-    print("Installed and enabled user app: " .. args[2])
-    print("Restart the central OS to load it")
-    return
-end
-print("Installed " .. role .. " from the bundled files")
-if autorun then
-    print("Autorun enabled; an existing startup is kept as startup.pre_update")
-    print("Run reboot to start automatically")
-else print("Autorun unchanged; add --startup to enable it") end
-print("Start with: " .. entry[role])
+
+if type(sleep) == "function" and coroutine.running() then
+    Work.enable(function() sleep(0) end)
+    local ok, err = Work.call(install)
+    Work.disable()
+    if not ok then error(err, 0) end
+else install() end

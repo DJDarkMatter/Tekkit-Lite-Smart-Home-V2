@@ -1,23 +1,114 @@
 -- Lua 5.1 / ComputerCraft 1.5. Only plain, serializable data belongs here.
 local storage = {}
 local Work = rawget(_G, "__smarthomeWork") or dofile("lib_work.lua")
+local Codec = rawget(_G, "__smarthomeCodec") or dofile("lib_codec.lua")
 local validatedContents = {}
+local checkpoints = {}
 
-local function readTable(path)
+function storage.readBytes(path)
     if not fs.exists(path) or fs.isDir(path) then return nil end
     local file = fs.open(path, "r")
     if not file then return nil end
     local contents = file.readAll()
     file.close()
+    return contents
+end
+
+local function readTable(path)
+    local contents = storage.readBytes(path)
+    if not contents then return nil end
     local ok, value = pcall(textutils.unserialize, contents)
-    if ok and type(value) == "table" then validatedContents[path] = contents; return value end
+    if ok and type(value) == "table" then validatedContents[path] = contents; return value, contents end
 end
 
 function storage.load(path, validate)
     for _, candidate in ipairs({path, path .. ".tmp", path .. ".bak"}) do
-        local value = readTable(candidate)
-        if value and (not validate or validate(value)) then return value, candidate end
+        local value, contents = readTable(candidate)
+        if value and (not validate or validate(value, candidate, contents)) then return value, candidate, contents end
     end
+end
+
+function storage.freeSpace(path)
+    if not fs.getFreeSpace then return nil end
+    local directory = path:match("^(.*)/[^/]+$") or ""
+    local bytes = fs.getFreeSpace(directory ~= "" and directory or "/")
+    if type(bytes) == "number" then return bytes end
+end
+
+function storage.writeVerified(path, contents)
+    assert(not fs.isDir(path), "Cannot replace directory " .. path)
+    local directory = path:match("^(.*)/[^/]+$") or ""
+    if directory ~= "" and not fs.exists(directory) then fs.makeDir(directory) end
+    local available = storage.freeSpace(path)
+    local existing = fs.exists(path) and (fs.getSize and fs.getSize(path) or #(storage.readBytes(path) or "")) or 0
+    if available and available + existing < #contents then
+        error("Not enough disk space for " .. path .. " (need " .. (#contents - existing)
+            .. " bytes free, have " .. available .. ")", 0)
+    end
+    local file = assert(fs.open(path, "w"), "Cannot write " .. path)
+    local wrote, err = pcall(file.write, contents)
+    local closed, closeError = pcall(file.close)
+    if not wrote or not closed or storage.readBytes(path) ~= contents then
+        pcall(fs.delete, path)
+        error("Write failed for " .. path .. ": " .. tostring(err or closeError or "incomplete file"), 0)
+    end
+end
+
+local function compactState(contents)
+    if #contents < 16384 then return contents end
+    local packed = Codec.pack(contents)
+    if not packed then return contents end
+    packed.format = "smarthome-os-state"
+    local encoded = Work.serialize(packed)
+    return #encoded < #contents and encoded or contents
+end
+
+function storage.loadState(path, validate)
+    local state, payload
+    local _, source, contents = storage.load(path, function(value, _, raw)
+        local decoded = raw
+        if value.format == "smarthome-os-state" then
+            local ok, result = Work.call(Codec.unpack, value)
+            if not ok then return false end
+            decoded, value = result, textutils.unserialize(result)
+        end
+        if type(value) ~= "table" or validate and not validate(value) then return false end
+        state, payload = value, decoded
+        return true
+    end)
+    checkpoints[path] = source == path and {raw = contents, payload = payload} or nil
+    return state, source, contents, payload
+end
+
+-- Rotate the previous verified state directly into its recovery file. The
+-- primary can then be replaced with two files' worth of space and no move.
+function storage.saveState(path, value, validate, forgetPrevious)
+    return Work.call(function()
+        local payload = Work.serialize(value)
+        local recovery, temporary = path .. ".bak", path .. ".tmp"
+        local source, raw, previous
+        local checkpoint = checkpoints[path]
+        if checkpoint and checkpoint.raw == storage.readBytes(path) then
+            source, raw, previous = path, checkpoint.raw, checkpoint.payload
+        else
+            local _
+            _, source, raw, previous = storage.loadState(path, validate)
+        end
+        if source and source ~= temporary and fs.exists(temporary) and not fs.isDir(temporary) then fs.delete(temporary) end
+        if source and source ~= recovery then
+            local bytes = raw == previous and compactState(previous) or raw
+            if storage.readBytes(recovery) ~= bytes then storage.writeVerified(recovery, bytes) end
+        end
+        if source == path and previous == payload and not forgetPrevious then return end
+        local contents = compactState(payload)
+        storage.writeVerified(path, contents)
+        checkpoints[path] = {raw = contents, payload = payload}
+        local cleared, err = pcall(function()
+            if forgetPrevious and fs.exists(recovery) and not fs.isDir(recovery) then fs.delete(recovery) end
+            if fs.exists(temporary) and not fs.isDir(temporary) then fs.delete(temporary) end
+        end)
+        if not cleared then return "State saved. Recovery cleanup failed: " .. tostring(err) end
+    end)
 end
 
 function storage.save(path, value, forgetPrevious)

@@ -53,9 +53,11 @@ Navigation and unfinished drafts are independent per OS window. Saved names, rou
 - **Move earlier / Move later**: changes home-card order.
 - **Delete view**: confirmed removal of its mappings. Shared switches in other views remain connected and retain their state; unused old wires turn OFF.
 
+The switch editor groups six equal-size buttons in two columns. On small windows, **Route**, **Mode**, **States** and **Clear** shorten the corresponding labels.
+
 Routing uses **IO client → side → color → Use** in the shared OS selector. Custom switches also support Digital/ordinary redstone, using the unwired tile color by default. Changing a route removes this reference from the old wire, which clears only when its final reference is gone. The new route adopts the state of an existing wire, or starts OFF if unused. Re-selecting an unchanged valid route preserves its state. Disconnect requires confirmation. User labels survive rerouting; default labels follow the selected color.
 
-**Color** (or **Button color** in wide windows) opens a palette for that switch's tile fill. Select one of the sixteen colors, then **Apply** (**Save** on tiny windows). **Auto** (**IO default** on wide windows), followed by Apply, removes the override: bundled tiles follow their routed wire color; Digital and unconnected tiles follow the app's unwired color. Cancel/Back discards the draft. A sample of the actual switch appears below the swatches when at least 24×15 content characters fit. Active/inactive status strips keep their existing meanings and colors.
+**Color** opens a palette for that switch's tile fill. The editor shows a small swatch beside the label when it fits. Select one of the sixteen colors, then **Apply** (**Save** on tiny windows). **Auto** (**IO default** on wide windows), followed by Apply, restores the default fill for that route. Cancel/Back discards the draft. A sample of the switch appears below the swatches when at least 24×15 content characters fit.
 
 The editor continues to display the actual IO client, side and routed wire color, independently of the appearance selection. Changing appearance does not rename, reroute or toggle anything. Overrides survive rerouting, disconnecting, grid changes and restarts. They belong to each saved switch: two views can show the same wire in different colors, while every monitor displaying the same view sees its saved appearance. Concurrent color changes are checked before saving, and a stale draft cannot overwrite a newer selection from another window.
 

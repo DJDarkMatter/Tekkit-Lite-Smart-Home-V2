@@ -102,10 +102,18 @@ function Network.new(config, isServer, logger)
     assert(config.relayEnabled == nil or type(config.relayEnabled) == "boolean", "Invalid relayEnabled setting")
     local storage = dofile("lib_storage.lua")
     local path = "configs_transport.txt"
-    local boot = storage.config(path, {bootCounter = 0})
-    assert(integer(boot.bootCounter, 0, 2147483646), "Invalid transport boot counter")
+    local function validBoot(value) return integer(value.bootCounter, 0, 2147483647) end
+    local boot = storage.loadState(path, validBoot)
+    if not boot then
+        for _, suffix in ipairs({"", ".tmp", ".bak"}) do
+            assert(not fs.exists(path .. suffix), "Unreadable transport boot counter: " .. path .. suffix)
+        end
+        boot = {bootCounter = 0}
+    end
+    assert(boot.bootCounter < 2147483647, "Transport boot counter exhausted")
     boot.bootCounter = boot.bootCounter + 1
-    assert(storage.save(path, boot), "Cannot checkpoint network startup")
+    local saved, err = storage.saveState(path, boot, validBoot)
+    assert(saved, "Cannot checkpoint network startup: " .. tostring(err))
     local net = {id = os.getComputerID(), config = config, isServer = isServer, bootCounter = boot.bootCounter}
     if filterLegacyRednet(net.id) then log("CraftOS 1.5 Rednet channel filter active") end
     -- Destination IDs still disambiguate computers if reply channels collide.

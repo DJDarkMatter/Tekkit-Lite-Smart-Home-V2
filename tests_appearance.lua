@@ -91,16 +91,33 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         assert(hits[1].y2>hits[1].y1)
     end
 
-    function tests.v49_launcher_stays_single_column_and_layout_and_palette_keep_large_choices()
+    function tests.v51_launcher_stays_single_column_with_two_row_choices_on_roomy_monitors()
+        local Gui=dofile("lib_gui.lua")
         local apps={}
-        for i=1,12 do apps[i]={label="App "..i,value=i,enabled=true} end
-        for _,size in ipairs({{51,19},{128,70}}) do
-            local rect,_,hits,_,pages=Desktop.menu({width=size[1],height=size[2]},"Start",apps,1)
-            equal(pages,1); assert(rect.width<=22 and rect.height<=14)
-            for i,hit in ipairs(hits) do
-                equal(hit.x1,rect.x); equal(hit.y1,hit.y2)
-                equal(hit.item.value,i)
-                if i>1 then equal(hit.y1,hits[i-1].y1+1) end
+        for i=1,13 do apps[i]={label=i==5 and "Settings" or "App "..i,value=i,enabled=true} end
+        for _,size in ipairs({{15,10,1},{51,19,2},{128,70,2}}) do
+            for _,position in ipairs({"top","bottom"}) do
+                local mon={width=size[1],height=size[2],taskbarPosition=position}
+                local area=Desktop.area(mon)
+                local page,index=1,0
+                repeat
+                    local rect,_,hits,_,pages=Desktop.menu(mon,"Start",apps,page)
+                    assert(rect.width<=22 and rect.height<=area.height)
+                    local previous
+                    for _,hit in ipairs(hits) do
+                        if hit.item then
+                            index=index+1
+                            equal(hit.x1,rect.x); equal(hit.x2,rect.x+rect.width-1)
+                            equal(hit.y2-hit.y1+1,size[3]); equal(hit.item.value,index)
+                            if previous then equal(hit.y1,previous.y2+1) end
+                            equal(Gui.actionAt(hits,hit.x2,hit.y2),"item")
+                            previous=hit
+                        else equal(hit.y1,hit.y2) end
+                    end
+                    if page==pages then break end
+                    page=page+1
+                until false
+                equal(index,#apps)
             end
         end
         local t=setup(true,58,25)
@@ -111,7 +128,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             error("Missing menu item "..value)
         end
         local entry=menuItem("coffee",model)
-        equal(entry.y2,entry.y1)
+        equal(entry.y2,entry.y1+1)
         t.touch("top",entry.x2,entry.y2)
         local id,win=next(t.central.server.state.windows)
         equal(win.appName,"coffee")
@@ -267,6 +284,87 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         end
         local path=Gui.breadcrumb({string.rep("x",64),"bottom",string.rep("y",80)},30,10)
         assert(#path<=30); assert(path:find("bottom",1,true)); equal(Gui.breadcrumb({"x"},23,10),nil)
+    end
+
+    function tests.v51_io_picker_keeps_equal_rows_and_paints_swatches_inside_each_choice()
+        local Gui, IO = dofile("lib_gui.lua"), dofile("lib_io_picker.lua")
+        local clients = {}
+        for i = 1, 19 do clients[i] = {id = "io_" .. i, online = true} end
+        for _, size in ipairs({{12, 6}, {31, 12}, {49, 21}, {63, 42}}) do
+            local width, height = unpack(size)
+            for _, stage in ipairs({1, 3}) do
+                local dialog = IO.new("route", "output", {clientId = "io_1", side = "top"})
+                dialog.stage = stage
+                local span, depth, count = nil, nil, 0
+                repeat
+                    local lines = IO.render(dialog, width, height, clients)
+                    local surface = Gui.new(width, height, 1, 32768)
+                    for _, paint in ipairs(lines.styles) do
+                        surface.style(paint.x, paint.y, paint.width, paint.height, paint.fg, paint.bg)
+                    end
+                    local nextPage
+                    for _, hit in ipairs(dialog.hits) do
+                        if hit.action == "select" then
+                            count = count + 1
+                            span, depth = span or hit.x2 - hit.x1 + 1, depth or hit.y2 - hit.y1 + 1
+                            equal(hit.x2 - hit.x1 + 1, span); equal(hit.y2 - hit.y1 + 1, depth)
+                            local swatch = stage == 3 and hit.value
+                            for y = hit.y1, hit.y2 do for x = hit.x1, hit.x2 do
+                                local bg = swatch and x < hit.x1 + 2 and swatch or 128
+                                equal(surface.background[y]:sub(x, x), Gui.code(bg))
+                            end end
+                        elseif hit.action == "next" and hit.enabled then nextPage = hit end
+                    end
+                    if not nextPage then break end
+                    local previous = dialog.page
+                    IO.touch(dialog, nextPage.x2, nextPage.y2)
+                    equal(dialog.page, previous + 1)
+                until false
+                equal(count, stage == 1 and #clients or 17)
+            end
+        end
+    end
+
+    function tests.v51_keyboard_and_palette_draw_even_keys_without_painting_over_the_next_row()
+        local Gui = dofile("lib_gui.lua")
+        for _, size in ipairs({{12, 6}, {19, 8}, {39, 14}, {53, 19}, {55, 23}, {63, 27}}) do
+            local width, height = unpack(size)
+            local ui = Gui.form(width, height, {}, 2048)
+            ui.keyboard({draft = "Switch", bank = 0, page = 1, back = "home"})
+            local lines, hits = ui.finish()
+            local surface = Gui.new(width, height, 1, 32768)
+            for _, paint in ipairs(lines.styles) do
+                surface.style(paint.x, paint.y, paint.width, paint.height, paint.fg, paint.bg)
+            end
+            local keyWidth, keyHeight, lastKey, space, save
+            for _, hit in ipairs(hits) do
+                if hit.action == "key" then
+                    keyWidth = keyWidth or hit.x2 - hit.x1 + 1
+                    keyHeight = keyHeight or hit.y2 - hit.y1 + 1
+                    equal(hit.x2 - hit.x1 + 1, keyWidth)
+                    equal(hit.y2 - hit.y1 + 1, keyHeight)
+                    lastKey = math.max(lastKey or 0, hit.y2)
+                elseif hit.action == "space" then space = hit
+                elseif hit.action == "saveText" then save = hit end
+                local bg = Gui.code(hit.paint.bg)
+                for y = hit.y1, hit.y2 do
+                    equal(surface.background[y]:sub(hit.x1, hit.x2), bg:rep(hit.x2 - hit.x1 + 1))
+                end
+            end
+            assert(space.y1 > lastKey)
+            if height >= 14 then assert(space.y1 > lastKey + 1) end
+            if height >= 12 then assert(save.y1 > space.y2 + 1) end
+            local _, swatches = Gui.palette(width, height, 2048, "Color", height - 1)
+            local count, swatchWidth, swatchHeight = 0, nil, nil
+            for _, hit in ipairs(swatches) do
+                count = count + 1
+                swatchWidth = swatchWidth or hit.x2 - hit.x1 + 1
+                swatchHeight = swatchHeight or hit.y2 - hit.y1 + 1
+                equal(hit.x2 - hit.x1 + 1, swatchWidth)
+                equal(hit.y2 - hit.y1 + 1, swatchHeight)
+            end
+            equal(count, 16)
+        end
     end
 
     function tests.appearance_os_settings_is_in_start_without_enabling_user_apps_and_survives_reboot()
@@ -618,7 +716,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.api.getOSSettings().taskbarColour, 1)
         equal(t.top.fg[t.top.height][t.top.width], 32768, "A white taskbar needs black text")
         equal(t.api.setWindowBorderColour(3), false); equal(t.api.setTaskbarColour("red"), false)
-        local saved = unserialize(t.central.disk.files["configs_os_state.txt"])
+        local saved = t.central.savedState()
         saved.appearance.windowBorderColour, saved.appearance.taskbarColour = nil, 3
         saved.appStates.coffee.remainingTime = 4321
         t.central.disk.files["configs_os_state.txt"] = serialize(saved)
@@ -918,10 +1016,13 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(id, "data"); t.click(id, "resetData")
         t.click(id, "selectScope", function(item) return item.id == "@all" end)
         t.click(id, "confirmAgain")
-        local move = t.central.env.fs.move
-        t.central.env.fs.move = function(from, to)
-            if from:sub(-6) == ".reset" then error("Simulated reset replacement failure") end
-            return move(from, to)
+        local open = t.central.env.fs.open
+        t.central.env.fs.open = function(path, mode)
+            local file = open(path, mode)
+            if path == "configs_os_state.txt" and mode == "w" then
+                file.write = function() error("Simulated reset replacement failure") end
+            end
+            return file
         end
         t.click(id, "commit")
         equal(state.appStates.coffee.totalHarvests, 73)

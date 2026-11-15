@@ -169,14 +169,23 @@ local function newBus()
             end
         end}
         local disk = comp.disk
+        local function freeSpace()
+            if not disk.capacity then return math.huge end
+            local used = 0
+            for _, value in pairs(disk.files) do used = used + #value end
+            return math.max(0, disk.capacity - used)
+        end
         env.fs = {
             exists = function(path) return disk.files[path] ~= nil or disk.dirs[path] == true end,
             isDir = function(path) return disk.dirs[path] == true end,
+            getFreeSpace = freeSpace,
+            getSize = function(path) return #(disk.files[path] or "") end,
             makeDir = function(path) disk.dirs[path] = true end,
             delete = function(path) disk.files[path], disk.dirs[path] = nil, nil end,
             move = function(from, to)
                 if disk.failMove and from:sub(-4) == ".tmp" then error("Simulated interrupted replace") end
                 assert(disk.files[from] ~= nil and disk.files[to] == nil, "Invalid move")
+                if disk.copyMove and #disk.files[from] > freeSpace() then error("Copy failed.") end
                 disk.files[to], disk.files[from] = disk.files[from], nil
             end,
             list = function(path)
@@ -200,7 +209,10 @@ local function newBus()
                 if mode == "w" then
                     if disk.failWrite then return nil end
                     disk.files[path] = ""
-                    return {write = function(value) disk.files[path] = disk.files[path] .. value end, close = function() end}
+                    return {write = function(value)
+                        if disk.capacity and #value > freeSpace() then error("Out of space") end
+                        disk.files[path] = disk.files[path] .. value
+                    end, close = function() end}
                 end
                 if disk.files[path] == nil then return nil end
                 return {readAll = function() return disk.files[path] end, close = function() end}
@@ -358,6 +370,10 @@ local function newBus()
             assert(ok, "Boot computer " .. id .. ": " .. tostring(err))
             bus.pump()
             return comp
+        end
+        function comp.savedState()
+            local saved = env.dofile("lib_storage.lua").loadState("configs_os_state.txt")
+            return saved
         end
         return comp
     end
@@ -534,7 +550,7 @@ function tests.background_clock_fault_isolation_and_periodic_save_without_networ
     bus.advance(31)
     equal(os.server.state.appStates.clock.elapsed, 31)
     equal(os.server.state.appStates.clock.ticks, 62)
-    local saved = unserialize(os.disk.files["configs_os_state.txt"])
+    local saved = os.savedState()
     equal(saved.appStates.clock.elapsed, 31)
 end
 function tests.apps_are_disabled_by_default_even_with_an_old_enabled_registry()
@@ -632,10 +648,18 @@ function tests.failed_save_does_not_command_hardware_and_interrupted_save_recove
     os.disk.failWrite = false
     assert(os.server.api.setOutput("test", true)); bus.pump()
     bus.advance(1.3)
-    os.disk.failMove = true
+    local open = os.env.fs.open
+    os.env.fs.open = function(path, mode)
+        local file = open(path, mode)
+        if path == "configs_os_state.txt" and mode == "w" then
+            file.write = function() error("Interrupted state write") end
+        end
+        return file
+    end
+    os.server.state.appearance.backgroundColour = 16
     equal(os.server.save(), false)
-    assert(os.disk.files["configs_os_state.txt.tmp"])
-    os.disk.failMove = false
+    assert(os.disk.files["configs_os_state.txt.bak"])
+    equal(os.disk.files["configs_os_state.txt.tmp"], nil)
     os = bus.computer(10, "server", {disk = os.disk}):start()
     bus.advance(5)
     equal(io.bundled.left, 1)
@@ -833,7 +857,8 @@ function tests.installer_installs_every_role_from_downloaded_files_and_keeps_con
         for path in pairs(comp.disk.files) do assert(not path:match("^apps_"), "Installer downloaded an app") end
         equal(comp.disk.files["configs_network.txt"], existing)
         equal(comp.disk.files.startup, "-- previous startup")
-        equal(comp.disk.files[entry .. ".pre_update"], "-- previous program")
+        equal(comp.disk.files[entry .. ".pre_update"], nil)
+        equal(comp.disk.files["install.lua"], nil, "The small installer runs the bundle in memory")
         -- Boot only what was downloaded, so missing role dependencies cannot hide.
         comp.env.loadfile = function(path)
             local contents = comp.disk.files[path]
@@ -892,7 +917,7 @@ function tests.installer_uses_only_the_v2_root_bundle_for_every_role()
         assert(role == "server" and comp.server or comp.client)
     end
 end
-function tests.installer_startup_flag_selects_role_and_preserves_previous_boot_script()
+function tests.installer_startup_flag_selects_role_without_leaving_program_copies()
     for _, role in ipairs(roleNames) do
         local bus = newBus()
         local comp = bus.computer(10, role)
@@ -908,7 +933,7 @@ function tests.installer_startup_flag_selects_role_and_preserves_previous_boot_s
             return {readAll = function() return contents end, close = function() end}
         end}
         assert(comp.env.loadfile("tools_install_github.lua"))(role, "--startup")
-        equal(comp.disk.files["startup.pre_update"], "-- original startup")
+        equal(comp.disk.files["startup.pre_update"], nil)
         local chunk = assert(loadstring(comp.disk.files.startup))
         setfenv(chunk, comp.env); chunk()
         equal(selectedDir, "/")
@@ -929,8 +954,8 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp.disk.files[expectedProgram] = "-- old program"
         assert(comp.env.loadfile("install.lua"))(role, "--startup")
         for path in pairs(comp.disk.files) do assert(not path:match("^apps_"), "Installer bundled an app") end
-        equal(comp.disk.files[expectedProgram .. ".pre_update"], "-- old program")
-        equal(comp.disk.files["startup.pre_update"], "-- old startup")
+        equal(comp.disk.files[expectedProgram .. ".pre_update"], nil)
+        equal(comp.disk.files["startup.pre_update"], nil)
         equal(comp.disk.files["configs_network.txt"], '{networkId="saved-home",channel=45231}')
         assert(comp.disk.files.startup:find(expectedProgram, 1, true))
         -- Use only the extracted files to boot, not the host repository sources.
@@ -944,7 +969,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v50", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v53", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -993,8 +1018,8 @@ function tests.app_installer_fetches_only_the_requested_app_and_defers_execution
     install("app", "test_app", "UserPaste")
     equal(downloads, 1)
     equal(comp.disk.files["apps_test_app.lua"], app)
-    equal(comp.disk.files["apps_test_app.lua.pre_update"], "-- previous user app")
-    equal(comp.disk.files["configs_os.txt.pre_update"], previousSettings)
+    equal(comp.disk.files["apps_test_app.lua.pre_update"], nil)
+    equal(comp.disk.files["configs_os.txt.pre_update"], nil)
     equal(comp.disk.files.startup, startup)
     equal(comp.env.userAppExecuted, nil, "Installing must not execute app code")
     local settings = unserialize(comp.disk.files["configs_os.txt"])
@@ -1050,16 +1075,19 @@ function tests.v49_bulk_app_install_downloads_every_catalog_entry_and_rolls_back
     equal(comp.disk.files["apps_coffee.lua"],"-- previous Coffee")
     equal(comp.disk.files["apps_clock.lua"],nil)
     failedDownload=false
-    local move=comp.env.fs.move
-    comp.env.fs.move=function(from,to)
-        if from=="apps_coffee.lua.restore_new" then error("Test swap failure") end
-        return move(from,to)
+    local open, failed=comp.env.fs.open, false
+    comp.env.fs.open=function(path,mode)
+        local file = open(path,mode)
+        if path=="apps_coffee.lua" and mode=="w" and not failed then
+            file.write=function() failed=true; error("Test swap failure") end
+        end
+        return file
     end
     assert(not pcall(install,"apps"))
     equal(comp.disk.files["apps_coffee.lua"],"-- previous Coffee")
     equal(comp.disk.files["apps_clock.lua"],nil)
     equal(comp.disk.files["configs_os.txt"],config)
-    comp.env.fs.move=move
+    comp.env.fs.open=open
     requests={}
     install("apps")
     local settings=assert(unserialize(comp.disk.files["configs_os.txt"]))
@@ -1071,7 +1099,7 @@ function tests.v49_bulk_app_install_downloads_every_catalog_entry_and_rolls_back
         count=count+1
     end
     equal(count,12)
-    equal(comp.disk.files["apps_coffee.lua.pre_update"],"-- previous Coffee")
+    equal(comp.disk.files["apps_coffee.lua.pre_update"],nil)
 end
 function tests.app_installer_downloads_actual_switchboard_and_boots_it_with_only_extracted_core_files()
     local bus = newBus()
@@ -1133,8 +1161,8 @@ function tests.app_installer_github_default_downloads_one_app_without_running_or
     equal(downloads, 1); equal(closed, true)
     equal(comp.env.githubAppExecuted, nil, "Installing only compiles app code")
     equal(comp.disk.files["apps_test_app.lua"], app)
-    equal(comp.disk.files["apps_test_app.lua.pre_update"], "-- original app")
-    equal(comp.disk.files["configs_os.txt.pre_update"], settings)
+    equal(comp.disk.files["apps_test_app.lua.pre_update"], nil)
+    equal(comp.disk.files["configs_os.txt.pre_update"], nil)
     equal(comp.disk.files["configs_os_state.txt"], saved, "Downloading an update preserves app progress")
     equal(comp.disk.files.startup, startup)
     local enabled = unserialize(comp.disk.files["configs_os.txt"])
@@ -1331,7 +1359,7 @@ function tests.app_installer_can_install_a_local_file_without_network()
 end
 function tests.app_installer_failures_preserve_existing_code_and_settings()
     local expectedError = {syntax = "Invalid app Lua", download = "Pastebin app download failed",
-        settings = "Invalid enabledApps setting", staging = "Cannot stage apps_test_app.lua",
+        settings = "Invalid enabledApps setting", staging = "Cannot write install_plan.txt",
         name = "Specify a simple app name", wrong_computer = "Install apps on the central OS computer"}
     for _, reason in ipairs({"syntax", "download", "settings", "staging", "name", "wrong_computer"}) do
         local bus = newBus()
@@ -1449,6 +1477,136 @@ function tests.flat_upgrade_rejects_corrupt_legacy_data_and_failed_staging_witho
         equal(comp.disk.files["main_os.lua"], "-- previous OS entry point")
     end
 end
+local function diskBytes(disk)
+    local bytes = 0
+    for _, contents in pairs(disk.files) do bytes = bytes + #contents end
+    return bytes
+end
+
+function tests.v53_small_installer_reclaims_old_program_copies_and_updates_under_quota()
+    local comp = newBus().computer(10, "server")
+    comp.env.shell = {dir = function() return "" end}
+    local install = assert(comp.env.loadfile("install.lua"))
+    install("server")
+    local disk = comp.disk
+    local oldServer = disk.files["lib_server.lua"]
+    disk.files["lib_server.lua"] = oldServer .. "\n-- old version"
+    disk.files["lib_server.lua.pre_update"] = oldServer
+    disk.files["main_os.lua.download"] = disk.files["main_os.lua"]
+    disk.files["apps_coffee.lua"] = "return {}"
+    disk.files["apps_coffee.lua.restore_new"] = "-- abandoned app stage"
+    disk.files["apps_custom.lua.pre_update"] = "-- only copy of an old app"
+    disk.files["configs_os_state.txt"] = serialize({appStates = {coffee = {totalHarvests = 44}}})
+    disk.files["configs_os.txt"] = serialize({enabledApps = {coffee = true}, customSetting = "keep"})
+    disk.files["backup_os_all.txt"] = "user's backup"
+    disk.files.startup = "-- custom autorun"
+    local state, config, startup = disk.files["configs_os_state.txt"], disk.files["configs_os.txt"], disk.files.startup
+    local file = assert(io.open("install.lua", "r"))
+    local bundle = file:read("*a"); file:close()
+    disk.files["install_plan.txt"] = "interrupted before any program changed"
+    disk.capacity, disk.copyMove = diskBytes(disk) + 1024, true
+    assert(#bundle > comp.env.fs.getFreeSpace("/") + #oldServer)
+    comp.env.http = {get = function(url)
+        assert(url:find("/test%-release/install%.lua$"), url)
+        return {readAll = function() return bundle end, close = function() end}
+    end}
+    local small = assert(comp.env.loadfile("tools_install_github.lua"))
+    small("--installer-ref", "test-release", "space")
+    assert(disk.files["lib_server.lua.pre_update"], "A storage report is read-only")
+    small("--installer-ref", "test-release", "server")
+    equal(disk.files["lib_server.lua"], oldServer)
+    for _, path in ipairs({"install.lua", "install_pending.txt", "install_plan.txt", "lib_server.lua.pre_update", "main_os.lua.download",
+        "apps_coffee.lua.restore_new"}) do equal(disk.files[path], nil, path) end
+    equal(disk.files["apps_custom.lua.pre_update"], "-- only copy of an old app")
+    equal(disk.files["configs_os_state.txt"], state)
+    equal(disk.files["configs_os.txt"], config)
+    equal(disk.files["backup_os_all.txt"], "user's backup")
+    equal(disk.files.startup, startup)
+    assert(comp.env.fs.getFreeSpace("/") > #oldServer)
+    disk.failWrite = true
+    small("--installer-ref", "test-release", "server")
+end
+
+function tests.v53_interrupted_update_blocks_boot_and_resumes_the_same_command()
+    local bus = newBus()
+    local comp = bus.computer(10, "server")
+    comp.env.shell = {dir = function() return "" end}
+    local install = assert(comp.env.loadfile("install.lua"))
+    install("server")
+    local disk = comp.disk
+    local backup, server = disk.files["lib_backup.lua"], disk.files["lib_server.lua"]
+    disk.files["lib_backup.lua"] = backup .. "\n-- old backup"
+    disk.files["lib_server.lua"] = server .. "\n-- old server"
+    disk.files["configs_os_state.txt"] = serialize({clientNames = {io_11 = "Pump"}})
+    local state = disk.files["configs_os_state.txt"]
+    comp.env.sleep = function() coroutine.yield("cooperate") end
+    local display = comp.env.print
+    comp.env.print = function(line)
+        display(line)
+        if line == "Installed lib_backup.lua" then coroutine.yield("power lost") end
+    end
+    local thread = coroutine.create(function() install("server") end)
+    for attempt = 1, 1000 do
+        local ok, event = coroutine.resume(thread)
+        assert(ok, event)
+        if event == "power lost" then break end
+        equal(event, "cooperate")
+    end
+    equal(coroutine.status(thread), "suspended")
+    equal(disk.files["lib_backup.lua"], backup)
+    equal(disk.files["lib_server.lua"], server .. "\n-- old server")
+    assert(disk.files["install_pending.txt"])
+    local restarted = bus.computer(10, "server", {disk = disk})
+    restarted.env.shell = {dir = function() return "" end}
+    local started, bootError = pcall(restarted.start)
+    assert(not started and tostring(bootError):find("Update interrupted", 1, true))
+    local resume = assert(restarted.env.loadfile("install.lua"))
+    local wrong, resumeError = pcall(resume, "io")
+    assert(not wrong and tostring(resumeError):find("Resume the update with inst server", 1, true))
+    resume("server")
+    equal(disk.files["install_pending.txt"], nil)
+    equal(disk.files["install_plan.txt"], nil)
+    equal(disk.files["lib_server.lua"], server)
+    equal(disk.files["configs_os_state.txt"], state)
+    restarted:start()
+    equal(restarted.server.api.clientName("io_11"), "Pump")
+end
+
+function tests.v53_boots_with_only_counter_space_then_compacts_the_legacy_state_safely()
+    local bus = newBus()
+    local comp = bus.computer(10, "server")
+    local rows, path = {}, "configs_os_state.txt"
+    for i = 1, 800 do rows[i] = {id = i, text = "Example repeated configuration value for a large notes collection"} end
+    local saved = {bootCounter = 120, appStates = {notes = {rows = rows}}, clientNames = {sensor_14 = "Solar farm"}}
+    local legacy = serialize(saved)
+    local disk = comp.disk
+    disk.files[path] = legacy
+    disk.files["configs_os.txt"] = serialize({enabledApps = {}})
+    disk.files["configs_network.txt"] = serialize({networkId = "home", channel = 45231})
+    disk.files["configs_transport.txt"] = serialize({bootCounter = 12})
+    disk.capacity, disk.copyMove = diskBytes(disk) + 2048, true
+    local storage = comp.env.dofile("lib_storage.lua")
+    local old, err = storage.save(path, saved)
+    assert(not old and tostring(err):find("Out of space", 1, true))
+    comp:start()
+    equal(disk.files[path], legacy, "Boot must leave the old live state alone")
+    equal(comp.server.api.clientName("sensor_14"), "Solar farm")
+    equal(comp.server.session, "10:net:13")
+    local stored, reason = comp.server.save()
+    assert(not stored and tostring(reason):find("Not enough disk space", 1, true))
+    equal(disk.files[path], legacy)
+    disk.capacity = diskBytes(disk) + math.floor(#legacy * 0.7)
+    assert(comp.server.save())
+    assert(#disk.files[path] + #disk.files[path .. ".bak"] < #legacy, "Both compact states fit where one old stage did not")
+    equal(disk.files[path .. ".tmp"], nil)
+    equal(comp.savedState().appStates.notes.rows[800].text, rows[800].text)
+    disk.files[path] = "interrupted write"
+    local recovered = bus.computer(10, "server", {disk = disk}):start()
+    equal(recovered.server.session, "10:net:14")
+    equal(recovered.server.state.appStates.notes.rows[800].id, 800)
+    equal(recovered.server.api.clientName("sensor_14"), "Solar farm")
+end
+
 assert(hostLoadfile("tests_coffee.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_desktop.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_appearance.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)

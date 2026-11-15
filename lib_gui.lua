@@ -119,16 +119,14 @@ local function expandRows(lines, hits, width, height)
         free = free - sizes[y]
     end
     if free == 0 then return end
-    local remaining = free
-    -- Give available rows to the content and actions before navigation.
-    for depth = 2, target do
-        for y = 1, height do
-            if remaining > 0 and controls[y] and not locked[y] then
-                sizes[y], remaining = depth, remaining - 1
-            end
-        end
-    end
-    if remaining == free then return end
+    local count = 0
+    for y = 1, height do if controls[y] and not locked[y] then count = count + 1 end end
+    if count == 0 then return end
+    local added = math.min(target - 1, math.floor(free / count))
+    if added == 0 then return end
+    -- A partially filled group of taller rows makes equal choices look different.
+    for y = 1, height do if controls[y] and not locked[y] then sizes[y] = 1 + added end end
+    local remaining = free - added * count
     local first, last, centre, rows = {}, {}, {}, {}
     local row, blanks = 1, 0
     local empty = string.rep(" ", width)
@@ -206,75 +204,16 @@ local function wrapButtons(lines, hits)
     end
 end
 
--- Use dark gutters for adjoining controls that have no room for a gap.
-local function separateButtons(lines, hits, height)
-    local starts, ends, empty, striped = {}, {}, {}, {}
-    local function seam(hit, x, y, w, h)
-        lines.styles[#lines.styles + 1] = {x=x,y=y,width=w,height=h,bg=hit.paint.bg==32768 and 128 or 32768}
-    end
-    local function blank(x1, x2, first, last)
-        for y = first, last do
-            if lines[y]:sub(x1, x2):find("%S") then return false end
-        end
-        return true
-    end
-    for _, hit in ipairs(hits) do
-        if hit.paint then
-            local top, bottom = hit.y1 or hit.y, hit.y2 or hit.y
-            starts[top], ends[bottom] = starts[top] or {}, ends[bottom] or {}
-            table.insert(starts[top], hit); table.insert(ends[bottom], hit)
-        end
-    end
-    for y = 1, height do
-        local row = starts[y]
-        if row then
-            table.sort(row, function(a,b) return a.x1 < b.x1 end)
-            for index, hit in ipairs(row) do
-                local paint = hit.paint
-                local left = row[index - 1]
-                local above
-                for _, previous in ipairs(ends[y - 1] or empty) do
-                    if previous.x1 <= hit.x2 and previous.x2 >= hit.x1 and previous.paint.bg == paint.bg then
-                        above = previous
-                        break
-                    end
-                end
-                if above then
-                    local x1, x2 = math.max(above.x1, hit.x1), math.min(above.x2, hit.x2)
-                    if blank(x1,x2,y,y) then seam(hit,x1,y,x2-x1+1,1)
-                    elseif blank(x1,x2,y-1,y-1) then seam(above,x1,y-1,x2-x1+1,1)
-                    elseif paint.bg == 128 and above.x1 == hit.x1 and above.x2 == hit.x2 then
-                        paint.bg, paint.fg = 32768, 1
-                    elseif not striped[above] then
-                        if blank(hit.x1,hit.x1,y,y) then seam(hit,hit.x1,y,1,1) end
-                        if blank(hit.x2,hit.x2,y,y) then seam(hit,hit.x2,y,1,1) end
-                        striped[hit] = true
-                    end
-                end
-                if left and left.x2 + 1 == hit.x1 and left.paint.bg == paint.bg then
-                    local bottom = math.min(left.y2 or left.y, hit.y2 or hit.y)
-                    if blank(hit.x1,hit.x1,y,bottom) then seam(hit,hit.x1,y,1,bottom-y+1)
-                    elseif blank(left.x2,left.x2,y,bottom) then seam(left,left.x2,y,1,bottom-y+1)
-                    elseif paint.bg == 128 then
-                        paint.bg, paint.fg = 32768, 1
-                    end
-                end
-            end
-        end
-    end
-end
-
 function Gui.finish(lines, width, height, fixed)
     local hits = lines.hits or {}
     lines.touchLayout = true
     if #hits > 0 then
         styleSecondary(lines, hits)
-        if not fixed and not lines.arrangedChoices then
+        if not fixed and not lines.fixedLayout then
             expandRows(lines, hits, width, height)
             styleSecondary(lines, hits)
         end
         wrapButtons(lines, hits)
-        separateButtons(lines, hits, height)
     end
     return lines, hits
 end
@@ -383,17 +322,18 @@ function Gui.content(width, height)
     end
     function ui.buttonRow(y, items, depth)
         local count = #items
+        if count == 0 then return end
         local gap = width >= count * 7 - 1 and 1 or 0
-        local span = width - (count - 1) * gap
+        local span = math.floor((width - (count - 1) * gap) / count)
+        local gutters = width - count * span
         for i, item in ipairs(items) do
-            local left = 1 + math.floor((i - 1) * span / count) + (i - 1) * gap
-            local right = math.floor(i * span / count) + (i - 1) * gap
-            ui.button(y, item[1], item[2], left, right, item[4], item[5], nil, item[3], depth)
+            local left = 1 + (i - 1) * span + math.floor((i - 1) * gutters / math.max(1, count - 1))
+            ui.button(y, item[1], item[2], left, left + span - 1, item[4], item[5], nil, item[3], depth)
         end
     end
     -- Ordered lists stay in one column. Short sets of actions can opt into
     -- two columns when their labels fit. Gaps are outside the touch targets.
-    function ui.choices(top, bottom, items, tiles, panel)
+    function ui.choices(top, bottom, items, tiles, panel, pageSize)
         if #items == 0 then return end
         panel = panel or 128
         local inset = width >= 32 and 2 or width >= 20 and 1 or 0
@@ -407,18 +347,18 @@ function Gui.content(width, height)
                 if #item[1] > math.floor((span - 2) / 2) then columns = 1; break end
             end
         end
-        local rows = math.ceil(#items / columns)
+        local rows = math.ceil((pageSize or #items) / columns)
         local room = bottom - top + 1
         if not tiles and room >= rows * 3 then top, room = top + 1, room - 1 end
         local gap = room >= rows * 3 - 1 and 1 or 0
         local depth = math.min(3, math.floor((room - (rows - 1) * gap) / rows))
-        local horizontal = columns == 2 and 2 or 0
-        local cells = span - horizontal
+        local cellWidth = columns == 2 and math.floor((span - 2) / 2) or span
+        local horizontal = span - columns * cellWidth
         if tiles then top = top + math.floor((room - rows * depth - (rows - 1) * gap) / 2) end
         for i, item in ipairs(items) do
             local row, col = math.floor((i - 1) / columns), (i - 1) % columns
-            local x1 = left + math.floor(col * cells / columns) + col * horizontal
-            local x2 = left + math.floor((col + 1) * cells / columns) + col * horizontal - 1
+            local x1 = left + col * (cellWidth + horizontal)
+            local x2 = x1 + cellWidth - 1
             local y = top + row * (depth + gap)
             local secondary = isSecondary(item[1], item[2])
             local buttonDepth = secondary and 1 or depth
@@ -431,7 +371,34 @@ function Gui.content(width, height)
                 ui.put(x1 + pad, hit.y, item[1], x2 - x1 + 1 - pad)
             end
         end
-        ui.lines.arrangedChoices = true
+        ui.lines.fixedLayout = true
+    end
+    function ui.pickerList(top, items, page)
+        local room = height - top
+        local paged = #items > room
+        local slots = math.max(1, room - (paged and 1 or 0))
+        local pages = math.max(1, math.ceil(#items / slots))
+        page = math.max(1, math.min(page, pages))
+        local first = (page - 1) * slots
+        local size = math.min(#items, slots)
+        local rows = {}
+        local swatches = items[#items] and items[#items].colour
+        for i = first + 1, math.min(first + slots, #items) do
+            local item = items[i]
+            rows[#rows + 1] = {(swatches and "  " or "") .. item.label, "select", item.value, item.enabled, 128}
+        end
+        local hitStart = #ui.hits
+        local bottom = math.min(height - (paged and 2 or 1), top + 3 * size - 1)
+        ui.choices(top, bottom, rows, false, nil, size)
+        for i = 1, #rows do
+            local item, hit = items[first + i], ui.hits[hitStart + i]
+            if item.colour then ui.style(hit.x1, hit.y1, 2, hit.y2 - hit.y1 + 1, nil, item.colour) end
+        end
+        if paged then
+            ui.buttonRow(height - 1, {{"< Prev", "prev", nil, page > 1}, {"Next >", "next", pages, page < pages}})
+        end
+        ui.buttonRow(height, {{"Back", "back"}, {"Cancel", "cancel"}})
+        return page, pages
     end
     function ui.finish(fixed)
         ui.lines.hits = ui.hits
@@ -451,7 +418,7 @@ function Gui.menu(width, height, title, items, page, back, accent)
         local item = items[i]
         visible[#visible + 1] = {item.label, item.action, item.value, item.enabled, item.bg}
     end
-    ui.choices(2, height - (pages > 1 and 2 or 1), visible)
+    ui.choices(2, height - (pages > 1 and 2 or 1), visible, false, nil, math.min(#items, slots))
     if pages > 1 then
         local half = math.floor(width / 2)
         ui.button(height - 1, "< Prev", "previous", 1, half, page > 1)
@@ -471,21 +438,24 @@ function Gui.palette(width, height, current, title, swatchBottom)
     local bottom = swatchBottom or (adaptive and height - footer or 1 + 4 * math.min(2, math.floor((height-2)/4)))
     local available = bottom - 1
     local rowGap = available >= 11 and 1 or 0
-    local rows = available - rowGap * 3
+    local depth = math.floor((available - rowGap * 3) / 4)
+    local yStart = 2 + math.floor((available - 4 * depth - 3 * rowGap) / 2)
+    local columnGap = width >= 15 and 1 or 0
+    local swatchWidth = math.floor((width - 3 * columnGap) / 4)
+    local xStart = 1 + math.floor((width - 4 * swatchWidth - 3 * columnGap) / 2)
     local short = {"White", "Orange", "Mag.", "Sky", "Yellow", "Lime", "Pink", "Gray", "L.gray", "Cyan", "Purple", "Blue", "Brown", "Green", "Red", "Black"}
     for index = 0, 15 do
         local col, row = index % 4, math.floor(index / 4)
-        local x = 1 + math.floor(col * (width + 1) / 4)
-        local right = math.floor((col + 1) * (width + 1) / 4) - 1
-        local y = 2 + math.floor(row * rows / 4) + row * rowGap
-        local depth = math.floor((row + 1) * rows / 4) - math.floor(row * rows / 4)
+        local x = xStart + col * (swatchWidth + columnGap)
+        local right = x + swatchWidth - 1
+        local y = yStart + row * (depth + rowGap)
         local colour = 2 ^ index
         local label = colour == current and "*" or right - x >= 5 and short[index + 1] or ""
         local hit = ui.button(y, label, "colour", x, right, true, colour, nil, colour, depth)
         -- A black swatch needs a visible edge against the palette background.
         if colour == 32768 then
             ui.style(x, y, 1, depth, nil, 128)
-            ui.style(right, y, 1, depth, nil, 128)
+            if swatchWidth >= 3 then ui.style(right, y, 1, depth, nil, 128) end
         end
         hit.paint = nil
     end
@@ -504,10 +474,14 @@ function Gui.keyboard(ui, width, height, k, accent, footer)
     local pages = mode == "123" and math.ceil(#chars / (columns * 3)) or math.ceil(10 / columns)
     k.page, k.pages = math.max(1, math.min(k.page or 1, pages)), pages
     ui.heading(k.draft == "" and "Type here" or k.draft:sub(-width), accent)
-    local keyWidth = math.floor(width / columns)
-    local controlRows = math.min(Gui.controlHeight(height), math.max(1, math.floor((height - 4) / 4)))
-    local gap, rowGap = width >= 30 and 1 or 0, height - 2 * controlRows >= 8 and 1 or 0
-    local available = height - 1 - 2 * controlRows + rowGap
+    local controlRows = math.min(3, math.max(1, math.floor((height - 2) / 6)))
+    local footerGap = height >= 12 and 1 or 0
+    local available = height - 1 - 2 * controlRows - footerGap
+    local gap, rowGap = width >= 30 and 1 or 0, available >= 9 and 1 or 0
+    local keyWidth = math.floor((width - (columns - 1) * gap) / columns)
+    local keyDepth = math.floor((available - 3 * rowGap) / 3)
+    local spare = available - 3 * (keyDepth + rowGap)
+    local top = 2 + math.ceil(spare / 2)
     for row = 1, 3 do
         local start = (k.page - 1) * columns + 1
         local keys = letterRows[row]:sub(start, start + columns - 1)
@@ -516,29 +490,26 @@ function Gui.keyboard(ui, width, height, k, accent, footer)
             start = ((k.page - 1) * 3 + row - 1) * columns + 1
             keys = chars:sub(start, start + columns - 1)
         end
-        local left = 1 + math.floor((width - #keys * keyWidth + gap) / 2)
-        local y1 = 2 + math.floor((row - 1) * available / 3)
-        local y2 = 1 + math.floor(row * available / 3) - rowGap
+        local left = 1 + math.floor((width - #keys * (keyWidth + gap) + gap) / 2)
+        local y = top + (row - 1) * (keyDepth + rowGap)
         for column = 1, #keys do
-            local x1 = left + (column - 1) * keyWidth
-            local span = keyWidth - gap
+            local x1 = left + (column - 1) * (keyWidth + gap)
             local key = keys:sub(column, column)
-            local bg = (row + column) % 2 == 0 and 128 or 256
-            ui.button(y1, key, "key", x1, x1 + span - 1, true, bg, nil, key, y2 - y1 + 1)
+            local bg = (gap > 0 or (row + column) % 2 == 0) and 128 or 256
+            ui.button(y, key, "key", x1, x1 + keyWidth - 1, true, bg, nil, key, keyDepth)
         end
     end
-    local controls = {{bankName[nextBank[k.bank]] or "ABC", "bank"},
+    local controls = {{bankName[nextBank[k.bank]] or "ABC", "bank", nil, true, accent},
         {width >= 20 and "Space" or "Sp", "space"}, {"Del", "backspace"}}
     if pages > 1 then controls[4] = {k.page .. "/" .. pages, "keyPage"} end
-    for index, row in ipairs(controls) do
-        ui.button(height - 2 * controlRows + 1, row[1], row[2], 1 + math.floor((index - 1) * width / #controls),
-            math.floor(index * width / #controls), true, row[2] == "bank" and accent or nil, nil, nil, controlRows)
-    end
+    ui.buttonRow(height - 2 * controlRows + 1 - footerGap, controls, controlRows)
     footer = footer or {{"Set", "saveText"}, {"Clr", "clearText"}, {"Back", k.back}}
+    local actions = {}
     for index, row in ipairs(footer) do
-        ui.button(height - controlRows + 1, row[1], row[2], 1 + math.floor((index - 1) * width / #footer),
-            math.floor(index * width / #footer), row[4], index == 1 and accent or nil, nil, row[3], controlRows)
+        actions[index] = {row[1], row[2], row[3], row[4], index == 1 and accent or nil}
     end
+    ui.buttonRow(height - controlRows + 1, actions, controlRows)
+    ui.lines.fixedLayout = true
 end
 
 -- Common app forms keep drawing and hit regions together at 12x6 and above.
@@ -551,7 +522,18 @@ function Gui.form(width,height,view,accent,background,panel)
     end
     function ui.footer(rows, depth)
         -- A screen can replace the default Back footer supplied by info().
-        for i=#ui.hits,1,-1 do if (ui.hits[i].y2 or ui.hits[i].y)==height then table.remove(ui.hits,i) end end
+        for i = #ui.hits, 1, -1 do
+            local hit = ui.hits[i]
+            if (hit.y2 or hit.y) == height then
+                if hit.paint then
+                    labelAt(ui.lines, hit.x1, hit.x2, hit.y, "")
+                    for index = #ui.lines.styles, 1, -1 do
+                        if ui.lines.styles[index] == hit.paint then table.remove(ui.lines.styles, index); break end
+                    end
+                end
+                table.remove(ui.hits, i)
+            end
+        end
         depth=depth or 1
         local items = {}
         for i, row in ipairs(rows) do
@@ -586,7 +568,7 @@ function Gui.form(width,height,view,accent,background,panel)
         local first = ui.page(key,#rows,slots,bottom)
         local visible = {}
         for i = first + 1, math.min(first + slots, #rows) do visible[#visible + 1] = rows[i] end
-        ui.choices(2, bottom - (paged and 1 or 0), visible, tiles, panel)
+        ui.choices(2, bottom - (paged and 1 or 0), visible, tiles, panel, math.min(#rows, slots))
         ui.footer(footer, depth)
     end
     function ui.info(title,lines,key,back)

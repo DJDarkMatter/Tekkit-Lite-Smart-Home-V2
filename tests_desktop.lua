@@ -114,18 +114,18 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         view.cycle=view
         t.central.server.views[id]=view
         assert(t.api.save())
-        local saved=unserialize(t.central.disk.files["configs_os_state.txt"])
+        local saved=t.central.savedState()
         equal(saved.windows[id].viewState.screen,"details"); equal(saved.windows[id].viewState.page,2)
         equal(saved.windows[id].viewState.draft.text,"Pending name")
         equal(saved.windows[id].viewState.callback,nil); equal(saved.windows[id].viewState.cycle,nil); equal(saved.windows[id].viewState.hits,nil)
         view.page=3; t.central.disk.failWrite=true; equal(t.api.save(),false)
-        equal(unserialize(t.central.disk.files["configs_os_state.txt"]).windows[id].viewState.page,2)
+        equal(t.central.savedState().windows[id].viewState.page,2)
         t.central.disk.failWrite=false
         local restored=t.bus.computer(10,"server",{disk=t.central.disk}):start()
         equal(restored.server.views[id].page,2); equal(restored.server.views[id].selection,17)
         restored.server.views[id]={oversized=string.rep("x",5000)}
         assert(restored.server.api.save())
-        equal(next(unserialize(restored.disk.files["configs_os_state.txt"]).windows[id].viewState),nil)
+        equal(next(restored.savedState().windows[id].viewState),nil)
     end
 
     function tests.desktop_last_view_stops_normal_apps_but_not_background_services()
@@ -177,7 +177,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             t.touch("top", nextHit.x1, t.top.height)
         end
         for _, id in ipairs(ids) do assert(seen[id], "An overflowed window is unreachable") end
-        local saved = unserialize(t.central.disk.files["configs_os_state.txt"])
+        local saved = t.central.savedState()
         assert(saved.desktops["monitor_13:top"].scroll > 1)
         equal(t.top.lines[t.top.height]:sub(1, 3), "[+]")
     end
@@ -253,7 +253,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.model().placement, nil)
         equal(win.x, 12); equal(win.y, 5); equal(win.width, 30); equal(win.height, 13)
         equal(t.central.server.state.appStates.pane.touches, 0, "Placement taps must not reach the app")
-        local saved = unserialize(t.central.disk.files["configs_os_state.txt"])
+        local saved = t.central.savedState()
         equal(saved.windows[id].width, 30)
     end
 
@@ -321,7 +321,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local relative=serialize(t.window(id).relative)
         t.layout(id,"right"); t.layout(id,"fullscreen")
         assert(t.api.layoutWindow(id,"fullscreen")) -- Idempotent; keep every restore target.
-        local saved=unserialize(t.central.disk.files["configs_os_state.txt"])
+        local saved=t.central.savedState()
         equal(saved.windows[id].fullscreen,true); equal(saved.windows[id].layout,"right")
         equal(serialize(saved.windows[id].relative),relative)
         local restarted=t.bus.computer(10,"server",{disk=t.central.disk}):start()

@@ -4,6 +4,8 @@ local app={title="Solar farm",backgroundService=true,minWidth=12,minHeight=6,pre
 local name,ready="solar_farm",false
 local cache,snapshots,previous,measured,frozen,structures={},{},{},{},{},{}
 local productionCurrent,activity,balance={}, {}, nil
+local farmRetry
+local farmRetrySeconds=5
 local minute,productionWindows=60,5
 local copy,integer=Me.copy,Me.integer
 local periods={[1]="/s",[60]="/m",[3600]="/h"}
@@ -207,7 +209,7 @@ local function elapsedText(seconds)
 end
 function app.init(state,api,context)
     ready=false; cache,snapshots,previous,measured,frozen,structures={},{},{},{},{},{}
-    productionCurrent,activity,balance={}, {}, nil
+    productionCurrent,activity,balance,farmRetry={}, {}, nil, nil
     assert(api.ui.form and api.migrateAppState and Me.safePatterns,"Solar farm needs bundled-v31 core: update installer, then run inst server")
     assert(Me.cooperativeCalls,"Solar farm needs bundled-v35 core; run inst server")
     assert(api.ui and api.ui.typeKey and api.ui.breadcrumb,"solar_farm requires bundled-v33 OS; run inst server")
@@ -318,6 +320,7 @@ local function sample(role,state,s,api)
     previous[role]={key=s.key,sequence=s.sequence,time=s.time,items=s.items}
 end
 local function observeBalance(state)
+    if farmRetry then balance,productionCurrent.equivalents=nil,nil; return end
     local farm,main=snapshots.farm,snapshots.main
     local hv=state.hv.item and Me.count(main,state.hv.item.key)
     if farm.status~="ok" or not farm.equivalents or hv==nil or not farm.time or not main.time or math.abs(farm.time-main.time)>10 then
@@ -340,7 +343,24 @@ local function observe(role,state,api,boots)
             local ok,err=api.watchSensor(name.."_"..role,state.sources[role],{profile="ae_items"})
             if ok==false then error("Cannot subscribe: "..tostring(err),0) end
         end
-        local s=Me.snapshot(cache,api,state.sources[role],boots); snapshots[role]=s
+        local s=Me.snapshot(cache,api,state.sources[role],boots)
+        local keepRate=false
+        if role=="farm" then
+            local displayed=snapshots.farm
+            local sameFeed=displayed and displayed.status=="ok" and displayed.key==s.key
+            if s.status=="error" and sameFeed then
+                farmRetry=farmRetry or {since=state.elapsed}
+                farmRetry.error=s.error
+                if state.elapsed-farmRetry.since<farmRetrySeconds then
+                    -- Keep the last complete display through a retry, but
+                    -- start a fresh measurement when the sensor recovers.
+                    previous.farm=nil
+                    return
+                end
+            end
+            keepRate=farmRetry~=nil and s.status=="ok" and sameFeed and measured.farm
+            farmRetry=nil
+        end
         if role=="farm" and s.status=="ok" and s.equivalentsFor~=s.items then
             s.equivalents,s.equivalentsFor=farmEquivalents(s.items,api),s.items
             local keys={}
@@ -367,8 +387,16 @@ local function observe(role,state,api,boots)
         end
         if role=="farm" and s.status=="ok" then
             for _,m in ipairs(state.metrics) do if m.legacy and s.items[m.item.key] then m.legacy=nil; remember(state,m.item); frozen={} end end
+            -- Me.snapshot reuses the cache table and updates its status on
+            -- the next poll. Keep the displayed metadata separate.
+            local displayed={}
+            for key,value in pairs(s) do displayed[key]=value end
+            snapshots.farm=displayed
+        else
+            snapshots[role]=s
         end
         sample(role,state,s,api)
+        if keepRate then measured.farm=true end
 end
 function app.background(dt,state,api)
     if not ready then return end
@@ -380,6 +408,7 @@ function app.background(dt,state,api)
             snapshots[role]={status="error",error=tostring(err),items={}}
             previous[role],measured[role]=nil,false
             if role=="main" then productionCurrent.hv=nil; tracePoint(state,nil) end
+            if role=="farm" then farmRetry=nil end
         end
     end
     observeBalance(state)
@@ -536,7 +565,7 @@ function app.handleSensorSelection(role,selected,state,api,context)
     if ok then
         snapshots[role],previous[role],measured[role]=nil,nil,false
         balance,productionCurrent.equivalents=nil,nil
-        if role=="farm" then activity={} else productionCurrent.hv=nil end
+        if role=="farm" then activity,farmRetry={},nil else productionCurrent.hv=nil end
         context.view.screen="sources"
     end
     return ok,err
@@ -866,12 +895,15 @@ local function form(w,h,state,api,context)
     elseif screen=="sourceInfo" then
         local lines={}
         for _,role in ipairs({"farm","main"}) do local s=snapshots[role] or {status="unconfigured"}; local a=state.sources[role]
-            lines[#lines+1]=(role=="farm" and "Farm ME: " or "Main ME (HV only): ")..s.status
+            local retry=role=="farm" and farmRetry
+            lines[#lines+1]=(role=="farm" and "Farm ME: " or "Main ME (HV only): ")..(retry and "retrying" or s.status)
             if a then lines[#lines+1]=api.clientName(a.clientId).." / "..a.side.." / "..a.target end
-            if s.error then lines[#lines+1]=s.error end
+            local message=retry and retry.error or s.error
+            if message then lines[#lines+1]=message end
             if s.status=="ok" then
                 lines[#lines+1]="Items: "..Me.amount(s.total).." / "..Me.amount(s.types).." types"
-                lines[#lines+1]="Reading age: "..math.floor(s.age or 0).."s"
+                local age=retry and s.time and math.max(0,os.clock()-s.time) or s.age or 0
+                lines[#lines+1]="Reading age: "..math.floor(age).."s"
             end
             if state.history[role].limited then lines[#lines+1]="Rate history shortened to fit memory" end
             local learning=state.averages[role]
@@ -1026,5 +1058,6 @@ end
 function app.shutdown(state,api)
     for _,role in ipairs({"main","farm"}) do api.unwatchSensor(name.."_"..role) end
     cache,snapshots,previous,measured,frozen,structures={},{},{},{},{},{}
+    farmRetry=nil
 end
 return app

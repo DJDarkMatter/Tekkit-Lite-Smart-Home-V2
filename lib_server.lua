@@ -116,7 +116,7 @@ end
 
 function Server.new(net, storage, config, logger)
     local log = logger or print
-    local loaded, source = storage.load(config.saveFile, validState)
+    local loaded, source = storage.loadState(config.saveFile, validState)
     local state = loaded or {}
     for _, name in ipairs({"windows", "appRegistry", "appStates", "outputs", "outputMap", "managedSides", "desktops"}) do
         if type(state[name]) ~= "table" then state[name] = {} end
@@ -144,7 +144,7 @@ function Server.new(net, storage, config, logger)
     state.appStates["@settings"] = type(state.appStates["@settings"]) == "table" and state.appStates["@settings"] or {}
     local server = {state = state, monitors = {}, ioClients = {}, sensorClients = {}, relayClients = {}, apps = {},
         systemApps = {}, gameTime = "?:??", playerOnline = false,
-        lastSave = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}, notifications = {}}
+        lastSave = 0, lastSaveAttempt = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}, notifications = {}}
     local clientGroups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients, relay = server.relayClients}
     local api, errors, installedApps = {}, {}, {}
     local history, ioTests, ioPulses = IOHistory.new(), {}, {}
@@ -202,8 +202,10 @@ function Server.new(net, storage, config, logger)
         end
     end
     state.desktopVersion = 2
-    state.bootCounter = (tonumber(state.bootCounter) or 0) + 1
-    server.session = tostring(net.id) .. ":" .. state.bootCounter
+    state.bootCounter = math.max((tonumber(state.bootCounter) or 0) + 1, net.bootCounter)
+    -- The transport epoch is persisted before the modem starts. Its prefix
+    -- distinguishes these sessions from the old state checkpoint counters.
+    server.session = tostring(net.id) .. ":net:" .. net.bootCounter
     local sensors = SensorHub.new(net, server.sensorClients, server.session)
     server.sensors = sensors
     if source and source ~= config.saveFile then log("Recovered state from " .. source) end
@@ -221,6 +223,7 @@ function Server.new(net, storage, config, logger)
     end
     function server.save(forgetPrevious)
         if server.restartAfterRestore then return true end
+        server.lastSaveAttempt = os.clock()
         local previousStage = Work.stage
         Work.stage = "Saving OS state"
         local saved = {}
@@ -230,7 +233,7 @@ function Server.new(net, storage, config, logger)
             saved[name] = state[name]
         end
         saved.windows = saveWindows()
-        local ok, err = storage.save(config.saveFile, saved, forgetPrevious)
+        local ok, err = storage.saveState(config.saveFile, saved, validState, forgetPrevious)
         if ok then
             server.lastSave = os.clock()
             if err then log(err) end
@@ -1509,15 +1512,14 @@ function Server.new(net, storage, config, logger)
         if target == "@settings" then return "backup_os_settings.txt" end
         if type(target) == "string" and target:match("^[%w_-]+$") then return "backup_app_" .. target .. ".txt" end
     end
-    local function backupBundle(target)
+    local function backupBundle(target, completedOnly)
         local path = backupPath(target)
         if not path then return nil end
-        return storage.load(path, function(bundle) return Backup.valid(bundle, target) end)
+        return Backup.load(storage, path, target, completedOnly)
     end
-    local function backupInfo(target)
-        local bundle = backupBundle(target)
-        local path = backupPath(target)
-        if not bundle then return path and Backup.exists(path) and "Unreadable backup" or nil end
+    local function backupInfo(target, completedOnly)
+        local bundle = backupBundle(target, completedOnly)
+        if not bundle then return nil end
         local day = bundle.day and "Day " .. bundle.day .. " " or ""
         local windows = #sortedKeys(bundle.data.windows)
         if target ~= "@all" then return day .. bundle.time .. " / " .. windows .. " windows" end
@@ -1587,7 +1589,7 @@ function Server.new(net, storage, config, logger)
         local bundle = stamp()
         bundle.target, bundle.version, bundle.data = target, 1, data
         if all then
-            local ok, programs, startup = Work.call(Backup.capturePrograms)
+            local ok, programs, startup = Work.call(Backup.capturePrograms, storage)
             if not ok then return false, programs end
             bundle.version, bundle.programs, bundle.startup = 2, programs, startup
             bundle.osConfig, bundle.network = copy(config), copy(net.config)
@@ -1596,7 +1598,7 @@ function Server.new(net, storage, config, logger)
             data.appRegistry, data.clientConfigs = copy(state.appRegistry), copy(state.clientConfigs)
             data.bootCounter, data.notificationSequence = state.bootCounter, state.notificationSequence
         end
-        local ok, err = storage.save(path, bundle)
+        local ok, err = Backup.save(storage, path, bundle)
         if ok then log("Backup saved to " .. path) end
         return ok, err
     end
@@ -2400,10 +2402,8 @@ function Server.new(net, storage, config, logger)
 
     function server.start()
         logUptime(tostring(net.id), "os", true, os.clock())
-        -- A persisted boot generation prevents stale output commands after an OS reboot.
-        local ok, err, archived = archiveAppRoutesAndWindows("level_emitter", true)
+        local ok, err = archiveAppRoutesAndWindows("level_emitter", true)
         assert(ok, err)
-        if not archived then assert(server.save(), "Cannot checkpoint OS startup") end
         for _, file in ipairs(fs.list("")) do
             local name = file:match("^uninstall_([%w_-]+)%.lua$")
             if name and not fs.isDir(file) then
@@ -2490,7 +2490,7 @@ function Server.new(net, storage, config, logger)
         end
         server.refreshMonitors(false)
         -- Keep checkpoints within one second even when an older config says 30.
-        if now - server.lastSave >= math.min(config.saveInterval, 1) then server.save() end
+        if now - server.lastSaveAttempt >= math.min(config.saveInterval, 1) then server.save() end
     end
     function server.nextTickInterval()
         local interval=config.tickInterval or 0.5

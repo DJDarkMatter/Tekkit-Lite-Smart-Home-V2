@@ -379,7 +379,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         t.click(t.id,"dismissInput"); t.click(t.id,"select","io_11"); t.click(t.id,"select","left"); t.click(t.id,"select",4); t.click(t.id,"use")
         t.click(t.id,"saveDraft"); local timer=t.state.timers[1]
         equal(timer.dismissInput.clientId,"io_11"); equal(timer.dismissInput.side,"left"); equal(timer.dismissInput.color,4)
-        local saved=unserialize(t.central.disk.files["configs_os_state.txt"]).appStates.clock
+        local saved=t.central.savedState().appStates.clock
         equal(saved.timers[1].dismissInput.color,4)
         t.bus.advance(1); assert(timer.alert); equal(t.output(timer,"timer"),true)
         t.bridge.bundledInputs.left=2; t.bus.queue(t.bridge,{"redstone"}); t.bus.advance(0.5); assert(timer.alert)
@@ -423,7 +423,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local timer=t.new(t.id,"timer",{duration=1,signal={kind="constant",on=10,off=1,total=10}},1)
         t.new(t.id,"timer",{duration=1})
         t.bus.advance(1.5); assert(t.api.save())
-        local saved=unserialize(t.central.disk.files["configs_os_state.txt"])
+        local saved=t.central.savedState()
         local old=saved.appStates.clock; old.version,old.nextAlertId=1,nil
         for _,item in ipairs(old.timers) do item.signal.kind,item.alert="pulse",nil end
         local progress=old.timers[1].ring.elapsed

@@ -39,8 +39,10 @@ function Settings.new(actions)
             if draft.mode == "reset" and draft.final then title = w >= 20 and "Are you really sure?" or "Really sure?"
             elseif draft.mode == "delete" then title = "Delete app?"
             elseif draft.mode == "restore" then title = "Restore data?"
-            elseif draft.mode == "backup" then title = "Replace backup?" end
-            ui.heading(draft.error and "Action failed" or title, 16384)
+            elseif draft.mode == "backup" then title = draft.replacing and "Replace backup?" or "Create backup?" end
+            local backup = draft.mode == "backup"
+            local heading = draft.error and (backup and "Backup failed" or "Action failed") or title
+            ui.heading(heading, backup and not draft.error and 2048 or 16384)
             ui.put(1, 2, draft.label, w, true)
             local message = draft.error or draft.detail
             if message then ui.put(1, 3, message, w); ui.put(1, 4, message:sub(w + 1), w)
@@ -53,9 +55,10 @@ function Settings.new(actions)
                 ui.action(h, "Cancel", "cancel")
             else
                 local button = draft.mode == "reset" and (draft.final and "Erase all" or "Delete data")
-                    or draft.mode == "delete" and "Uninstall" or draft.mode == "backup" and "Replace" or "Restore"
+                    or draft.mode == "delete" and "Uninstall"
+                    or backup and (draft.replacing and "Replace" or "Create") or "Restore"
                 ui.action(h - 1, "Cancel", "cancel")
-                ui.action(h, button, "commit", nil, nil, nil, true, 16384)
+                ui.action(h, button, "commit", nil, nil, nil, true, backup and 2048 or 16384)
             end
         elseif section == "home" then
             ui.menu(app.title, {{"Appearance", "appearance"}, {"System overview", "overview"},
@@ -149,11 +152,15 @@ function Settings.new(actions)
             view.keyboard = nil
         elseif action == "selectScope" then
             local mode = value.mode
-            local info = (mode == "restore" or mode == "backup") and actions.backupInfo(value.id) or nil
+            local info = (mode == "restore" or mode == "backup") and actions.backupInfo(value.id, mode == "backup") or nil
             if mode == "backup" and not info then
                 local ok, err = actions.backup(value.id)
-                view.status = ok and "Backup saved" or tostring(err)
-            else pending[id] = {target = value.id, label = value.label, mode = mode, detail = info} end
+                if ok then view.status = "Backup saved"
+                else pending[id] = {target = value.id, label = value.label, mode = mode, error = tostring(err)} end
+            else
+                pending[id] = {target = value.id, label = value.label, mode = mode, detail = info,
+                    replacing = mode == "backup"}
+            end
         elseif action == "confirmAgain" then pending[id].final = true
         elseif action == "cancel" then pending[id] = nil
         elseif action == "commit" then

@@ -45,14 +45,9 @@ function Picker.render(dialog, width, height, clients, api, testing)
     local label = api and api.clientName or function(id) return id end
     local ui = Gui.content(width, height)
     ui.style(1, 1, width, height, 1, 32768)
-    local half = math.floor(width / 2)
     local text = ui.text
-    local function button(row, x1, x2, label, action, value, enabled)
-        local bg = action == "cancel" and 16384 or action == "use" and 32 or 128
-        ui.button(row, label, action, x1, x2, enabled, bg, nil, value)
-    end
     if dialog.stage == 4 then
-        text(1, "Use this " .. dialog.direction .. "?")
+        ui.heading("Use this " .. dialog.direction .. "?", 2048)
         text(2, label(dialog.chosen.clientId) or "No IO client")
         text(3, "Side: " .. (dialog.chosen.side or "?"))
         local wire = colorName(dialog.chosen.color)
@@ -63,39 +58,25 @@ function Picker.render(dialog, width, height, clients, api, testing)
             text(4, #summary <= width and summary or wire:sub(1, width - #status - 1) .. " " .. status)
         else text(4, wire) end
         if dialog.error then text(4, dialog.error) end
+        local depth = height >= 9 and 2 or 1
+        local actions = {{"< Back", "back"}}
         if dialog.direction == "output" and api then
-            button(height - 1, 1, half, "< Back", "back")
-            button(height - 1, half + 1, width, testing and "Wait" or "Test", "test", nil, not testing)
-        else button(height - 1, 1, width, "< Back", "back") end
-        button(height, 1, half, "Use", "use")
-        button(height, half + 1, width, "Cancel", "cancel")
+            actions[2] = {testing and "Wait" or "Test", "test", nil, not testing}
+        end
+        ui.buttonRow(height - depth, actions)
+        ui.buttonRow(height - depth + 1, {{"Use", "use", nil, true, 32}, {"Cancel", "cancel"}}, depth)
     else
         local titles = {"Select IO", "Select side", "Select wire"}
         local list = choices(dialog, clients, label)
         local path = dialog.stage>1 and Gui.breadcrumb(dialog.stage==3 and {label(dialog.chosen.clientId),dialog.chosen.side} or {label(dialog.chosen.clientId)},width,height)
         local header = path and 2 or 1
-        local slots = #list <= height-header-1 and height-header-1 or math.max(1,height-header-2)
-        local pages = math.max(1, math.ceil(#list / slots))
-        dialog.page = math.max(1, math.min(dialog.page, pages))
-        text(1, titles[dialog.stage] .. (pages > 1 and (" " .. dialog.page .. "/" .. pages) or ""))
+        local page, pages = ui.pickerList(header + 1, list, dialog.page)
+        dialog.page = page
+        ui.heading(titles[dialog.stage] .. (pages > 1 and (" " .. page .. "/" .. pages) or ""), 2048)
         if path then text(2,path); ui.style(1,2,width,1,256,32768) end
-        for row = 1, slots do
-            local item = list[(dialog.page - 1) * slots + row]
-            if item then
-                button(row + header, 1, width, (item.colour and "  " or "") .. item.label, "select", item.value)
-                if item.colour then ui.style(1, row + header, 2, 1, nil, item.colour) end
-            end
-        end
         if #list == 0 then text(header+1, "No IO clients") end
-        if pages > 1 then
-            button(height - 1, 1, half, "< Prev", "prev", nil, dialog.page > 1)
-            button(height - 1, half + 1, width, "Next >", "next", pages, dialog.page < pages)
-        end
-        button(height, 1, half, "Back", "back")
-        button(height, half + 1, width, "Cancel", "cancel")
     end
-    ui.style(1, 1, width, 1, 1, 2048)
-    local lines, hits = ui.finish()
+    local lines, hits = ui.finish(true)
     dialog.hits = hits
     return lines
 end

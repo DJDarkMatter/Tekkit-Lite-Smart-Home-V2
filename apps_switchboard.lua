@@ -203,7 +203,7 @@ local function build(width, height, state, api, context)
             local item = items[i]
             visible[#visible + 1] = {item.label, item.action, item.value, item.enabled}
         end
-        ui.choices(header + 1, height - (pages > 1 and 2 or 1), visible, false, theme.border)
+        ui.choices(header + 1, height - (pages > 1 and 2 or 1), visible, false, theme.border, math.min(#items, slots))
         pager(key, page, pages, height - 1)
         footer("Back", back)
     end
@@ -332,23 +332,40 @@ local function build(width, height, state, api, context)
         local switch = buttonById(board, view.buttonId)
         ui.heading(fit(switch.name, width), accent)
         local route = switch.route
+        local wire = wireFor(switch, outputs(api))
         ui.text(2, route and (api.clientName or tostring)(route.clientId) or "Not connected", true)
-        if height >= 8 then ui.text(3, route and (route.side .. " / " .. (route.color and api.ui.colourName(route.color) or "Digital")) or "Choose Routing", true) end
+        local details = 2
+        if height >= 8 and route then
+            details = 3
+            ui.text(3, route.side .. " / " .. (route.color and api.ui.colourName(route.color) or "Digital"), true)
+        end
         if height >= 10 and route then
-            local wire = wireFor(switch, outputs(api))
+            details = 4
             ui.text(4, not wire and "Routing changed" or not wire.online and "IO offline" or not wire.confirmed and "Waiting for IO"
                 or (wire.value or wire.pulse) and "ON" or "OFF", true)
         end
-        local third = math.floor(width / 3)
-        button(height - 3, third>=6 and "Rename" or "Name", "renameSwitch", nil, 1, third)
-        local _, statusColor = switchStatus(switch, wireFor(switch, outputs(api)))
-        button(height - 3, "Color", "switchColour", nil, third + 1, 2 * third, true, buttonColour(switch, theme, statusColor))
-        button(height - 3, third>=11 and "State colors" or "States", "buttonColors", nil, 2 * third + 1, width)
-        local half = math.floor(width / 2)
-        button(height - 2, half >= 7 and "Routing" or "Route", "route", nil, 1, half)
-        button(height - 2, width - half >= 8 and "Behavior" or "Mode", "behavior", nil, half + 1, width)
-        button(height - 1, "Disconnect", "askClear", nil, nil, nil, route ~= nil)
+        local room = height - details - 1
+        local gap = room >= 5 and 1 or 0
+        local depth = math.min(3, math.floor((room - 2 * gap) / 3))
+        local step = depth + gap
+        local top = height - 3 * depth - 2 * gap
+        local panel = theme.border
+        ui.buttonRow(top, {{"Rename", "renameSwitch", nil, true, panel}, {"Color", "switchColour", nil, true, panel}}, depth)
+        local color = ui.hits[#ui.hits]
+        if color.x2 - color.x1 >= 6 then
+            local _, statusColor = switchStatus(switch, wire)
+            ui.style(color.x1, top, 1, depth, nil, buttonColour(switch, theme, statusColor))
+        end
+        ui.buttonRow(top + step, {{width>=16 and "Routing" or "Route", "route", nil, true, panel},
+            {width>=18 and "Behavior" or "Mode", "behavior", nil, true, panel}}, depth)
+        ui.buttonRow(top + 2 * step, {{width>=26 and "State colors" or "States", "buttonColors", nil, true, panel},
+            {width>=24 and "Disconnect" or "Clear", "askClear", nil, route ~= nil, panel}}, depth)
+        if not route then
+            local paint = ui.hits[#ui.hits].paint
+            paint.bg, paint.fg = panel, api.ui.contrast(panel) == 1 and 256 or 128
+        end
         footer("Back", "switches")
+        return ui.finish(true)
     elseif screen == "behavior" then
         ui.heading("Switch mode", accent)
         local half = math.floor(width / 2)

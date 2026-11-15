@@ -6,6 +6,22 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
+## Updating to v53
+
+Use the roughly 2 KB `tools_install_github.lua` as `inst` to run the full installer in memory. Updates reclaim obsolete program copies, skip unchanged files and can resume after a restart. Startup uses the small network boot record, and regular state saves keep a verified previous copy and compress large snapshots. See the [low-space update guide](documentation_update_v53.md).
+
+## Updating to v52
+
+**Entire OS** creates a compact backup and can recover the completed data from a failed older save. Settings offers **Replace** when a completed backup already exists. Solar Farm holds its last good farm reading through brief sensor errors and starts a new rate baseline on recovery.
+
+Install the v52 central server and Solar Farm. See the [v52 install and restore steps](documentation_update_v52.md) for the full update from v49.
+
+## Updating to v51
+
+Switchboard's switch editor uses equal buttons. Shared pickers keep even rows, the keyboard keeps its letter and action rows separate, and Start uses two-row entries on roomier monitors.
+
+Install the v51 central server and update the four app files listed in the [update instructions](documentation_update_v51.md).
+
 ## Updating to v50
 
 App screens use dark panels, quieter section headers and gaps between controls. Short groups of actions can use a grid on wider windows. Clock opens with a live readout and four main tools above the compact footer.
@@ -106,7 +122,9 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 ### Install (one Pastebin upload)
 
-`install.lua` is a self-contained installer containing all twenty-six runtime source files and **no user apps**. Upload its complete contents as **one** Pastebin paste, or replace the contents of your existing installer paste. It prints `SmartHome installer: bundled-v50`; OS/client installation makes no HTTP requests. Role files are extracted directly into the computer root with `lib_` and `clients_` filename prefixes. Settings is built-in system UI. User apps are downloaded from GitHub only when requested; no separate app paste is needed and none are enabled by default.
+Upload `tools_install_github.lua` as the installer paste for a computer with limited space. It downloads and runs the full installer in memory. The GitHub branch must contain the release, including `install.lua`. Use `inst --installer-ref REF server` to choose a branch or commit.
+
+`install.lua` is also available as a self-contained installer with all twenty-seven runtime source files. Upload it as the single installer paste if you need to install roles without a GitHub connection from the computer. Both forms print `SmartHome installer: bundled-v53` and write the role files directly into the computer root. User apps download only when requested.
 
 On a computer, run:
 
@@ -117,11 +135,9 @@ inst server --startup
 reboot
 ```
 
-Use `inst io --startup`, `inst monitor --startup`, `inst sensor --startup`, or `inst relay --startup` on the other computers, with the same paste ID. To replace an older downloaded installer, delete only that copy with `delete inst` before downloading the updated paste again. If it still says `Downloading lib_storage.lua`, the old HTTP installer is still being run.
+Use `inst io --startup`, `inst monitor --startup`, `inst sensor --startup`, or `inst relay --startup` on the other computers with the same paste ID. To replace an older downloaded installer, use `delete inst` before downloading the updated paste.
 
-The installer checks and stages all selected Lua files before replacing programs, preserves existing configuration and saved data, and backs up replaced program files as `.pre_update`. `--startup` explicitly configures the role's boot script and backs up an existing one. Omit the flag to preserve `startup`.
-
-Downloading the installer itself through Pastebin still requires access to Pastebin, but extracting and running the bundled programs requires no GitHub access, Java HTTPS compatibility, or matching GitHub folder layout.
+The installer checks the selected files and available disk space, then writes changed files one at a time. It cleans up old `.pre_update` program copies when it can verify the installed files and preserves existing saved data. Run the same command again after an interruption. `inst space` reports free bytes and the size of old program copies. Add `--startup` to set autorun or omit it to keep your existing `startup`.
 
 For an existing installation, run the new `inst server --startup`, `inst io --startup`, or `inst monitor --startup` for that computer's role. The installer imports old `Configs` settings, saved OS/app/window state, and explicitly enabled old `Apps` into the new root filenames. It keeps the old files as recovery copies and never overwrites newer flat data with an old copy. Use `--startup` so the boot script points to the renamed client. Keep the legacy saved files until the migration succeeds.
 
@@ -132,7 +148,7 @@ For direct file copying instead, preserve these paths:
 
 | Role | Required files |
 | --- | --- |
-| All roles | `lib_work.lua`, `lib_network.lua`, `lib_storage.lua` |
+| All roles | `lib_work.lua`, `lib_codec.lua`, `lib_network.lua`, `lib_storage.lua`, `lib_backup.lua` |
 | Central OS | Also `main_os.lua`, `lib_me.lua`, `lib_server.lua`, `lib_console.lua`, `lib_io_picker.lua`, `lib_desktop.lua`, `lib_settings.lua`, `lib_system.lua`, `lib_alert_inbox.lua`, `lib_io_history.lua`, `lib_sensor_data.lua`, `lib_sensor_server.lua`, `lib_sensor_picker.lua` |
 | IO client | Also `clients_io_client.lua`, `lib_io.lua` |
 | Monitor client | Also `clients_monitor_client.lua`, `lib_monitor.lua` |
@@ -141,7 +157,7 @@ For direct file copying instead, preserve these paths:
 
 Both the OS and monitor roles also require `lib_gui.lua` for color surfaces and drawing.
 
-For maintainers: edit the normal source files, then run `python3 tools_build_installer.py` to rebuild `install.lua`. `python3 tools_build_installer.py --check` checks that it matches those sources. The previous GitHub-downloading installer is retained at `tools_install_github.lua` as an optional alternative; it is not needed by the bundled installer or installed computers.
+Run `python3 tools_build_installer.py` after editing a bundled source or `tools_install_update.lua`. Run `python3 tools_build_installer.py --check` to verify the generated installer.
 
 ### Installing a user app later
 
@@ -158,7 +174,7 @@ inst app APP_NAME --file /path/to/app.lua
 
 The installer decodes the API's base64 content using Lua 5.1, checks the filename and decoded byte count, and compiles the recovered source without running it. If the API request fails or returns an invalid file, it tries `raw.githubusercontent.com` as a fallback. This uses only GitHub hosts and needs no token or newer JSON API. If both routes fail, the console prints separate `Raw:` and `API:` reasons. Failed downloads leave the installed app and settings intact.
 
-These commands install your chosen file as `apps_APP_NAME.lua` and enable only that app in `configs_os.txt`. Syntax is checked without executing the app during installation. Failed downloads, HTTP errors, empty responses and invalid Lua leave installed code/settings untouched. Existing app code and OS settings are backed up as `.pre_update`; other settings, app data and `startup` are preserved. Restart the OS to load the app. OS/IO/monitor installation never fetches apps.
+These commands install the chosen file as `apps_APP_NAME.lua` and enable it in `configs_os.txt`. The installer checks syntax before it writes the files. App data and existing selections carry over to the new program. Restart the OS to load the app.
 
 Optional apps are [Coffee](documentation_coffee.md), [Switchboard](documentation_switchboard.md), and [Reactors](documentation_reactors.md). Use `inst app coffee`, `inst app switchboard` or `inst app reactors` on the OS computer to fetch one from GitHub. Coffee starts automatically without a window and offers IO, durations and color settings. Switchboard offers saved views, sixteen-color side presets, custom grids/routing, touch naming and appearance settings. Reactors selects sensor targets and separate IO switches; see [sensor setup](documentation_sensors.md) and [the reactor guide](documentation_reactors.md), including card-dependent remaining-time data. All three app sources stay unchanged in bundled-v16. Update the OS and endpoint roles to use [wireless relays](documentation_relay.md); existing direct clients remain compatible. Apps, calibration and desktop geometry need no changes for relaying.
 
@@ -319,7 +335,7 @@ The OS owns the complete output mask of every mapped cable side: unmapped colors
 
 The OS console keeps its command prompt on the bottom row and displays messages above it. Connection/status messages preserve your current draft and insertion cursor. Left/Right, Home/End, Backspace/Delete and Up/Down command history are supported. Long input scrolls horizontally. Type `clear` to clear the console messages; apps, outputs, monitor windows and saved state keep running. `quit` saves and returns to CraftOS. App code should use `api.log(...)` for messages instead of writing to the local terminal directly.
 
-To configure autorun during installation, use `install server --startup`, `install io --startup`, or `install monitor --startup`. If you downloaded the installer as `inst`, use `inst` instead of `install`. An existing boot script is backed up as `startup.pre_update` before replacement. Autorun runs when the ComputerCraft computer boots; the program does not execute while its chunk is unloaded. A Lua program error without a reboot does not rerun `startup` automatically.
+To configure autorun during installation, use `install server --startup`, `install io --startup`, or `install monitor --startup`. If you downloaded the installer as `inst`, use `inst` instead of `install`. Omit `--startup` to keep a custom boot script. Autorun runs when the ComputerCraft computer boots. A Lua program error without a reboot does not rerun `startup` automatically.
 
 Alternatively edit `startup` manually and add `shell.run("main_os.lua")` on the OS, `shell.run("clients_io_client.lua")` on an IO computer, or `shell.run("clients_monitor_client.lua")` on a monitor computer. Add the line to any existing script deliberately.
 

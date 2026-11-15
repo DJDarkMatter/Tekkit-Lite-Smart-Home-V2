@@ -323,7 +323,7 @@ local function build(width,height,state,api,context)
         local first=page(key,#items,slots,height-1)
         local choices={}
         for i=first+1,math.min(first+slots,#items) do choices[#choices+1]=items[i] end
-        ui.choices(2,height-(#items>slots and 2 or 1),choices)
+        ui.choices(2,height-(#items>slots and 2 or 1),choices,false,nil,math.min(#items,slots))
         footer({{"Back",back}})
     end
     local function info(title,lines,key,back)

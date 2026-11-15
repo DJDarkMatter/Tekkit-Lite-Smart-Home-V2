@@ -219,7 +219,7 @@ local function build(width, height, state, api, context)
             local item = items[i]
             choices[#choices+1] = {item.label,item.action,item.value,item.enabled,item.bg}
         end
-        ui.choices(2,bottom-(#items>slots and 1 or 0),choices)
+        ui.choices(2,bottom-(#items>slots and 1 or 0),choices,false,nil,math.min(#items,slots))
     end
     local function info(title, lines, back)
         local wrapped = {}

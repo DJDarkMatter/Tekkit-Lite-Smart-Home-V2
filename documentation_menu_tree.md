@@ -17,7 +17,7 @@ Launcher, taskbar, title-bar controls and window placement.
 **Source** [lib_desktop.lua](lib_desktop.lua), [lib_server.lua](lib_server.lua), [lib_monitor.lua](lib_monitor.lua), [documentation_desktop.md](documentation_desktop.md)
 
 - Taskbar — Appears at the edge selected in Settings.
-  - Start [+] — Lists Settings and compatible enabled apps alphabetically in a compact column. A star marks a running app.
+  - Start [+] — One alphabetical column. Roomy monitors use two rows per entry. A star marks a running app.
     - [Settings](#settings) — Opens the built-in Settings window.
     - [App] — Opens the app or focuses its existing window on this monitor.
     - [Alert inbox](#alert-inbox) — Launcher entry on monitors without the clock shortcut.
@@ -94,8 +94,9 @@ Appearance, system diagnostics, client names and saved app data.
 - App data
   - Backup & restore
     - Create backup
-      - [Entire OS / OS settings / app] — Entire OS includes app programs, data and reported client settings.
-        - Replace backup? — Replace or Cancel if a backup already exists.
+      - [Entire OS / OS settings / app] — Entire OS packs app programs, data and reported client settings into one file.
+        - Replace backup? — Replace or Cancel when a completed backup exists.
+        - Backup failed — Create to retry a first backup or Replace to retry an overwrite.
     - Restore backup
       - [Existing backup]
         - Restore data? — Restore or Cancel. Entire OS restores the saved setup and restarts.
@@ -137,7 +138,7 @@ Reusable picker and editor flows linked from their calling menus.
 - <a name="shared-dialogs-redstone-picker"></a> Redstone picker
   - Select IO
     - Select side — Uses the selected IO client.
-      - Select wire — Digital or one of 16 bundled colors. Roomy screens show the selected client and side.
+      - Select wire — Digital or one of 16 bundled colors, in matching rows. Roomy screens show the selected client and side.
         - Use this input? — Shows ON, OFF or Unknown when the input can be read.
           - Use — Passes the selected input to the app.
         - Use this output?
@@ -153,7 +154,7 @@ Reusable picker and editor flows linked from their calling menus.
   - [Color swatch] — Standard OS palette applies on selection. Some apps have their own Apply preview.
   - Back — Returns to the calling screen.
 - <a name="shared-dialogs-touch-keyboard"></a> Touch keyboard
-  - [QWERTY keys] — Three letter rows. Compact keyboards page the rows when needed.
+  - [QWERTY keys] — Three matching letter rows with space above the action buttons when it fits. Compact keyboards page the letters.
   - ABC / 123 / abc — The mode key shows the next bank. Uppercase resets after one letter.
   - Space / Sp and Del — Insert a space or delete the last character.
   - Set / Save / Find — Apply the draft using the calling screen's action.
@@ -396,7 +397,7 @@ IO side presets, timed buttons, custom switch grids and scenes.
     - Edit switches
       - <a name="switchboard-switch"></a> [Switch] — The editor retains the original route and wire color.
         - [Rename / Name](#shared-dialogs-touch-keyboard) — Touch keyboard.
-        - Color / Button color
+        - Color
           - [Swatch] / IO default / By state — Pick a fixed color, use the wire color or use the state color.
           - Apply / Cancel — Save or discard the color draft.
         - State colors / States
@@ -406,7 +407,7 @@ IO side presets, timed buttons, custom switch grids and scenes.
           - Switch — Tap the tile to toggle a steady output.
           - Button — Tap for a timed press. The IO client ends the press locally.
             - [Time](#shared-dialogs-decimal-pad) — Enter seconds with up to two decimal places. The mode screen shows the client's minimum.
-        - Disconnect
+        - Disconnect / Clear
           - Disconnect? — Confirm or Cancel.
     - State colors / View state colors
       - Active / Inactive / Pending — Pick a swatch or Inherit from app settings. Apply to save.
@@ -599,7 +600,7 @@ Finished HV arrivals, panel equivalents and production-sorted farm stock.
     - [Minimum](#shared-dialogs-number-pad) — Global item-count threshold.
     - [Percent](#shared-dialogs-number-pad) — Global percentage threshold.
   - [UI color](#shared-dialogs-os-color-palette) — Standard OS palette.
-  - Source status — Farm/Main health, age, learning time and HV selection.
+  - Source status — Farm/Main health, retry details, reading age, learning time and HV selection.
   - About rates — Explains finished HV arrivals, panel equivalents and observation gaps.
 
 ## Utilities

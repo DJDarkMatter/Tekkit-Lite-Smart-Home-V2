@@ -97,7 +97,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local nativePrint = central.env.print
         bus.command(central, "quit")
         equal(central.active, false)
-        assert(unserialize(central.disk.files["configs_os_state.txt"]))
+        assert(central.savedState())
         equal(central.env.print, nativePrint, "Console logging must not replace global print")
         equal(central.terminal.x, 1); equal(central.terminal.y, central.terminal.height)
         equal(central.terminal.blink, false)

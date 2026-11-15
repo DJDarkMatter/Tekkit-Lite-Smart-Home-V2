@@ -61,7 +61,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         bus.advance(1)
         equal(state.remainingTime, before - 1)
         equal(bridge.digital.front, false)
-        equal(unserialize(central.disk.files["configs_os_state.txt"]).appStates.coffee.remainingTime, state.remainingTime)
+        equal(central.savedState().appStates.coffee.remainingTime, state.remainingTime)
     end
     function tests.coffee_compact_clock_shows_presence_and_large_strokes_keep_clear_side_margins()
         local bus,central,bridge,app,state=coffee()
@@ -134,7 +134,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local context = {view = {}}
         press(app, state, central.server.api, context, "Harvest now")
         bus.pump(); bus.advance(4)
-        local saved = unserialize(central.disk.files["configs_os_state.txt"]).appStates.coffee
+        local saved = central.savedState().appStates.coffee
         assert(saved.harvestRemaining < 12 and saved.harvestRemaining > 0)
         central.active = false
         bus.advance(20)
@@ -185,7 +185,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         bus.advance(2)
         equal(bridge.digital.front, false)
         equal(state.harvestRemaining, 17)
-        equal(unserialize(central.disk.files["configs_os_state.txt"]).appStates.coffee.harvestRemaining, 17)
+        equal(central.savedState().appStates.coffee.harvestRemaining, 17)
     end
 
     function tests.clock_uses_native_world_time_and_updates_each_display()
@@ -279,12 +279,12 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         bus.advance(2)
         equal(state.phase, "harvest")
         equal(bridge.digital.front, true)
-        equal(unserialize(central.disk.files["configs_os_state.txt"]).appStates.coffee.phase, "harvest")
+        equal(central.savedState().appStates.coffee.phase, "harvest")
     end
 
     function tests.coffee_recovered_finished_harvest_does_not_pulse_output_again()
         local bus, central, bridge, app, state = coffee()
-        local saved = unserialize(central.disk.files["configs_os_state.txt"])
+        local saved = central.savedState()
         saved.appStates.coffee.phase = "harvest"
         saved.appStates.coffee.harvestRemaining = 0
         saved.appStates.coffee.forced = true
@@ -361,7 +361,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         -- This models an app background update without an explicit save call.
         central.server.state.appStates.coffee.tripHarvests = 17
         bus.advance(1)
-        local saved = unserialize(central.disk.files["configs_os_state.txt"])
+        local saved = central.savedState()
         equal(saved.appStates.coffee.tripHarvests, 17)
         equal(saved.windows[id].minimized, true)
         central = bus.computer(10, "server", {disk = central.disk}):start()

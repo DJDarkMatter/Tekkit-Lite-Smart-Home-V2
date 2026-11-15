@@ -342,13 +342,14 @@ end
 function Desktop.menu(monitor, title, items, page, anchor)
     local area = Desktop.area(monitor)
     local width = math.min(area.width, anchor and 26 or 22)
-    local depth = anchor and math.min(4, Gui.controlHeight(area.height)) or 1
+    local depth = anchor and math.min(4, Gui.controlHeight(area.height)) or area.height >= 17 and 2 or 1
+    local pagerDepth = anchor and depth or 1
     local slots = math.max(1, math.floor((area.height - 1) / depth))
     if not anchor then slots = math.min(slots, 16) end
-    if #items > slots then slots = math.max(1, slots - 1) end
+    if #items > slots then slots = math.max(1, math.min(slots, math.floor((area.height - 1 - pagerDepth) / depth))) end
     local pages = math.max(1, math.ceil(#items / slots))
     page = clamp(page or 1, 1, pages)
-    local height = math.min(area.height, 1 + (math.max(1, math.min(#items, slots)) + (pages > 1 and 1 or 0)) * depth)
+    local height = math.min(area.height, 1 + math.max(1, math.min(#items, slots)) * depth + (pages > 1 and pagerDepth or 0))
     local lastY = area.y + area.height - height
     local origin = monitor.taskbarPosition == "top" and area.y or lastY
     local rect = {x = clamp(anchor and anchor.x or 1, 1, area.width - width + 1),
@@ -361,14 +362,13 @@ function Desktop.menu(monitor, title, items, page, anchor)
         if item then
             local hit = ui.button(2 + (slot-1)*depth, item.label, "item", 1, width,
                 item.enabled, slot % 2 == 0 and 128 or 256, nil, nil, depth)
-            hit.item = item
+            hit.item, hit.secondary = item, false
         end
     end
     if #items == 0 then ui.text(2, "No apps", true) end
     if pages > 1 then
-        local half = math.floor(width / 2)
-        ui.button(height - depth + 1, "< Prev", "previous", 1, half, page > 1, nil, nil, nil, depth)
-        ui.button(height - depth + 1, "Next >", "next", half + 1, width, page < pages, nil, nil, nil, depth)
+        ui.buttonRow(height - pagerDepth + 1, {{"< Prev", "previous", nil, page > 1},
+            {"Next >", "next", nil, page < pages}}, pagerDepth)
     end
     ui.finish(true)
     for _, hit in ipairs(ui.hits) do

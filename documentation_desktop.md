@@ -12,7 +12,7 @@ Window borders and the taskbar default to gray. Text switches between white and 
 
 ## Taskbar
 
-- `[+]` opens the compact single-column app launcher. It shows apps whose smallest layout fits this monitor. A `*` beside an app means it is running.
+- `[+]` opens the single-column launcher for apps that fit this monitor. Entries are two rows tall when the monitor has at least 17 desktop rows, otherwise one. Use Prev and Next when the list needs multiple pages. A `*` beside an app means it is running.
 - Each local window has a taskbar button. Clicking it restores/focuses that view; clicking the already-active view minimizes it.
 - `<` and `>` scroll through overflowing buttons. Button order follows window creation, so focusing does not shuffle them. Scroll position is saved per monitor.
 - The Minecraft clock appears on the right when space permits. Narrow monitors prioritize accessible window buttons.
