@@ -605,6 +605,32 @@ Finished HV arrivals, panel equivalents and production-sorted farm stock.
 
 ## Utilities
 
+### File Explorer
+
+Browse and manage files and folders on the central computer.
+
+**Path** Desktop → Start → File Explorer
+
+**Source** [apps_file_explorer.lua](apps_file_explorer.lua), [documentation_file_explorer.md](documentation_file_explorer.md)
+
+- [Folder] — Opens the contents. Use Up to return to its parent.
+- [File] — Opens file actions.
+  - View text — Paginated preview.
+  - Details — Path and file size.
+  - Copy / Move — Selects the file for pasting from any File Explorer window.
+  - Send paste
+    - [Pastebin key](#shared-dialogs-touch-keyboard) — Enter a developer key for this session.
+    - Unlisted paste — Send or Back. The result shows the Pastebin ID and URL.
+- Paste / Put — Uses the original name in the current folder.
+- Menu — Actions for the current folder.
+  - [New folder](#shared-dialogs-touch-keyboard) — Enter the folder name.
+  - [New file](#shared-dialogs-touch-keyboard) — Enter the name, then optional text. NL inserts a new line.
+  - [Get paste](#shared-dialogs-touch-keyboard) — Enter an ID or Pastebin link, then the destination filename.
+  - Paste here — Uses the original name.
+  - [Paste as](#shared-dialogs-touch-keyboard) — Enter a different filename.
+  - Copy folder / Move folder — Selects the current folder and opens its parent.
+- Close — Closes this window.
+
 ### IO Scope
 
 Browse IO history and save traces for selected wires.

@@ -224,9 +224,7 @@ local function build(width, height, state, api, context)
                     local detailEnd=y2-controlRows
                     local inset=w>=20 and 2 or 0
                     ui.style(x1, y1, w, rh, contrast, state.panelColour)
-                    ui.style(x1, y1, w, 1, 1, 128)
-                    if inset>0 then ui.style(x1,y1,1,1,nil,accent) end
-                    put(x1+inset, y1, item.name, w - inset - 4)
+                    ui.band(x1, y1, w - 3, item.name, 128)
                     local status = reading(item)
                     local active = status.status == "ok" and status.reactor and status.reactor.active
                     local label = status.status ~= "ok" and "?" or active == nil and "?" or active and "On" or "Off"

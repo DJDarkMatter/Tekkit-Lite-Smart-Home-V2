@@ -474,7 +474,9 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.top.bg[win.y][win.x], 128, "Title contrasts with the blue desktop")
         equal(t.top.bg[win.y][win.x + win.width - 2], 16384, "Close is red at the far right")
         equal(t.top.lines[win.y]:sub(win.x, win.x + 6), " Coffee")
-        equal(t.top.bg[win.y + 1][win.x + 1], 2048, "App heading is a filled panel")
+        for x = win.x + 1, win.x + win.width - 2 do
+            equal(t.top.bg[win.y + 1][x], 128, "App heading is filled to both edges")
+        end
         local content = t.central.server.apps.coffee.render(win.width - 2, win.height - 2, t.central.server.state.appStates.coffee, t.api,
             {view = t.central.server.views[id] or {}})
         local pause
@@ -486,6 +488,10 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.touch("top", win.x + pause.x2, buttonY) -- The padded button edge is clickable.
         equal(t.central.server.state.appStates.coffee.paused, true)
         assert(t.top.lines[buttonY]:find("Resume", 1, true))
+        assert(t.api.setAppColour("coffee", 32768)); t.paint()
+        for x = win.x + 1, win.x + win.width - 2 do
+            equal(t.top.bg[win.y + 1][x], 128, "The gray heading should span the black timer's entire width")
+        end
         local pane = t.open("pane", "left")
         local p = t.window(pane)
         local colour = 2048

@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v53
+-- SmartHome OS installer: bundled-v54
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -1405,16 +1405,16 @@ function Gui.content(width, height)
         end
         return 5 * scale
     end
+    function ui.band(x, y, span, text, bg, centred)
+        bg = bg or 128
+        local pad = not centred and span >= 14 and #text < span and 1 or 0
+        ui.style(x, y, span, 1, Gui.contrast(bg), bg)
+        ui.put(x + pad, y, text, span - pad, centred)
+    end
     function ui.heading(text, accent)
-        if width < 14 or #text > width - 2 then
-            ui.text(1, text)
-            ui.style(1, 1, width, 1, Gui.contrast(accent or 128), accent or 128)
-        else
-            ui.text(1, "  " .. text)
-            ui.style(1, 1, width, 1, 1, 128)
-            local marker = accent or 256
-            ui.style(1, 1, 1, 1, Gui.contrast(marker), marker)
-        end
+        ui.text(1, "")
+        local background = accent ~= 2048 and accent ~= 32768 and accent or 128
+        ui.band(1, 1, width, text, background)
     end
     function ui.button(y, label, action, x1, x2, enabled, bg, fg, value, rows)
         x1, x2 = x1 or 1, x2 or width
@@ -1582,7 +1582,8 @@ function Gui.keyboard(ui, width, height, k, accent, footer)
     local chars = k.symbols or symbols
     local pages = mode == "123" and math.ceil(#chars / (columns * 3)) or math.ceil(10 / columns)
     k.page, k.pages = math.max(1, math.min(k.page or 1, pages)), pages
-    ui.heading(k.draft == "" and "Type here" or k.draft:sub(-width), accent)
+    local caption = k.masked and string.rep("*", math.min(#k.draft, width)) or k.draft:sub(-width)
+    ui.heading(caption == "" and (k.prompt or "Type here") or caption, accent)
     local controlRows = math.min(3, math.max(1, math.floor((height - 2) / 6)))
     local footerGap = height >= 12 and 1 or 0
     local available = height - 1 - 2 * controlRows - footerGap
@@ -1730,8 +1731,8 @@ function Gui.form(width,height,view,accent,background,panel)
         end
         ui.footer({{"Set","setNumber"},{"Back",back}}, footer)
     end
-    function ui.keyboard(k)
-        Gui.keyboard(ui, width, height, k, accent)
+    function ui.keyboard(k, footer)
+        Gui.keyboard(ui, width, height, k, accent, footer)
     end
     return ui
 end
@@ -3147,7 +3148,7 @@ local function validApp(app)
     end
     if app.animationInterval~=nil and (type(app.animationInterval)~="number" or app.animationInterval~=app.animationInterval
         or app.animationInterval<0.1 or app.animationInterval>1) then return false end
-    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection", "handleNotification", "onOpen", "onClose", "ioRoutes"}) do
+    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection", "handleNotification", "handleHttp", "onOpen", "onClose", "ioRoutes"}) do
         if app[key] ~= nil and type(app[key]) ~= "function" then return false end
     end
     return (not app.maxWidth or app.maxWidth >= (app.minWidth or 8))
@@ -3187,6 +3188,7 @@ function Server.new(net, storage, config, logger)
         lastSave = 0, lastSaveAttempt = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}, notifications = {}}
     local clientGroups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients, relay = server.relayClients}
     local api, errors, installedApps = {}, {}, {}
+    local httpRequests = {}
     local history, ioTests, ioPulses = IOHistory.new(), {}, {}
     local nextPulseId, wakeAt = 0, nil
     local callingApp
@@ -3379,6 +3381,37 @@ function Server.new(net, storage, config, logger)
         end
         Work.stage = previousStage
         return ok, a, b
+    end
+
+    function api.requestHttp(url, body)
+        local app = callingApp and definition(callingApp)
+        if not app or not app.handleHttp then return false, "App has no HTTP handler" end
+        if not http or type(http.request) ~= "function" then return false, "HTTP is disabled" end
+        if type(url) ~= "string" or httpRequests[url] then return false, "HTTP request already pending" end
+        local headers = body and {["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"} or nil
+        local ok, started, reason = pcall(http.request, url, body, headers)
+        if not ok or started == false or started == nil and reason then
+            return false, tostring(ok and reason or started or "HTTP request refused")
+        end
+        httpRequests[url] = {name = callingApp, app = app, deadline = os.clock() + 30}
+        return true
+    end
+
+    local function dispatchHttp(url, response, reason)
+        local request = httpRequests[url]
+        if not request then return end
+        httpRequests[url] = nil
+        if server.running[request.name] and definition(request.name) == request.app then
+            appCall(request.name, "handleHttp", url, response, reason, api)
+        end
+    end
+
+    function server.handleHttp(event, url, value, extra)
+        local success = event == "http_success"
+        local response = success and value or extra
+        local reason = not success and (type(value) == "string" and value or "HTTP request failed") or nil
+        dispatchHttp(url, success and response or nil, reason)
+        if type(response) == "table" and type(response.close) == "function" then pcall(response.close) end
     end
 
     local function isService(app) return app.backgroundService == true or app.render == nil end
@@ -5501,6 +5534,9 @@ function Server.new(net, storage, config, logger)
         local dt = math.max(0, now - server.lastTick)
         server.lastTick = now
         updateClock()
+        for _, url in ipairs(sortedKeys(httpRequests)) do
+            if now >= httpRequests[url].deadline then dispatchHttp(url, nil, "HTTP request timed out") end
+        end
         for _, name in ipairs(sortedKeys(server.running)) do
             if server.running[name] then
                 appCall(name, "background", dt, state.appStates[name], api)
@@ -6222,7 +6258,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v53: starting")
+console.log("SmartHome OS v54: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -6296,7 +6332,8 @@ local function collect(item)
         end
         packetCount, packetBytes = packetCount + 1, packetBytes + #raw
         enqueue(item)
-    elseif event == "peripheral" or event == "peripheral_detach" then enqueue(item)
+    elseif event == "peripheral" or event == "peripheral_detach"
+        or event == "http_success" or event == "http_failure" then enqueue(item)
     elseif event == "timer" and item[2] == timer then enqueue(item)
     else
         local command = console.handle(unpack(item))
@@ -6352,6 +6389,10 @@ ok, err = Work.protect(function()
             elseif event == "peripheral" or event == "peripheral_detach" then
                 Work.stage = "Peripheral change"
                 net.peripheralChanged(p1)
+            elseif event == "http_success" or event == "http_failure" then
+                Work.stage = "HTTP response"
+                server.handleHttp(event, p1, p2, p3)
+                server.refreshMonitors(false)
             elseif event == "command" then
                 Work.stage = "Command " .. p1
                 local lines, quit, action = server.command(p1)
@@ -7706,7 +7747,7 @@ end
 return Update
 ]=],
 }
-local catalog = {"clock", "coffee", "io_scope", "logic_sandbox", "me_monitor", "me_storage", "notes", "reactors", "screensaver", "solar_farm", "switchboard", "window_presets"}
+local catalog = {"clock", "coffee", "file_explorer", "io_scope", "logic_sandbox", "me_monitor", "me_storage", "notes", "reactors", "screensaver", "solar_farm", "switchboard", "window_presets"}
 local workChunk = assert(loadstring(sources["lib_work.lua"], "lib_work.lua"))
 setfenv(workChunk, getfenv(1))
 local Work = workChunk()
@@ -7714,7 +7755,7 @@ local args = {...}
 local function install()
     local role, autorun = args[1], false
     local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-    print("SmartHome installer: bundled-v53")
+    print("SmartHome installer: bundled-v54")
     local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
     local appsUsage = "Usage: inst apps [--ref REF]"
     local restoreUsage = "Usage: inst restore [FILE] | inst restore io|monitor|sensor|relay CLIENT_ID [FILE]"

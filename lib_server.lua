@@ -107,7 +107,7 @@ local function validApp(app)
     end
     if app.animationInterval~=nil and (type(app.animationInterval)~="number" or app.animationInterval~=app.animationInterval
         or app.animationInterval<0.1 or app.animationInterval>1) then return false end
-    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection", "handleNotification", "onOpen", "onClose", "ioRoutes"}) do
+    for _, key in ipairs({"init", "shutdown", "background", "render", "handleTouch", "handleIOSelection", "handleSensorSelection", "handleNotification", "handleHttp", "onOpen", "onClose", "ioRoutes"}) do
         if app[key] ~= nil and type(app[key]) ~= "function" then return false end
     end
     return (not app.maxWidth or app.maxWidth >= (app.minWidth or 8))
@@ -147,6 +147,7 @@ function Server.new(net, storage, config, logger)
         lastSave = 0, lastSaveAttempt = 0, lastTick = os.clock(), views = {}, dialogs = {}, running = {}, notifications = {}}
     local clientGroups = {io = server.ioClients, monitor = server.monitors, sensor = server.sensorClients, relay = server.relayClients}
     local api, errors, installedApps = {}, {}, {}
+    local httpRequests = {}
     local history, ioTests, ioPulses = IOHistory.new(), {}, {}
     local nextPulseId, wakeAt = 0, nil
     local callingApp
@@ -339,6 +340,37 @@ function Server.new(net, storage, config, logger)
         end
         Work.stage = previousStage
         return ok, a, b
+    end
+
+    function api.requestHttp(url, body)
+        local app = callingApp and definition(callingApp)
+        if not app or not app.handleHttp then return false, "App has no HTTP handler" end
+        if not http or type(http.request) ~= "function" then return false, "HTTP is disabled" end
+        if type(url) ~= "string" or httpRequests[url] then return false, "HTTP request already pending" end
+        local headers = body and {["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"} or nil
+        local ok, started, reason = pcall(http.request, url, body, headers)
+        if not ok or started == false or started == nil and reason then
+            return false, tostring(ok and reason or started or "HTTP request refused")
+        end
+        httpRequests[url] = {name = callingApp, app = app, deadline = os.clock() + 30}
+        return true
+    end
+
+    local function dispatchHttp(url, response, reason)
+        local request = httpRequests[url]
+        if not request then return end
+        httpRequests[url] = nil
+        if server.running[request.name] and definition(request.name) == request.app then
+            appCall(request.name, "handleHttp", url, response, reason, api)
+        end
+    end
+
+    function server.handleHttp(event, url, value, extra)
+        local success = event == "http_success"
+        local response = success and value or extra
+        local reason = not success and (type(value) == "string" and value or "HTTP request failed") or nil
+        dispatchHttp(url, success and response or nil, reason)
+        if type(response) == "table" and type(response.close) == "function" then pcall(response.close) end
     end
 
     local function isService(app) return app.backgroundService == true or app.render == nil end
@@ -2461,6 +2493,9 @@ function Server.new(net, storage, config, logger)
         local dt = math.max(0, now - server.lastTick)
         server.lastTick = now
         updateClock()
+        for _, url in ipairs(sortedKeys(httpRequests)) do
+            if now >= httpRequests[url].deadline then dispatchHttp(url, nil, "HTTP request timed out") end
+        end
         for _, name in ipairs(sortedKeys(server.running)) do
             if server.running[name] then
                 appCall(name, "background", dt, state.appStates[name], api)

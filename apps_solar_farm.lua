@@ -627,16 +627,11 @@ local function dashboard(ui,w,h,state,api)
     local cardRows=math.min(7,4+math.max(0,math.floor((h-25)/5)))
     local short={ok="OK",unconfigured="SET",waiting="WAIT",offline="OFF",unpowered="PWR",unsupported="DATA",stale="OLD",error="ERR"}
     for i,role in ipairs({"farm","main"}) do
-        local gutter=w>=22 and 1 or 0
-        local left=i==1 and 1 or half+1+gutter; local width=i==1 and half or w-half-gutter
+        local left=i==1 and 1 or half+1; local width=i==1 and half or w-half
         local bg=source(role).status=="ok" and 8192 or 2
-        local inset=width>=11 and 1 or 0
-        local surface=inset==1 and state.settings.panel or bg
-        ui.style(left,1,width,1,api.ui.contrast(surface),surface)
-        if inset==1 then ui.style(left,1,1,1,nil,bg) end
         local label=w>=24 and (role=="farm" and "Farm: " or "Main: ")..status(role)
             or (role=="farm" and "F:" or "M:")..(short[source(role).status] or "ERR")
-        ui.put(left+inset,1,label,width-inset,true)
+        ui.band(left,1,width,label,bg,true)
     end
     if not cards then return w>=36 and 3 or 2 end
     local count=w>=72 and 3 or 2
@@ -648,9 +643,7 @@ local function dashboard(ui,w,h,state,api)
         local detail=4+math.floor((cardRows-4)/2)
         local last=2+cardRows
         ui.style(left,3,width,cardRows,api.ui.contrast(state.settings.panel),state.settings.panel)
-        local accent=api.getAppColour(name)
-        ui.style(left,3,1,cardRows,nil,accent)
-        ui.put(left+2,3,({"HV OUTPUT","FARM STOCK","FARM MOVEMENT"})[i],width-3)
+        ui.band(left,3,width,({"HV OUTPUT","FARM STOCK","FARM MOVEMENT"})[i],256)
         if i==1 then
             ui.put(left+1,detail,state.hv.item and Me.amount(hvAmount).." panels" or "Select HV panel type",width-2)
             ui.put(left+1,detail+1,hvRate and hvRateCaption(hvRate) or "Collecting "..rateProgress("hv").."/60s",width-2)

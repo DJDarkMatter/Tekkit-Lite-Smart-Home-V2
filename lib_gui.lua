@@ -296,16 +296,16 @@ function Gui.content(width, height)
         end
         return 5 * scale
     end
+    function ui.band(x, y, span, text, bg, centred)
+        bg = bg or 128
+        local pad = not centred and span >= 14 and #text < span and 1 or 0
+        ui.style(x, y, span, 1, Gui.contrast(bg), bg)
+        ui.put(x + pad, y, text, span - pad, centred)
+    end
     function ui.heading(text, accent)
-        if width < 14 or #text > width - 2 then
-            ui.text(1, text)
-            ui.style(1, 1, width, 1, Gui.contrast(accent or 128), accent or 128)
-        else
-            ui.text(1, "  " .. text)
-            ui.style(1, 1, width, 1, 1, 128)
-            local marker = accent or 256
-            ui.style(1, 1, 1, 1, Gui.contrast(marker), marker)
-        end
+        ui.text(1, "")
+        local background = accent ~= 2048 and accent ~= 32768 and accent or 128
+        ui.band(1, 1, width, text, background)
     end
     function ui.button(y, label, action, x1, x2, enabled, bg, fg, value, rows)
         x1, x2 = x1 or 1, x2 or width
@@ -473,7 +473,8 @@ function Gui.keyboard(ui, width, height, k, accent, footer)
     local chars = k.symbols or symbols
     local pages = mode == "123" and math.ceil(#chars / (columns * 3)) or math.ceil(10 / columns)
     k.page, k.pages = math.max(1, math.min(k.page or 1, pages)), pages
-    ui.heading(k.draft == "" and "Type here" or k.draft:sub(-width), accent)
+    local caption = k.masked and string.rep("*", math.min(#k.draft, width)) or k.draft:sub(-width)
+    ui.heading(caption == "" and (k.prompt or "Type here") or caption, accent)
     local controlRows = math.min(3, math.max(1, math.floor((height - 2) / 6)))
     local footerGap = height >= 12 and 1 or 0
     local available = height - 1 - 2 * controlRows - footerGap
@@ -621,8 +622,8 @@ function Gui.form(width,height,view,accent,background,panel)
         end
         ui.footer({{"Set","setNumber"},{"Back",back}}, footer)
     end
-    function ui.keyboard(k)
-        Gui.keyboard(ui, width, height, k, accent)
+    function ui.keyboard(k, footer)
+        Gui.keyboard(ui, width, height, k, accent, footer)
     end
     return ui
 end

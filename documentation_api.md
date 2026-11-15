@@ -43,7 +43,9 @@ Bundled-v9 adds optional `app.title` (1–64 characters) for launcher, taskbar a
 
 `api.ui.content(width, height)` supplies `lines`, `hits`, `text`, `heading`, `style`, and `button`; the returned `lines.hits` aliases the same rectangles used for interaction. `api.ui.menu(width, height, title, items, page, backAction, accent)` returns `lines, hits, page, pages`, with pagination only when needed. Items use `{label, action, enabled}`. `api.ui.hit(hit, x, y)` supports both one-row and rectangular controls. These helpers are pure layout functions and do not touch peripherals. Coffee is the reference for responsive action placement and parent navigation.
 
-Hooks must return promptly and must not call `sleep`, `read`, `os.pullEvent`, HTTP, or other yielding functions. Lua 5.1 hooks run under `pcall` for fault isolation. Apps are trusted code, not sandboxed plugins.
+Hooks should return promptly. Use the OS interfaces for cooperative work and asynchronous HTTP. `api.ui.content` also provides `band(x, y, span, text, background, centered)` to fill a title row or part of a row. `heading` fills the whole first row. `Gui.keyboard` accepts a `masked` draft flag for private input. Keep those drafts in runtime memory outside saved window state.
+
+`api.requestHttp(url, body?)` starts a GET or a form-encoded POST and returns `ok, error`. An app that uses it supplies `handleHttp(url, response, error, api)`. The OS dispatches HTTP events through its worker and closes the response handle after the hook. For refusals and timeout, the response is nil and the hook receives an error message. Requests expire after 30 seconds. Use a distinct URL per request to distinguish late replies on CraftOS 1.5.
 
 | API | Result |
 | --- | --- |

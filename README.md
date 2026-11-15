@@ -6,6 +6,10 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
+## Updating to v54
+
+App headings fill the content row from edge to edge, including Coffee's **Next harvest**. Install **File Explorer** to browse the central computer, copy and move files or folders, create folders and text files, and transfer text files with Pastebin. See the [update guide from v50](documentation_update_v54.md) and [File Explorer controls](documentation_file_explorer.md).
+
 ## Updating to v53
 
 Use the roughly 2 KB `tools_install_github.lua` as `inst` to run the full installer in memory. Updates reclaim obsolete program copies, skip unchanged files and can resume after a restart. Startup uses the small network boot record, and regular state saves keep a verified previous copy and compress large snapshots. See the [low-space update guide](documentation_update_v53.md).
@@ -68,7 +72,7 @@ On a central computer already using v43, upload the full release to GitHub, run 
 
 The central OS can yield when the legacy watchdog rejects its software wake-up event. Modem bursts use a bounded receive buffer, with shorter work slices and a shared native timer fallback. Update the central computer using **bundled-v43** and run `inst server`, then `reboot`. See the [v43 install instructions and changed files](documentation_update_v43.md).
 
-The [clickable portrait menu tree](documentation_menu_tree.pdf) covers Settings, desktop controls, shared dialogs and all 12 optional apps. Its [editable source](documentation_menu_tree.md) stays with the repository and full releases.
+The [clickable portrait menu tree](documentation_menu_tree.pdf) covers Settings, desktop controls, shared dialogs and all 13 optional apps. Its [editable source](documentation_menu_tree.md) stays with the repository and full releases.
 
 ## Updating to v42
 
@@ -124,7 +128,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 Upload `tools_install_github.lua` as the installer paste for a computer with limited space. It downloads and runs the full installer in memory. The GitHub branch must contain the release, including `install.lua`. Use `inst --installer-ref REF server` to choose a branch or commit.
 
-`install.lua` is also available as a self-contained installer with all twenty-seven runtime source files. Upload it as the single installer paste if you need to install roles without a GitHub connection from the computer. Both forms print `SmartHome installer: bundled-v53` and write the role files directly into the computer root. User apps download only when requested.
+`install.lua` is also available as a self-contained installer with all twenty-seven runtime source files. Upload it as the single installer paste if you need to install roles without a GitHub connection from the computer. Both forms print `SmartHome installer: bundled-v54` and write the role files directly into the computer root. User apps download only when requested.
 
 On a computer, run:
 

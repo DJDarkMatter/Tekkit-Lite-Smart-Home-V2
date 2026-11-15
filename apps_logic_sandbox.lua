@@ -652,9 +652,7 @@ local function drawRule(ui, w, h, view, api, circuit, root)
         local thenY = firstHeight+3
         local function card(y, last, label, action, lines)
             ui.style(2,y,w-2,last-y+1,1,128)
-            ui.style(2,y,1,last-y+1,nil,accent)
-            ui.style(3,y,w-3,1,256)
-            ui.put(4,y,label,w-4)
+            ui.band(2,y,w-2,label,256)
             for i=1,math.min(#lines,last-y) do ui.put(4,y+i,lines[i],w-4) end
             ui.hits[#ui.hits+1]={x1=1,x2=w,y1=y,y2=last,action=action}
         end

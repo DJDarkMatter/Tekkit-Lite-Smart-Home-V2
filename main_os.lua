@@ -2,7 +2,7 @@
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v53: starting")
+console.log("SmartHome OS v54: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -76,7 +76,8 @@ local function collect(item)
         end
         packetCount, packetBytes = packetCount + 1, packetBytes + #raw
         enqueue(item)
-    elseif event == "peripheral" or event == "peripheral_detach" then enqueue(item)
+    elseif event == "peripheral" or event == "peripheral_detach"
+        or event == "http_success" or event == "http_failure" then enqueue(item)
     elseif event == "timer" and item[2] == timer then enqueue(item)
     else
         local command = console.handle(unpack(item))
@@ -132,6 +133,10 @@ ok, err = Work.protect(function()
             elseif event == "peripheral" or event == "peripheral_detach" then
                 Work.stage = "Peripheral change"
                 net.peripheralChanged(p1)
+            elseif event == "http_success" or event == "http_failure" then
+                Work.stage = "HTTP response"
+                server.handleHttp(event, p1, p2, p3)
+                server.refreshMonitors(false)
             elseif event == "command" then
                 Work.stage = "Command " .. p1
                 local lines, quit, action = server.command(p1)

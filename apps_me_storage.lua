@@ -295,9 +295,7 @@ local function build(width, height, state, api, context)
             local cardH = math.floor((row+1)*available/usedRows)-math.floor(row*available/usedRows)
             local inset = span>=math.max(17,#metric[1]+2) and 2 or 0
             ui.style(x,y,span,cardH,live and 1 or 256,128)
-            ui.style(x,y,span,1,256)
-            if inset>0 then ui.style(x,y,1,cardH,nil,accent) end
-            put(x+inset,y,metric[1],span-inset)
+            ui.band(x,y,span,metric[1],256)
             local meter = cardH>=3 and first+i==1 and value.percent
             local meterRows = meter and (cardH>=5 and 2 or 1) or 0
             local middle = y+1+math.floor((cardH-meterRows-2)/2)
