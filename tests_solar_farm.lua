@@ -211,6 +211,28 @@ return function(tests,newBus,monitor,serialize,unserialize,equal,githubFile)
         t.main[2].Size=500000; broken=false; t.advance(2); equal(hv(t),0)
         t.main[2].Size=500002; t.advance(2); equal(hv(t),2)
     end
+    function tests.v52_solar_short_farm_errors_hold_display_and_sustained_errors_rebase_rates()
+        local t=setup("solar_farm",true); t.configure()
+        t.farm[2].Size=67; t.advance(2)
+        equal(farm(t,"solar.lv"),3)
+        local read=t.api.getSensorReading
+        local failed=true
+        t.api.getSensorReading=function(a,options)
+            if failed and a.target=="farm" then return {status="error",error="Sensor request timed out",sequence=t.sequence,time=t.now} end
+            return read(a,options)
+        end
+        t.farm[2].Size=900; t.advance(2)
+        local text=t.text()
+        assert(text:find("Farm: Live",1,true) and text:find("LV Solar",1,true) and not text:find("900",1,true))
+        t.view().screen="sourceInfo"
+        assert(t.text():find("retrying",1,true) and t.text():find("Sensor request timed out",1,true))
+        t.view().screen="home"; failed=false; t.advance(2)
+        equal(farm(t,"solar.lv"),3,"The first good sample after a retry is a new baseline")
+        t.farm[2].Size=904; t.advance(2); equal(farm(t,"solar.lv"),7)
+        failed=true; t.advance(1); t.advance(5)
+        assert(t.text():find("Farm: Error",1,true) and t.text():find("Main: Live",1,true))
+        t.farm[2].Size=8000; failed=false; t.advance(2); equal(farm(t,"solar.lv"),7)
+    end
     function tests.solar_unconfigured_empty_partial_and_unpowered_feeds_explain_their_status_and_picker_never_crashes()
         local t=setup("solar_farm",true,{width=13,height=7}); assert(t.text():find("F:SET",1,true))
         t.click("menu"); t.click("chooseHV"); assert(t.text():find("ME source",1,true) or t.text():find("unconfigured",1,true))

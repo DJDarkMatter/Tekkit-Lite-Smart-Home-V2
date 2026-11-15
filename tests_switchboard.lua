@@ -292,6 +292,36 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(t.id,"open",board.id); equal(tileColour(t,t.id,board.buttons[1].id),4)
     end
 
+    function tests.v51_switch_editor_uses_matching_controls_with_clean_edges()
+        local t, Gui = setup(), dofile("lib_gui.lua")
+        local board = t.preset(t.id)
+        local button = board.buttons[1]
+        button.displayColour = 512
+        local main = {renameSwitch=true, switchColour=true, route=true, behavior=true, buttonColors=true, askClear=true}
+        for _, size in ipairs({{12, 6}, {17, 10}, {39, 15}, {51, 22}, {62, 28}}) do
+            local width, height = unpack(size)
+            local view = {screen = "button", boardId = board.id, buttonId = button.id}
+            local lines = t.app.render(width, height, t.state, t.api, {view = view, appName = "switchboard"})
+            local surface = Gui.new(width, height, 1, 32768)
+            for _, paint in ipairs(lines.styles) do
+                surface.style(paint.x, paint.y, paint.width, paint.height, paint.fg, paint.bg)
+            end
+            local count, span, depth = 0, nil, nil
+            for _, hit in ipairs(lines.hits) do
+                if main[hit.action] then
+                    count = count + 1
+                    span, depth = span or hit.x2 - hit.x1 + 1, depth or hit.y2 - hit.y1 + 1
+                    equal(hit.x2 - hit.x1 + 1, span); equal(hit.y2 - hit.y1 + 1, depth)
+                    local color = hit.action == "switchColour" and span >= 7
+                    local fill = Gui.code(t.state.settings.border):rep(span)
+                    if color then fill = Gui.code(button.displayColour) .. fill:sub(2) end
+                    for y = hit.y1, hit.y2 do equal(surface.background[y]:sub(hit.x1, hit.x2), fill) end
+                else equal(hit.y2 - hit.y1 + 1, 1) end
+            end
+            equal(count, 6)
+        end
+    end
+
     function tests.switchboard_button_colour_is_cosmetic_persistent_and_independent_of_shared_routes()
         local t = setup()
         local a, other = t.preset(t.id), t.open("left")
@@ -341,7 +371,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.view(other).screen,"board"); equal(t.view(other).boardId,b.id)
         equal(t.view(other).pages.switches.page,page)
         equal(t.window(t.id).x,3); equal(t.window(t.id).y,2)
-        local saved=unserialize(t.central.disk.files["configs_os_state.txt"])
+        local saved=t.central.savedState()
         equal(saved.windows[t.id].viewState.boardId,a.id)
         t.display.active=false; t.bus.advance(20)
         t.display=t.bus.computer(13,"monitor",{disk=t.display.disk,monitors={top=t.top,left=t.left}}):start()
@@ -483,7 +513,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.bus.advance(1)
         equal(t.io.bundled.left, 0); equal(t.other.bundled.bottom, 0)
         equal(t.api.getOutput(logical(board.buttons[1])), false)
-        local saved = unserialize(t.central.disk.files["configs_os_state.txt"])
+        local saved = t.central.savedState()
         equal(saved.appStates.switchboard.boards[1].buttons[1].route.clientId, "io_12")
         equal(saved.outputMap[logical(board.buttons[1])].color, 4)
         equal(saved.outputs[logical(board.buttons[1])], false)
@@ -581,7 +611,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(t.id, "toggle", board.buttons[2].id) -- ON then OFF then ON
         t.click(t.id, "toggle", board.buttons[2].id)
         t.click(t.id, "toggle", board.buttons[2].id)
-        local saved = unserialize(t.central.disk.files["configs_os_state.txt"])
+        local saved = t.central.savedState()
         equal(saved.outputs[logical(board.buttons[1])], false)
         equal(saved.outputs[logical(board.buttons[2])], true)
         t.io = t.bus.computer(11, "io", {disk = t.io.disk, modemSide = "right"}):start()

@@ -1,10 +1,11 @@
 """Build the one-paste installer using only the repository's current Lua sources."""
 from pathlib import Path
+from textwrap import indent
 import sys
 
 ROOT = Path(__file__).resolve().parent
 PATHS = [
-    "lib_work.lua", "lib_storage.lua", "lib_backup.lua", "lib_network.lua", "lib_console.lua", "lib_gui.lua", "lib_me.lua", "lib_settings.lua", "lib_system.lua", "lib_alert_inbox.lua", "lib_io_history.lua", "lib_io_picker.lua", "lib_desktop.lua", "lib_server.lua", "lib_io.lua", "lib_monitor.lua",
+    "lib_work.lua", "lib_codec.lua", "lib_storage.lua", "lib_backup.lua", "lib_network.lua", "lib_console.lua", "lib_gui.lua", "lib_me.lua", "lib_settings.lua", "lib_system.lua", "lib_alert_inbox.lua", "lib_io_history.lua", "lib_io_picker.lua", "lib_desktop.lua", "lib_server.lua", "lib_io.lua", "lib_monitor.lua",
     "main_os.lua", "clients_io_client.lua", "clients_monitor_client.lua",
     "lib_sensor_data.lua", "lib_sensor.lua", "lib_sensor_server.lua", "lib_sensor_picker.lua", "clients_sensor_client.lua",
     "lib_relay.lua", "clients_relay_client.lua",
@@ -16,35 +17,40 @@ def lua_string(value):
         equals += "="
     return "[" + equals + "[" + value + "]" + equals + "]"
 
-header = '''-- SmartHome OS installer: bundled-v50
+header = '''-- SmartHome OS installer: bundled-v53
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
 -- User apps: inst apps [--ref REF] or inst app NAME [--ref REF] (GitHub)
 -- Entire OS backup: inst restore [BACKUP_FILE]
+-- Storage diagnostics: inst space
 -- Alternatives: inst app NAME PASTE_ID   or   inst app NAME --file PATH
 -- OS/client installation is offline. Apps are fetched only on request.
 local sources = {
 '''
-entries = [f'    ["{path}"] = {lua_string((ROOT / path).read_text())},\n' for path in PATHS]
+entries = [f'    ["{path}"] = {lua_string((ROOT / path).read_text())},\n'
+           for path in [*PATHS, "tools_install_update.lua"]]
 runner = r'''}
 local catalog = __APP_CATALOG__
 local workChunk = assert(loadstring(sources["lib_work.lua"], "lib_work.lua"))
 setfenv(workChunk, getfenv(1))
-workChunk()
+local Work = workChunk()
 local args = {...}
-local role, autorun = args[1], false
+local function install()
+'''
+install_body = r'''local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v50")
+print("SmartHome installer: bundled-v53")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 local appsUsage = "Usage: inst apps [--ref REF]"
 local restoreUsage = "Usage: inst restore [FILE] | inst restore io|monitor|sensor|relay CLIENT_ID [FILE]"
 local appMode = role == "app" or role == "apps"
-if not entry[role] and not appMode and role ~= "restore" then
+if not entry[role] and not appMode and role ~= "restore" and role ~= "space" then
     print("Usage: inst server|io|monitor|sensor|relay [--startup]")
     print(appUsage)
     print(appsUsage)
     print(restoreUsage)
+    print("inst space")
     return
 end
 assert(shell.dir() == "", "Run cd / first")
@@ -53,9 +59,24 @@ local function bundled(name)
     setfenv(chunk, getfenv(1))
     return chunk()
 end
+bundled("lib_codec.lua")
 local storage = bundled("lib_storage.lua")
 local backup = bundled("lib_backup.lua")
-backup.recover(storage)
+local update = bundled("tools_install_update.lua")
+local bundledPaths = {["install.lua"] = true}
+for path in pairs(sources) do bundledPaths[path] = true end
+local pending = update.pending(storage)
+if role == "space" then
+    local available = storage.freeSpace("install_pending.txt")
+    local copies, bytes = update.programCopies(storage, bundledPaths)
+    print(available and ("Free disk space: " .. available .. " bytes") or "Free disk space unavailable")
+    print("Old program copies: " .. #copies .. " / " .. bytes .. " bytes")
+    if pending then print("Pending update: " .. pending.command) end
+    return
+end
+local command = "inst " .. table.concat(args, " ")
+assert(not pending or pending.command == command, pending and ("Resume the update with " .. pending.command))
+backup.recover(storage, true)
 if role == "restore" then
     local target, id, path = args[2], args[3], args[4]
     if entry[target] and target ~= "server" then
@@ -66,7 +87,7 @@ if role == "restore" then
         target = "server"
     end
     path = path or "backup_os_all.txt"
-    local bundle = assert(storage.load(path, function(value) return backup.valid(value, "@all") end),
+    local bundle = assert(backup.load(storage, path, "@all"),
         "Entire OS backup missing or unreadable: " .. path)
     local ok, err
     if target == "server" then ok, err = backup.restoreServer(bundle, storage)
@@ -140,6 +161,7 @@ local function appSource(name, source, parameter)
                     output[#output + 1] = string.char(math.floor(value / 2 ^ bits))
                     value = value % 2 ^ bits
                 end
+                if index % 256 == 0 then Work.check(2048) end
             end
             local decoded = table.concat(output)
             if value ~= 0 or tonumber(body:match('"size"%s*:%s*(%d+)')) ~= #decoded then
@@ -185,7 +207,12 @@ local function appSource(name, source, parameter)
     return path, contents
 end
 
-local files
+local files, references = {}, {}
+local function addFile(path, contents, original)
+    sources[path], references[path] = contents, original
+    for _, present in ipairs(files) do if present == path then return end end
+    files[#files + 1] = path
+end
 if appMode then
     local names, source, parameter
     if role == "apps" then
@@ -204,36 +231,31 @@ if appMode then
     end
     assert(fs.exists("main_os.lua") and fs.exists("lib_server.lua"), "Install apps on the central OS computer")
     local configPath = "configs_os.txt"
-    local settings = storage.load(configPath)
-    if not settings then
-        assert(not backup.exists(configPath), "Unreadable OS settings")
-        settings = {}
-    end
-    if settings.enabledApps == nil then settings.enabledApps = {} end
-    assert(type(settings.enabledApps) == "table", "Invalid enabledApps setting")
-    files = {}
-    local downloads = {}
     for _, name in ipairs(names) do
         local path, contents = appSource(name, source, parameter)
-        downloads[path], sources[path] = contents, contents
-        files[#files + 1] = path
-        settings.enabledApps[name] = true
+        addFile(path, contents)
     end
-    sources[configPath] = textutils.serialize(settings)
-    if role == "apps" then
-        downloads[configPath] = sources[configPath]
-        assert(backup.installApps(storage, downloads))
-        print("Installed and enabled " .. #names .. " SmartHome apps")
-        print("Restart the central OS to load them")
-        return
+    if not pending then
+        local settings = storage.load(configPath)
+        if not settings then
+            assert(not backup.exists(configPath), "Unreadable OS settings")
+            settings = {}
+        end
+        if settings.enabledApps == nil then settings.enabledApps = {} end
+        assert(type(settings.enabledApps) == "table", "Invalid enabledApps setting")
+        local changed = false
+        for _, name in ipairs(names) do
+            if settings.enabledApps[name] ~= true then changed = true; settings.enabledApps[name] = true end
+        end
+        if changed then addFile(configPath, Work.serialize(settings)) end
     end
-    files[#files + 1] = configPath
 else
     for index = 2, #args do
         assert(args[index] == "--startup", "Usage: inst server|io|monitor|sensor|relay [--startup]")
         autorun = true
     end
-    files = {"lib_work.lua", "lib_storage.lua", "lib_backup.lua", "lib_network.lua"}
+    -- Add the codec and then the startup guard before changing other files.
+    files = {"lib_codec.lua", "lib_backup.lua", "lib_work.lua", "lib_storage.lua", "lib_network.lua"}
     if role == "server" or role == "monitor" then files[#files + 1] = "lib_gui.lua" end
     if role == "server" then
         files[#files + 1] = "lib_me.lua"
@@ -258,27 +280,27 @@ else
         files[#files + 1] = "startup"
     end
 end
-if not appMode then
+if pending then
+    for path, original in pairs(pending.references) do
+        addFile(path, assert(storage.readBytes(original), "Cannot resume migration from " .. original), original)
+    end
+    for path, contents in pairs(pending.settings) do addFile(path, contents) end
+elseif not appMode then
     -- Upgrade old folder-based installations without resetting IDs, apps or state.
     -- Existing flat files take precedence; old files remain recovery copies.
     local function existsAny(path)
         return fs.exists(path) or fs.exists(path .. ".tmp") or fs.exists(path .. ".bak")
     end
-    local function addFile(path, contents)
-        sources[path] = contents
-        for _, present in ipairs(files) do if present == path then return end end
-        files[#files + 1] = path
-    end
     local function readTable(path)
-        local value = storage.load(path)
+        local value, source, contents = storage.load(path)
         assert(value or not existsAny(path), "Unreadable saved data: " .. path)
-        return value
+        return value, source, contents
     end
     local function migrate(target, legacy)
         if existsAny(target) then return readTable(target), false end
         if not existsAny(legacy) then return nil, false end
-        local value = assert(readTable(legacy))
-        addFile(target, textutils.serialize(value))
+        local value, source, contents = readTable(legacy)
+        addFile(target, assert(contents), source)
         print("Migrating " .. legacy .. " to " .. target)
         return value, true
     end
@@ -295,7 +317,7 @@ if not appMode then
         if settings then
             if settings.saveFile and settings.saveFile ~= "configs_os_state.txt" then
                 settings.saveFile = "configs_os_state.txt"
-                addFile("configs_os.txt", textutils.serialize(settings))
+                addFile("configs_os.txt", Work.serialize(settings))
             end
             if migrated then
                 assert(settings.enabledApps == nil or type(settings.enabledApps) == "table", "Invalid enabledApps setting")
@@ -304,9 +326,7 @@ if not appMode then
                         assert(type(name) == "string" and name:match("^[%w_-]+$"), "Invalid enabled app name")
                         local path, oldPath = "apps_" .. name .. ".lua", "Apps/" .. name .. ".lua"
                         if not fs.exists(path) and fs.exists(oldPath) then
-                            local file = assert(fs.open(oldPath, "r"), "Cannot read legacy app: " .. oldPath)
-                            local contents = file.readAll(); file.close()
-                            addFile(path, contents)
+                            addFile(path, assert(storage.readBytes(oldPath), "Cannot read legacy app: " .. oldPath), oldPath)
                             print("Migrating enabled app: " .. name)
                         end
                     end
@@ -322,36 +342,36 @@ for _, path in ipairs(files) do
         local chunk, err = loadstring(contents, path)
         assert(chunk, "Invalid Lua: " .. path .. ": " .. tostring(err))
     else assert(type(textutils.unserialize(contents)) == "table", "Invalid settings: " .. path) end
+    Work.check(#contents)
 end
-for _, path in ipairs(files) do
-    assert(not path:find("/", 1, true), "Install targets must be root filenames")
-    local file = assert(fs.open(path .. ".download", "w"), "Cannot stage " .. path)
-    file.write(sources[path])
-    file.close()
-end
-for _, path in ipairs(files) do
-    if fs.exists(path) then
-        if fs.exists(path .. ".pre_update") then fs.delete(path .. ".pre_update") end
-        fs.move(path, path .. ".pre_update")
-    end
-    fs.move(path .. ".download", path)
-    print("Installed " .. path)
-end
-if role == "app" then
-    print("Installed and enabled user app: " .. args[2])
+local changed, unchanged = update.apply(storage, files, sources, command, pending, references, bundledPaths)
+print(changed .. " files updated, " .. unchanged .. " already current")
+if appMode then
+    print(role == "app" and ("Installed and enabled user app: " .. args[2])
+        or ("Installed and enabled " .. #catalog .. " SmartHome apps"))
     print("Restart the central OS to load it")
     return
 end
 print("Installed " .. role .. " from the bundled files")
 if autorun then
-    print("Autorun enabled; an existing startup is kept as startup.pre_update")
+    print("Autorun enabled")
     print("Run reboot to start automatically")
 else print("Autorun unchanged; add --startup to enable it") end
 print("Start with: " .. entry[role])
 '''
+runner_end = r'''end
+
+if type(sleep) == "function" and coroutine.running() then
+    Work.enable(function() sleep(0) end)
+    local ok, err = Work.call(install)
+    Work.disable()
+    if not ok then error(err, 0) end
+else install() end
+'''
 app_names = sorted(path.stem.removeprefix("apps_") for path in ROOT.glob("apps_*.lua"))
 catalog = "{" + ", ".join(f'"{name}"' for name in app_names) + "}"
-contents = header + "".join(entries) + runner.replace("__APP_CATALOG__", catalog)
+contents = (header + "".join(entries) + runner.replace("__APP_CATALOG__", catalog)
+            + indent(install_body, "    ") + runner_end)
 path = ROOT / "install.lua"
 if "--check" in sys.argv:
     if not path.exists() or path.read_text() != contents:

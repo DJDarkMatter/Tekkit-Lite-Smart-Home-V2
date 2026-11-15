@@ -844,6 +844,70 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         error("Restored window missing")
     end
 
+    function tests.v52_backup_recovers_failed_move_under_quota_and_labels_create_and_replace()
+        local t = setup({wires = wires, notes = true, logic_sandbox = true})
+        local comp, path = t.central, "backup_os_all.txt"
+        local disk = comp.disk
+        local storage, backup = comp.env.dofile("lib_storage.lua"), comp.env.dofile("lib_backup.lua")
+        local id = t.open(settings, "top", 48, 20, 1, 1)
+        t.state.appStates.wires.example = 42
+        t.state.appStates.notes.notes = {{id=1,name="Quotes \" slash \\ ~",lines={{id=1,text="line\n" .. string.char(195, 169)}}}}
+        t.click(id, "data"); t.click(id, "backupMenu"); t.click(id, "backupList")
+        t.click(id, "selectScope", scope("@all"))
+        local packed = assert(disk.files[path])
+        local first = assert(backup.load(storage, path, "@all"))
+        equal(first.data.appStates.notes.notes[1].lines[1].text, "line\n" .. string.char(195, 169))
+        equal(first.data.appStates.notes.notes[1].name, "Quotes \" slash \\ ~")
+        local plainSize = #serialize(first)
+        assert(#packed + 4096 < plainSize)
+        disk.files[path] = nil
+        local used = 0
+        for _, value in pairs(disk.files) do used = used + #value end
+        disk.capacity, disk.copyMove = used + plainSize + #packed + 4096, true
+        local ok, err = storage.save(path, first)
+        equal(ok, false); assert(tostring(err):find("Copy failed", 1, true))
+        local temp = assert(disk.files[path .. ".tmp"])
+        equal(disk.files[path], nil)
+        equal(select(2, backup.load(storage, path, "@all")), path .. ".tmp")
+
+        t.state.appStates.wires.example = 55
+        disk.failWrite = true
+        t.click(id, "selectScope", scope("@all"))
+        local text = table.concat(t.lines(id), "\n")
+        assert(text:find("Backup failed", 1, true) and text:find("Create", 1, true))
+        assert(not text:find("Replace", 1, true)); equal(disk.files[path .. ".tmp"], temp)
+        disk.failWrite = false
+        t.click(id, "commit")
+        equal(assert(backup.load(storage, path, "@all")).data.appStates.wires.example, 55)
+        equal(assert(backup.load(storage, path .. ".bak", "@all")).data.appStates.wires.example, 42)
+        equal(disk.files[path .. ".tmp"], nil)
+
+        t.click(id, "selectScope", scope("@all"))
+        text = table.concat(t.lines(id), "\n")
+        assert(text:find("Replace backup?", 1, true))
+        local open = comp.env.fs.open
+        comp.env.fs.open = function(filename, mode)
+            local file = open(filename, mode)
+            if file and filename == path and mode == "w" then
+                local write = file.write
+                file.write = function(value) write(value:sub(1, 40)); error("Interrupted backup write") end
+            end
+            return file
+        end
+        t.state.appStates.wires.example = 89
+        t.click(id, "commit")
+        local previous, source = backup.load(storage, path, "@all")
+        equal(source, path .. ".bak"); equal(previous.data.appStates.wires.example, 55)
+        comp.env.fs.open = open
+        t.click(id, "commit")
+        equal(assert(backup.load(storage, path, "@all")).data.appStates.wires.example, 89)
+        local damaged = assert(unserialize(disk.files[path]))
+        damaged.checksum = damaged.checksum + 1
+        disk.files[path] = serialize(damaged)
+        previous, source = backup.load(storage, path, "@all")
+        equal(source, path .. ".bak"); equal(previous.data.appStates.wires.example, 55)
+    end
+
     function tests.v49_entire_backup_restores_apps_routes_views_and_device_settings_on_a_clean_install()
         local names={"clock","coffee","io_scope","logic_sandbox","me_monitor","me_storage","notes",
             "reactors","screensaver","solar_farm","switchboard","window_presets"}
@@ -867,7 +931,11 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(settingsId,"data"); t.click(settingsId,"backupMenu"); t.click(settingsId,"backupList")
         t.click(settingsId,"selectScope",scope("@all"))
         local backup=assert(disk.files["backup_os_all.txt"])
-        local snapshot=assert(unserialize(backup))
+        local backupAPI=t.central.env.dofile("lib_backup.lua")
+        local storage=t.central.env.dofile("lib_storage.lua")
+        local snapshot=assert(backupAPI.load(storage,"backup_os_all.txt","@all"))
+        equal(assert(unserialize(backup)).version,3)
+        assert(#backup<math.floor(#serialize(snapshot)*.75), "Full backup should use less disk space")
         equal(snapshot.version,2); equal(snapshot.programs.wires,wires)
         for _,name in ipairs(names) do equal(snapshot.programs[name],read("apps_"..name..".lua")) end
         equal(snapshot.data.appStates.coffee.playerInput.color,4)
@@ -935,7 +1003,9 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         local settingsId=t.open(settings,"top",42,19,1,1)
         t.click(settingsId,"data"); t.click(settingsId,"backupMenu"); t.click(settingsId,"backupList")
         t.click(settingsId,"selectScope",scope("@all"))
-        local bundle=assert(unserialize(t.central.disk.files["backup_os_all.txt"]))
+        local backupAPI=t.central.env.dofile("lib_backup.lua")
+        local storage=t.central.env.dofile("lib_storage.lua")
+        local bundle=assert(backupAPI.load(storage,"backup_os_all.txt","@all"))
         bundle.version,bundle.programs,bundle.osConfig,bundle.network=1,nil,nil,nil
         local fresh=t.bus.computer(10,"server")
         fresh.env.shell={dir=function() return "" end}
@@ -950,7 +1020,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         t.click(restore,"data"); t.click(restore,"backupMenu"); t.click(restore,"restoreList")
         t.click(restore,"selectScope",scope("@all")); t.click(restore,"commit")
         assert(fresh.server.restartAfterRestore)
-        local saved=assert(unserialize(fresh.disk.files["configs_os_state.txt"]))
+        local saved=assert(fresh.savedState())
         equal(saved.appStates.notes.notes[1].name,"Saved note")
         equal(saved.windows[id].viewState.noteId,1)
         equal(fresh.disk.files["apps_notes.lua"],nil)

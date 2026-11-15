@@ -13,8 +13,9 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local bus=newBus()
         local saved={appStates={retained={rows={}}},windows={},outputs={},outputMap={},managedSides={}}
         for i=1,1600 do saved.appStates.retained.rows[i]={id=i,text="Saved configuration "..i} end
-        local disk={files={["configs_os_state.txt"]=serialize(saved)},dirs={[""]=true}}
+        local disk={files={},dirs={[""]=true}}
         local central=bus.computer(10,"server",{disk=disk})
+        assert(central.env.dofile("lib_storage.lua").saveState("configs_os_state.txt",saved))
         -- Fill the native queue before boot, then drop a software event when
         -- that computer already has 256 pending events. The old startup never
         -- reached modem discovery after its first yield marker was dropped.
@@ -32,7 +33,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local bridge=bus.computer(11,"io"):start(); bus.advance(1)
         assert(bridge.client.connected,"IO could not connect after saved-state startup")
         equal(#central.server.state.appStates.retained.rows,1600)
-        equal(assert(unserialize(disk.files["configs_os_state.txt"])).appStates.retained.rows[1600].id,1600)
+        equal(assert(central.savedState()).appStates.retained.rows[1600].id,1600)
         assert(not disk.files["diagnostics_os_error.txt"])
     end
     function tests.work_running_os_handles_clients_and_commands_without_software_wake_events()
@@ -57,7 +58,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local ok,err=pcall(central.start)
         equal(ok,false);assert(tostring(err):find("Invalid OS setting: tickInterval",1,true))
         local lines=table.concat(central.console.lines,"\n")
-        assert(lines:find("SmartHome OS v50: starting",1,true))
+        assert(lines:find("SmartHome OS v53: starting",1,true))
         assert(lines:find("OS stopped at: Loading OS configuration",1,true))
         assert(lines:find("Invalid OS setting: tickInterval",1,true))
         local report=assert(central.disk.files["diagnostics_os_error.txt"])
@@ -68,7 +69,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local bus=newBus();local rows={}
         for i=1,1600 do rows[i]={id=i,text="Saved configuration "..i} end
         local central=bus.computer(10,"server")
-        central.disk.files["configs_os_state.txt"]=serialize({appStates={retained={rows=rows}}})
+        assert(central.env.dofile("lib_storage.lua").saveState("configs_os_state.txt",{appStates={retained={rows=rows}}}))
         local startTimer,nativeFallbacks=central.env.os.startTimer,0
         central.env.os.startTimer=function(delay)
             if delay==0 then nativeFallbacks=nativeFallbacks+1 end
@@ -103,10 +104,10 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
             end
         end
         bridge.bundledInputs.front=4;bridge.client.readInputs(true)
-        bus.advance(3)
+        bus.advance(10)
         assert(rejected>0,"Checkpoint never exercised the failing wake-up call")
         assert(saved and central.active,"Watchdog rejection interrupted the checkpoint")
-        local snapshot=assert(unserialize(central.disk.files["configs_os_state.txt"]))
+        local snapshot=assert(central.savedState())
         equal(#snapshot.appStates.retained.rows,1600)
         assert(not central.disk.files["diagnostics_os_error.txt"])
         bus.command(central,"help");bus.advance(2)
@@ -161,7 +162,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         local lines=table.concat(central.console.lines,"\n")
         assert(lines:find("OS receive queue full",1,true))
         assert(lines:find("clear | save | errorlog | quit",1,true))
-        equal(#assert(unserialize(central.disk.files["configs_os_state.txt"])).appStates.retained.rows,6000)
+        equal(#assert(central.savedState()).appStates.retained.rows,6000)
         assert(not central.disk.files["diagnostics_os_error.txt"])
     end
     function tests.work_nested_protected_calls_yield_portably_preserve_nil_results_and_ignore_unowned_callers()
@@ -246,7 +247,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         bus.advance(1)
         assert(injected);equal(commandPhase,"ready");equal(inputPhase,"ready")
         equal(central.server.api.getInput("io_11","front").value,4)
-        local state=assert(unserialize(central.disk.files["configs_os_state.txt"])).appStates.heavy
+        local state=assert(central.savedState()).appStates.heavy
         equal(#state.rows,1200);equal(state.phase,"ready");equal(state.rows[1200].count,20400)
         assert(central.env.__smarthomeWork.yields>10)
     end
@@ -280,7 +281,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
         assert(not t.central.disk.files["diagnostics_os_error.txt"],table.concat(t.central.log,"\n"))
         t.farm[1500].Size=t.farm[1500].Size+17;t.advance(3)
         local lines=t.text();assert(lines:find("Live",1,true));assert(not lines:find("App render failed",1,true))
-        local saved=assert(unserialize(t.central.disk.files["configs_os_state.txt"])).appStates.solar_farm
+        local saved=assert(t.central.savedState()).appStates.solar_farm
         equal(saved.sources.farm.target,"farm");assert(saved.averages.farm.seconds>0)
     end
     function tests.work_fullscreen_screensavers_yield_in_real_server_frames_without_exceeding_modem_limit()

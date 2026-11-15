@@ -70,7 +70,7 @@ return function(tests,newBus,monitor,serialize,unserialize,equal)
     function tests.screensaver_transient_windows_never_restore_and_leave_underlying_normal_windows_untouched()
         local t=setup("screensaver",false,{noOpen=true}); local normal=t.open("top","solar_farm")
         assert(t.api.layoutWindow(normal,"top_left")); local old=t.central.server.state.windows[normal]; local before={x=old.x,y=old.y,width=old.width,height=old.height,layout=old.layout,order=old.order}
-        t.id=t.open(); assert(t.api.save()); local saved=unserialize(t.central.disk.files["configs_os_state.txt"])
+        t.id=t.open(); assert(t.api.save()); local saved=t.central.savedState()
         equal(saved.windows[t.id],nil); assert(saved.windows[normal]); for key,value in pairs(before) do equal(t.central.server.state.windows[normal][key],value) end
         t.reboot(); equal(t.window(),nil); equal(t.central.server.running.screensaver,nil); assert(t.central.server.state.windows[normal]); equal(t.central.server.monitors["monitor_13:top"].fullscreen,nil)
     end

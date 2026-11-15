@@ -1,15 +1,21 @@
--- Optional GitHub bootstrapper: inst server|io|monitor|sensor|relay [ref] [--startup]
--- Fetches the flat, self-contained installer from the V2 repository.
+-- Small installer. Runs the bundled installer directly from memory.
+-- Usage: inst [--installer-ref REF] server|io|monitor|sensor|relay|app|apps|restore|space ...
 local args = {...}
+local ref = "main"
+if args[1] == "--installer-ref" then
+    table.remove(args, 1)
+    ref = assert(table.remove(args, 1), "Missing installer branch or commit")
+end
 local role = args[1]
-local ref = (args[2] ~= "--startup" and args[2]) or "main"
-local autorun = args[2] == "--startup" or args[3] == "--startup"
-if role ~= "server" and role ~= "io" and role ~= "monitor" and role ~= "sensor" and role ~= "relay" then
-    print("Usage: inst server|io|monitor|sensor|relay [ref] [--startup]")
+local roles = {server = true, io = true, monitor = true, sensor = true, relay = true}
+if roles[role] and args[2] and args[2] ~= "--startup" then ref = table.remove(args, 2) end
+if not roles[role] and role ~= "app" and role ~= "apps" and role ~= "restore" and role ~= "space" then
+    print("Usage: inst [--installer-ref REF] server|io|monitor|sensor|relay [--startup]")
+    print("       inst app NAME | inst apps | inst restore | inst space")
     return
 end
-assert(ref:match("^[%w_./-]+$"), "Invalid branch or commit")
-assert(not args[4] and (not args[3] or args[3] == "--startup"), "Unexpected install argument")
+assert(ref:match("^[%w_./-]+$") and not ref:find("..", 1, true)
+    and ref:sub(1, 1) ~= "/" and ref:sub(-1) ~= "/", "Invalid branch or commit")
 assert(shell.dir() == "", "Run cd / first")
 assert(http and http.get, "HTTP is disabled; use the bundled installer via Pastebin")
 local url = "https://raw.githubusercontent.com/DJDarkMatter/Tekkit-Lite-Smart-Home-V2/" .. ref .. "/install.lua"
@@ -20,14 +26,5 @@ assert(code == 200 and type(contents) == "string" and #contents > 0, "GitHub ins
 assert(contents:find("-- Flat-root layout:", 1, true), "Expected the V2 flat-root installer")
 local chunk, err = loadstring(contents, "install.lua")
 assert(chunk, "Invalid installer Lua: " .. tostring(err))
-local path = "install.lua"
-local file = assert(fs.open(path .. ".download", "w"), "Cannot stage installer")
-file.write(contents); file.close()
-if fs.exists(path) then
-    if fs.exists(path .. ".pre_update") then fs.delete(path .. ".pre_update") end
-    fs.move(path, path .. ".pre_update")
-end
-fs.move(path .. ".download", path)
 setfenv(chunk, getfenv(1))
-if autorun then return chunk(role, "--startup") end
-return chunk(role)
+return chunk(unpack(args))
