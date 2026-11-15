@@ -245,7 +245,16 @@ local function newBus()
                     end, close = function() end}
                 end
                 if disk.files[path] == nil then return nil end
-                return {readAll = function() return disk.files[path] end, close = function() end}
+                if mode == "rb" then
+                    local offset = 0
+                    return {read = function() offset = offset + 1; return disk.files[path]:byte(offset) end,
+                        close = function() end}
+                end
+                return {readAll = function()
+                    local contents = disk.files[path]
+                    if disk.legacyTextReads then return (contents:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("\n$", "")) end
+                    return contents
+                end, close = function() end}
             end,
         }
         local function checkSide(side)
@@ -999,7 +1008,45 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v54", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v55", 1, true))
+    end
+end
+
+function tests.v55_installer_verifies_program_bytes_when_legacy_text_reads_drop_newlines()
+    local comp = newBus().computer(10, "server")
+    comp.env.shell = {dir = function() return "" end}
+    comp.disk.legacyTextReads = true
+    local install = assert(comp.env.loadfile("install.lua"))
+    install("server", "--startup")
+    local path = "lib_codec.lua"
+    local source = assert(io.open(path, "rb"))
+    local expected = source:read("*a"); source:close()
+    equal(comp.disk.files[path], expected)
+    local handle = assert(comp.env.fs.open(path, "r"))
+    local legacyText = handle.readAll(); handle.close()
+    equal(legacyText, expected:sub(1, -2), "The legacy handle omits the final newline")
+    local storage = comp.env.dofile("lib_storage.lua")
+    equal(storage.readBytes(path), expected)
+    local lines = "one\r\n\r\nthree\n"
+    storage.writeVerified("example.txt", lines)
+    equal(storage.readBytes("example.txt"), lines)
+
+    comp.disk.failWrite = true
+    install("server", "--startup") -- Byte-identical programs must be skipped.
+    comp.disk.failWrite = false
+    local open = comp.env.fs.open
+    for _, damaged in ipairs({"Line\n", "lin\n"}) do
+        comp.env.fs.open = function(name, mode)
+            local file = open(name, mode)
+            if name == "damaged.txt" and mode == "w" then
+                local write = file.write
+                file.write = function() write(damaged) end
+            end
+            return file
+        end
+        local ok, err = pcall(storage.writeVerified, "damaged.txt", "line\n")
+        assert(not ok and tostring(err):find("readback mismatch", 1, true), tostring(err))
+        equal(comp.disk.files["damaged.txt"], nil)
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
