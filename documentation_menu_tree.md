@@ -619,8 +619,7 @@ Browse and manage files and folders on the central computer.
   - Details — Path and file size.
   - Copy / Move — Selects the file for pasting from any File Explorer window.
   - Send paste
-    - [Pastebin key](#shared-dialogs-touch-keyboard) — Enter a developer key for this session.
-    - Unlisted paste — Send or Back. The result shows the Pastebin ID and URL.
+    - Send paste? — Send runs the CraftOS Pastebin command and shows the paste ID and URL. Back returns to the file.
 - Paste / Put — Uses the original name in the current folder.
 - Menu — Actions for the current folder.
   - [New folder](#shared-dialogs-touch-keyboard) — Enter the folder name.

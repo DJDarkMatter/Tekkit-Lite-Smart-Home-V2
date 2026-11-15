@@ -13,6 +13,4 @@ On the central computer, install with `inst app file_explorer`. Open **Start →
 
 **Menu → Get paste** accepts a public or unlisted paste ID or a `pastebin.com` link. Confirm a filename to save the paste as a text file in the current folder. The get operation uses HTTP access to `pastebin.com`.
 
-Select a text file and choose **Send paste** to upload it. The first upload asks for your Pastebin developer API key. The touch keyboard masks it, and the app holds it in memory until the last File Explorer window closes. Confirm **Send** to create an unlisted paste. The resulting ID and URL appear in the window. [Get your Pastebin developer key](https://pastebin.com/doc_api)
-
-Anyone with the link can read an unlisted paste. If Pastebin or the server rejects a transfer, the app displays the error and keeps the local source file.
+Select a text file, tap **Send paste**, then confirm **Send**. File Explorer uses the central computer's `pastebin put` command and shows the resulting ID and URL. Paste visibility follows the installed Pastebin command, which may publish the file. If Pastebin or the server rejects the transfer, the window displays the command's error.

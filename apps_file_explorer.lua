@@ -2,7 +2,7 @@
 local app = {title = "File Explorer", minWidth = 12, minHeight = 6, preferredWidth = 42, preferredHeight = 16}
 local Storage = dofile("lib_storage.lua")
 local appName, pastebin = "file_explorer", "https://pastebin.com"
-local windows, jobs, clipboard, apiKey = {}, {}, nil, nil
+local windows, jobs, clipboard = {}, {}, nil
 local sequence = 0
 
 local function base(path) return path:match("[^/]+$") or "/" end
@@ -44,7 +44,7 @@ end
 local function keyboard(window, purpose, prompt, value, back, dir)
     window.screen = "keyboard"
     window.keyboard = {purpose = purpose, prompt = prompt, draft = value or "", bank = 0, page = 1,
-        back = back, directory = dir, masked = purpose == "key"}
+        back = back, directory = dir}
 end
 local function newPath(dir, name)
     assert(fs.isDir(dir), "The destination folder is missing")
@@ -131,28 +131,68 @@ local function pasteID(text, urlOnly)
     return (not urlOnly and text:match("^([A-Za-z0-9]+)$")) or text:match("^https?://pastebin%.com/([A-Za-z0-9]+)/?$")
         or text:match("^https?://pastebin%.com/raw/([A-Za-z0-9]+)/?$")
 end
-local function encode(value, api)
-    local pieces = {}
-    for at = 1, #value, 1024 do
-        pieces[#pieces + 1] = value:sub(at, at + 1023):gsub("([^A-Za-z0-9%-%._~])", function(char)
-            return string.format("%%%02X", char:byte())
-        end)
-        api.cooperate(4096)
-    end
-    return table.concat(pieces)
-end
-local function startRequest(window, api, url, data, path, upload)
+local function startRequest(job, api, url, data, headers)
     sequence = sequence + 1
     local session = api.getSystem().session:gsub("[^%w]", "-")
-    url = url .. "?smarthome=" .. session .. "-" .. sequence
-    local ok, err = api.requestHttp(url, data)
-    assert(ok, err)
-    jobs[url] = {window = window, path = path, upload = upload}
-    window.screen, window.job = "waiting", url
+    url = url .. (url:find("?", 1, true) and "&" or "?") .. "smarthome=" .. session .. "-" .. sequence
+    local ok, err = api.requestHttp(url, data, headers)
+    if not ok then return false, err end
+    jobs[url] = job
+    job.window.screen, job.window.job = "waiting", url
+    return true
+end
+
+local function finishUpload(job, err)
+    local lines = {}
+    if err then lines[1] = errorText(err) end
+    for line in job.output:gmatch("[^\r\n]+") do
+        local receipt = line:match("^[Uu]ploaded as%s+(.+)$")
+        local id = not err and not job.printedError and pasteID(receipt or line, receipt == nil)
+        if id then
+            actionMenu(job.window, "Paste created", {"ID: " .. id, pastebin .. "/" .. id}, "file")
+            return
+        end
+        lines[#lines + 1] = line
+    end
+    if #lines == 0 then lines[1] = "The command returned no paste link" end
+    actionMenu(job.window, "Pastebin error", lines, "file")
+end
+
+local function resumeUpload(job, api, ...)
+    local ok, url, body, headers = coroutine.resume(job.thread, ...)
+    if not ok then return finishUpload(job, url) end
+    if coroutine.status(job.thread) == "dead" then return finishUpload(job, job.requestError) end
+    if type(url) ~= "string" or not url:match("^https?://") then
+        return finishUpload(job, "The Pastebin command paused unexpectedly")
+    end
+    local started, err = startRequest(job, api, url, body, headers)
+    if not started then finishUpload(job, err) end
+end
+
+local function putFile(window, api, path)
+    assert(fs.exists(path) and not fs.isDir(path), "File is missing")
+    assert(http and type(http.request) == "function", "HTTP is disabled")
+    local job = {window = window, path = path, output = ""}
+    local function write(text) job.output = (job.output .. tostring(text)):sub(1, 2048) end
+    local function printLine(...)
+        for index = 1, select("#", ...) do
+            if index > 1 then write(" ") end
+            write((select(index, ...)))
+        end
+        write("\n")
+    end
+    -- Run the program from this computer's shell path with its output captured.
+    -- Yield only this program while the OS dispatches its HTTP response.
+    local programHttp = setmetatable({post = function(url, data, headers) return coroutine.yield(url, data, headers) end,
+        get = function(url, headers) return coroutine.yield(url, nil, headers) end}, {__index = http})
+    local command = assert(api.loadShellProgram("pastebin", {http = programHttp, print = printLine, write = write,
+        printError = function(...) job.printedError = true; printLine(...) end}))
+    job.thread = coroutine.create(command)
+    resumeUpload(job, api, "put", "/" .. path)
 end
 
 function app.init(_, api)
-    assert(api.requestHttp, "File Explorer requires the v54 server")
+    assert(api.requestHttp and api.loadShellProgram, "File Explorer requires the v55 server")
 end
 
 local function render(w, h, api, view, window)
@@ -215,11 +255,11 @@ local function render(w, h, api, view, window)
             or {{"Set", "accept"}, {"Clr", "clearText"}, {"Back", k.back}}
         ui.keyboard(k, footer)
     elseif screen == "upload" then
-        ui.info("Unlisted paste", {"/" .. window.selected, "Anyone with the link can read this file."}, "upload", "file")
+        ui.info("Send paste?", {"/" .. window.selected, "Pastebin may publish this file."}, "upload", "file")
         ui.footer({{"Send", "sendPaste"}, {"Back", "file"}})
     elseif screen == "waiting" then
         local job = jobs[window.job]
-        ui.heading(job and job.upload and "Uploading" or "Downloading")
+        ui.heading(job and job.thread and "Uploading" or "Downloading")
         if job then ui.text(3, display(base(job.path), w, false), true) end
     else
         local message = window.message
@@ -265,11 +305,7 @@ local function accept(window, api)
         keyboard(window, "downloadName", "Save paste as", window.pasteID .. ".txt", "menu", dir)
     elseif k.purpose == "downloadName" then
         local path = newPath(dir, text)
-        startRequest(window, api, pastebin .. "/raw/" .. window.pasteID, nil, path, false)
-    elseif k.purpose == "key" then
-        assert(text:match("^[A-Za-z0-9]+$"), "Enter your Pastebin developer key")
-        apiKey = text
-        window.keyboard, window.screen = nil, "upload"
+        assert(startRequest({window = window, path = path}, api, pastebin .. "/raw/" .. window.pasteID))
     end
 end
 
@@ -314,17 +350,8 @@ local function touch(window, view, api, action, value)
     elseif action == "newFolder" then keyboard(window, "folder", "Folder name", "", "menu", dir)
     elseif action == "newFile" then keyboard(window, "file", "File name", "", "menu", dir)
     elseif action == "getPaste" then keyboard(window, "pasteID", "Paste ID", "", "menu", dir)
-    elseif action == "upload" then
-        if apiKey then window.screen = "upload"; window.pages.upload = nil
-        else keyboard(window, "key", "Pastebin key", "", "file") end
-    elseif action == "sendPaste" then
-        local path = window.selected
-        local bytes = assert(Storage.readBytes(path), "Cannot read file")
-        assert(#bytes > 0, "This file is empty")
-        assert(not bytes:find("[%z\1-\8\11\12\14-\31\127]"), "Pastebin needs a text file")
-        local post = "api_option=paste&api_paste_private=1&api_dev_key=" .. encode(apiKey, api)
-            .. "&api_paste_name=" .. encode(base(path), api) .. "&api_paste_code=" .. encode(bytes, api)
-        startRequest(window, api, pastebin .. "/api/api_post.php", post, path, true)
+    elseif action == "upload" then window.screen, window.pages.upload = "upload", nil
+    elseif action == "sendPaste" then putFile(window, api, window.selected)
     else window.screen = action end
 end
 
@@ -350,27 +377,25 @@ function app.handleHttp(url, response, errorMessage, api)
     jobs[url] = nil
     local window = job.window
     window.job = nil
-    local back = job.upload and "file" or "files"
+    if job.thread then
+        job.requestError = errorMessage
+        -- The OS owns the response handle and closes it after this hook.
+        local handle = response and setmetatable({close = function() end}, {__index = response})
+        resumeUpload(job, api, handle, errorMessage)
+        api.invalidateAppViews(appName)
+        return
+    end
     local ok, err = api.protectedCall(function()
         assert(response, errorMessage)
         local status = response.getResponseCode and response.getResponseCode()
         assert(not status or status == 200, "Pastebin HTTP " .. tostring(status))
         local text = assert(response.readAll(), "Pastebin returned no data")
-        if job.upload then
-            local id = pasteID(text, true)
-            if not id and text:find("invalid api_dev_key", 1, true) then apiKey = nil end
-            local message = text:match("^%s*(Bad API request[^%c]*)")
-            if message and apiKey then message = message:gsub(apiKey, "[key]") end
-            assert(id, message and message:sub(1, 160) or "Pastebin did not return a paste link")
-            actionMenu(window, "Paste created", {"ID: " .. id, pastebin .. "/" .. id}, back)
-        else
-            local path = newPath(parent(job.path), base(job.path))
-            Storage.writeVerified(path, text)
-            refreshLists()
-            actionMenu(window, "Paste saved", {"/" .. path}, back)
-        end
+        local path = newPath(parent(job.path), base(job.path))
+        Storage.writeVerified(path, text)
+        refreshLists()
+        actionMenu(window, "Paste saved", {"/" .. path}, "files")
     end)
-    if not ok then actionMenu(window, "Pastebin error", {errorText(err)}, back) end
+    if not ok then actionMenu(window, "Pastebin error", {errorText(err)}, "files") end
     api.invalidateAppViews(appName)
 end
 
@@ -381,7 +406,7 @@ function app.onClose(_, _, context)
 end
 
 function app.shutdown()
-    windows, jobs, clipboard, apiKey = {}, {}, nil, nil
+    windows, jobs, clipboard = {}, {}, nil
 end
 
 return app

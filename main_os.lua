@@ -2,7 +2,7 @@
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v54: starting")
+console.log("SmartHome OS v55: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -102,7 +102,7 @@ ok, err = Work.protect(function()
     armPauseTimer()
     Work.stage = "Loading saved OS state"
     console.log("Loading saved OS state...")
-    server = Server.new(net, storage, config, console.log)
+    server = Server.new(net, storage, config, console.log, shell)
     Work.stage = "Starting apps"
     console.log("Starting enabled apps...")
     server.start()

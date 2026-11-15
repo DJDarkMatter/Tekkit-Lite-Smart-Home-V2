@@ -114,7 +114,7 @@ local function validApp(app)
         and (not app.maxHeight or app.maxHeight >= (app.minHeight or 2))
 end
 
-function Server.new(net, storage, config, logger)
+function Server.new(net, storage, config, logger, craftShell)
     local log = logger or print
     local loaded, source = storage.loadState(config.saveFile, validState)
     local state = loaded or {}
@@ -342,12 +342,23 @@ function Server.new(net, storage, config, logger)
         return ok, a, b
     end
 
-    function api.requestHttp(url, body)
+    function api.loadShellProgram(name, environment)
+        if not craftShell or type(craftShell.resolveProgram) ~= "function" then return nil, "CraftOS shell unavailable" end
+        local path = craftShell.resolveProgram(name)
+        if not path then return nil, "CraftOS program unavailable: " .. name end
+        local program, err = loadfile(path)
+        if not program then return nil, err end
+        environment.shell = craftShell
+        environment._G = environment
+        return setfenv(program, setmetatable(environment, {__index = getfenv(program)}))
+    end
+
+    function api.requestHttp(url, body, headers)
         local app = callingApp and definition(callingApp)
         if not app or not app.handleHttp then return false, "App has no HTTP handler" end
         if not http or type(http.request) ~= "function" then return false, "HTTP is disabled" end
         if type(url) ~= "string" or httpRequests[url] then return false, "HTTP request already pending" end
-        local headers = body and {["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"} or nil
+        headers = headers or (body and {["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"} or nil)
         local ok, started, reason = pcall(http.request, url, body, headers)
         if not ok or started == false or started == nil and reason then
             return false, tostring(ok and reason or started or "HTTP request refused")

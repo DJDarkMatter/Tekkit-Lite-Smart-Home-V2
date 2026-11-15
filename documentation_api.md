@@ -45,7 +45,9 @@ Bundled-v9 adds optional `app.title` (1–64 characters) for launcher, taskbar a
 
 Hooks should return promptly. Use the OS interfaces for cooperative work and asynchronous HTTP. `api.ui.content` also provides `band(x, y, span, text, background, centered)` to fill a title row or part of a row. `heading` fills the whole first row. `Gui.keyboard` accepts a `masked` draft flag for private input. Keep those drafts in runtime memory outside saved window state.
 
-`api.requestHttp(url, body?)` starts a GET or a form-encoded POST and returns `ok, error`. An app that uses it supplies `handleHttp(url, response, error, api)`. The OS dispatches HTTP events through its worker and closes the response handle after the hook. For refusals and timeout, the response is nil and the hook receives an error message. Requests expire after 30 seconds. Use a distinct URL per request to distinguish late replies on CraftOS 1.5.
+`api.requestHttp(url, body?, headers?)` starts a GET or POST and returns `ok, error`. The default for POST is a form-encoded content type. An app that uses it supplies `handleHttp(url, response, error, api)`. The OS dispatches HTTP events through its worker and closes the response handle after the hook. For refusals and timeout, the response is nil and the hook receives an error message. Requests expire after 30 seconds. Use a distinct URL per request to distinguish late replies on CraftOS 1.5.
+
+`api.loadShellProgram(name, environment)` resolves the program using the central computer's CraftOS shell and returns a chunk or `nil, error`. The chunk runs with the supplied globals, the CraftOS shell and fallback access to the usual APIs. File Explorer uses this to capture `pastebin put` output and dispatch its HTTP through the OS.
 
 | API | Result |
 | --- | --- |

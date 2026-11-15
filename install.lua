@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v54
+-- SmartHome OS installer: bundled-v55
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -217,13 +217,41 @@ local Codec = rawget(_G, "__smarthomeCodec") or dofile("lib_codec.lua")
 local validatedContents = {}
 local checkpoints = {}
 
-function storage.readBytes(path)
-    if not fs.exists(path) or fs.isDir(path) then return nil end
-    local file = fs.open(path, "r")
+local function readFile(path, mode, read)
+    local file = fs.open(path, mode)
     if not file then return nil end
-    local contents = file.readAll()
-    file.close()
+    local ok, contents = Work.call(read, file)
+    local closed, err = pcall(file.close)
+    if not ok then error(contents, 0) end
+    if not closed then error(err, 0) end
     return contents
+end
+
+local function readBinary(file)
+    if file.readAll then return file.readAll() or "" end
+    local parts, block = {}, {}
+    while true do
+        local byte = file.read()
+        if byte == nil then break end
+        block[#block + 1] = string.char(byte)
+        if #block == 256 then
+            parts[#parts + 1], block = table.concat(block), {}
+            Work.check(4096)
+        end
+    end
+    parts[#parts + 1] = table.concat(block)
+    return table.concat(parts)
+end
+
+function storage.readBytes(path, expected)
+    if not fs.exists(path) or fs.isDir(path) then return nil end
+    local size = fs.getSize and fs.getSize(path)
+    if expected and size and size ~= #expected then return nil end
+    local contents = readFile(path, "r", function(file) return file.readAll() end)
+    if contents and (not size or #contents == size) and (not expected or contents == expected) then return contents end
+    -- Legacy text handles can normalize line endings and omit the final LF.
+    -- Check the binary bytes before writing off a complete program as corrupt.
+    return readFile(path, "rb", readBinary)
 end
 
 local function readTable(path)
@@ -260,9 +288,12 @@ function storage.writeVerified(path, contents)
     local file = assert(fs.open(path, "w"), "Cannot write " .. path)
     local wrote, err = pcall(file.write, contents)
     local closed, closeError = pcall(file.close)
-    if not wrote or not closed or storage.readBytes(path) ~= contents then
+    local read, actual
+    if wrote and closed then read, actual = Work.call(storage.readBytes, path, contents) end
+    if not read or actual ~= contents then
         pcall(fs.delete, path)
-        error("Write failed for " .. path .. ": " .. tostring(err or closeError or "incomplete file"), 0)
+        local reason = err or closeError or not read and actual or "incomplete file or readback mismatch"
+        error("Write failed for " .. path .. ": " .. tostring(reason), 0)
     end
 end
 
@@ -3155,7 +3186,7 @@ local function validApp(app)
         and (not app.maxHeight or app.maxHeight >= (app.minHeight or 2))
 end
 
-function Server.new(net, storage, config, logger)
+function Server.new(net, storage, config, logger, craftShell)
     local log = logger or print
     local loaded, source = storage.loadState(config.saveFile, validState)
     local state = loaded or {}
@@ -3383,12 +3414,23 @@ function Server.new(net, storage, config, logger)
         return ok, a, b
     end
 
-    function api.requestHttp(url, body)
+    function api.loadShellProgram(name, environment)
+        if not craftShell or type(craftShell.resolveProgram) ~= "function" then return nil, "CraftOS shell unavailable" end
+        local path = craftShell.resolveProgram(name)
+        if not path then return nil, "CraftOS program unavailable: " .. name end
+        local program, err = loadfile(path)
+        if not program then return nil, err end
+        environment.shell = craftShell
+        environment._G = environment
+        return setfenv(program, setmetatable(environment, {__index = getfenv(program)}))
+    end
+
+    function api.requestHttp(url, body, headers)
         local app = callingApp and definition(callingApp)
         if not app or not app.handleHttp then return false, "App has no HTTP handler" end
         if not http or type(http.request) ~= "function" then return false, "HTTP is disabled" end
         if type(url) ~= "string" or httpRequests[url] then return false, "HTTP request already pending" end
-        local headers = body and {["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"} or nil
+        headers = headers or (body and {["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"} or nil)
         local ok, started, reason = pcall(http.request, url, body, headers)
         if not ok or started == false or started == nil and reason then
             return false, tostring(ok and reason or started or "HTTP request refused")
@@ -6258,7 +6300,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v54: starting")
+console.log("SmartHome OS v55: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -6358,7 +6400,7 @@ ok, err = Work.protect(function()
     armPauseTimer()
     Work.stage = "Loading saved OS state"
     console.log("Loading saved OS state...")
-    server = Server.new(net, storage, config, console.log)
+    server = Server.new(net, storage, config, console.log, shell)
     Work.stage = "Starting apps"
     console.log("Starting enabled apps...")
     server.start()
@@ -7755,7 +7797,7 @@ local args = {...}
 local function install()
     local role, autorun = args[1], false
     local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-    print("SmartHome installer: bundled-v54")
+    print("SmartHome installer: bundled-v55")
     local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
     local appsUsage = "Usage: inst apps [--ref REF]"
     local restoreUsage = "Usage: inst restore [FILE] | inst restore io|monitor|sensor|relay CLIENT_ID [FILE]"

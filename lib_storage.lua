@@ -5,13 +5,41 @@ local Codec = rawget(_G, "__smarthomeCodec") or dofile("lib_codec.lua")
 local validatedContents = {}
 local checkpoints = {}
 
-function storage.readBytes(path)
-    if not fs.exists(path) or fs.isDir(path) then return nil end
-    local file = fs.open(path, "r")
+local function readFile(path, mode, read)
+    local file = fs.open(path, mode)
     if not file then return nil end
-    local contents = file.readAll()
-    file.close()
+    local ok, contents = Work.call(read, file)
+    local closed, err = pcall(file.close)
+    if not ok then error(contents, 0) end
+    if not closed then error(err, 0) end
     return contents
+end
+
+local function readBinary(file)
+    if file.readAll then return file.readAll() or "" end
+    local parts, block = {}, {}
+    while true do
+        local byte = file.read()
+        if byte == nil then break end
+        block[#block + 1] = string.char(byte)
+        if #block == 256 then
+            parts[#parts + 1], block = table.concat(block), {}
+            Work.check(4096)
+        end
+    end
+    parts[#parts + 1] = table.concat(block)
+    return table.concat(parts)
+end
+
+function storage.readBytes(path, expected)
+    if not fs.exists(path) or fs.isDir(path) then return nil end
+    local size = fs.getSize and fs.getSize(path)
+    if expected and size and size ~= #expected then return nil end
+    local contents = readFile(path, "r", function(file) return file.readAll() end)
+    if contents and (not size or #contents == size) and (not expected or contents == expected) then return contents end
+    -- Legacy text handles can normalize line endings and omit the final LF.
+    -- Check the binary bytes before writing off a complete program as corrupt.
+    return readFile(path, "rb", readBinary)
 end
 
 local function readTable(path)
@@ -48,9 +76,12 @@ function storage.writeVerified(path, contents)
     local file = assert(fs.open(path, "w"), "Cannot write " .. path)
     local wrote, err = pcall(file.write, contents)
     local closed, closeError = pcall(file.close)
-    if not wrote or not closed or storage.readBytes(path) ~= contents then
+    local read, actual
+    if wrote and closed then read, actual = Work.call(storage.readBytes, path, contents) end
+    if not read or actual ~= contents then
         pcall(fs.delete, path)
-        error("Write failed for " .. path .. ": " .. tostring(err or closeError or "incomplete file"), 0)
+        local reason = err or closeError or not read and actual or "incomplete file or readback mismatch"
+        error("Write failed for " .. path .. ": " .. tostring(reason), 0)
     end
 end
 

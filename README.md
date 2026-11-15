@@ -6,6 +6,10 @@ A central ComputerCraft computer owns apps, saved state and output decisions. Re
 
 This repair targets Lua 5.1 and the channel-based modem API available in ComputerCraft 1.5. It uses serialized **strings** on the wire and no CC:Tweaked-only APIs. It has been tested with simulated ComputerCraft APIs, **not inside the Minecraft server**.
 
+## Updating to v55
+
+File Explorer uploads through the computer's `pastebin put` command. The installer verifies the exact bytes on disk when CraftOS text reads change line endings. See the [installer recovery and update guide](documentation_update_v55.md).
+
 ## Updating to v54
 
 App headings fill the content row from edge to edge, including Coffee's **Next harvest**. Install **File Explorer** to browse the central computer, copy and move files or folders, create folders and text files, and transfer text files with Pastebin. See the [update guide from v50](documentation_update_v54.md) and [File Explorer controls](documentation_file_explorer.md).
@@ -128,7 +132,7 @@ Use two computers with wireless modems, initially near each other in loaded chun
 
 Upload `tools_install_github.lua` as the installer paste for a computer with limited space. It downloads and runs the full installer in memory. The GitHub branch must contain the release, including `install.lua`. Use `inst --installer-ref REF server` to choose a branch or commit.
 
-`install.lua` is also available as a self-contained installer with all twenty-seven runtime source files. Upload it as the single installer paste if you need to install roles without a GitHub connection from the computer. Both forms print `SmartHome installer: bundled-v54` and write the role files directly into the computer root. User apps download only when requested.
+`install.lua` is also available as a self-contained installer with all twenty-seven runtime source files. Upload it as the single installer paste if you need to install roles without a GitHub connection from the computer. Both forms print `SmartHome installer: bundled-v55` and write the role files directly into the computer root. User apps download only when requested.
 
 On a computer, run:
 
