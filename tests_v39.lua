@@ -215,7 +215,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     end
 
     function tests.v41_all_apps_open_on_compact_and_large_monitors_in_one_os()
-        local names = {"clock", "coffee", "io_scope", "logic_sandbox", "me_monitor", "me_storage",
+        local names = {"clock", "coffee", "file_explorer", "io_scope", "logic_sandbox", "me_monitor", "me_storage",
             "notes", "reactors", "screensaver", "solar_farm", "switchboard", "window_presets"}
         local enabled = {}
         for _, name in ipairs(names) do enabled[name] = true end
@@ -229,6 +229,15 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
                 local lines = t.lines(id)
                 assert(#lines >= 6, name .. " returned incomplete content")
                 assert(not table.concat(lines, "\n"):find("App render failed", 1, true), name)
+                if name ~= "screensaver" then
+                    local win = t.state.windows[id]
+                    local screen = id == big and t.top or t.left
+                    local backgrounds = screen.bg[win.y + 1]
+                    local expected = backgrounds[win.x + 1]
+                    for x = win.x + 2, win.x + win.width - 2 do
+                        equal(backgrounds[x], expected, name .. " first row at column " .. x)
+                    end
+                end
                 assert(t.api.closeWindow(id))
             end
         end
@@ -909,7 +918,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
     end
 
     function tests.v49_entire_backup_restores_apps_routes_views_and_device_settings_on_a_clean_install()
-        local names={"clock","coffee","io_scope","logic_sandbox","me_monitor","me_storage","notes",
+        local names={"clock","coffee","file_explorer","io_scope","logic_sandbox","me_monitor","me_storage","notes",
             "reactors","screensaver","solar_farm","switchboard","window_presets"}
         local sources={wires=wires}
         for _,name in ipairs(names) do sources[name]=true end

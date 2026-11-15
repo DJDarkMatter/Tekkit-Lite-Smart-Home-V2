@@ -175,13 +175,45 @@ local function newBus()
             for _, value in pairs(disk.files) do used = used + #value end
             return math.max(0, disk.capacity - used)
         end
+        local function childOf(file, folder)
+            return file:sub(1, #folder + 1) == folder .. "/"
+        end
+        local function rom(path) return path == "rom" or childOf(path, "rom") end
         env.fs = {
             exists = function(path) return disk.files[path] ~= nil or disk.dirs[path] == true end,
             isDir = function(path) return disk.dirs[path] == true end,
             getFreeSpace = freeSpace,
             getSize = function(path) return #(disk.files[path] or "") end,
-            makeDir = function(path) disk.dirs[path] = true end,
-            delete = function(path) disk.files[path], disk.dirs[path] = nil, nil end,
+            isReadOnly = rom,
+            getDrive = function(path) return rom(path) and "rom" or "hdd" end,
+            makeDir = function(path) assert(not rom(path)); disk.dirs[path] = true end,
+            delete = function(path)
+                assert(not rom(path), "Read-only path")
+                local files, dirs = {}, {}
+                for name in pairs(disk.files) do if childOf(name, path) then files[#files + 1] = name end end
+                for name in pairs(disk.dirs) do if childOf(name, path) then dirs[#dirs + 1] = name end end
+                for _, name in ipairs(files) do disk.files[name] = nil end
+                for _, name in ipairs(dirs) do disk.dirs[name] = nil end
+                disk.files[path], disk.dirs[path] = nil, nil
+            end,
+            copy = function(from, to)
+                assert(not rom(to) and not disk.files[to] and not disk.dirs[to], "Invalid copy")
+                if disk.files[from] then
+                    assert(#disk.files[from] <= freeSpace(), "Copy failed")
+                    disk.files[to] = disk.files[from]
+                else
+                    assert(disk.dirs[from], "Missing source")
+                    local files, dirs = {}, {}
+                    for name, data in pairs(disk.files) do if childOf(name, from) then files[to .. name:sub(#from + 1)] = data end end
+                    for name in pairs(disk.dirs) do if childOf(name, from) then dirs[to .. name:sub(#from + 1)] = true end end
+                    disk.dirs[to] = true
+                    for name in pairs(dirs) do disk.dirs[name] = true end
+                    for name, data in pairs(files) do
+                        assert(#data <= freeSpace(), "Copy failed")
+                        disk.files[name] = data
+                    end
+                end
+            end,
             move = function(from, to)
                 if disk.failMove and from:sub(-4) == ".tmp" then error("Simulated interrupted replace") end
                 assert(disk.files[from] ~= nil and disk.files[to] == nil, "Invalid move")
@@ -189,21 +221,19 @@ local function newBus()
                 disk.files[to], disk.files[from] = disk.files[from], nil
             end,
             list = function(path)
-                if path == "" or path == "Apps" then
-                    local list, found = {}, {}
-                    local prefix = path == "" and "" or path .. "/"
-                    local function include(name)
-                        if name:sub(1, #prefix) ~= prefix then return end
-                        local file = name:sub(#prefix + 1)
-                        if not file:find("/", 1, true) then found[file] = true end
-                    end
-                    for name in pairs(comp.appSources) do include(name) end
-                    for name in pairs(disk.files) do include(name) end
-                    for name in pairs(found) do list[#list + 1] = name end
-                    table.sort(list)
-                    return list
+                local list, found = {}, {}
+                local prefix = path == "" and "" or path .. "/"
+                local function include(name)
+                    if name:sub(1, #prefix) ~= prefix then return end
+                    local file = name:sub(#prefix + 1):match("^[^/]+$")
+                    if file then found[file] = true end
                 end
-                return {}
+                for name in pairs(comp.appSources) do include(name) end
+                for name in pairs(disk.files) do include(name) end
+                for name in pairs(disk.dirs) do include(name) end
+                for name in pairs(found) do list[#list + 1] = name end
+                table.sort(list)
+                return list
             end,
             open = function(path, mode)
                 if mode == "w" then
@@ -969,7 +999,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v53", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v54", 1, true))
     end
 end
 function tests.bundled_installer_does_not_contact_github_and_keeps_startup_without_flag()
@@ -1098,7 +1128,7 @@ function tests.v49_bulk_app_install_downloads_every_catalog_entry_and_rolls_back
         assert(settings.enabledApps[path:match("^apps_([%w_-]+)%.lua$")])
         count=count+1
     end
-    equal(count,12)
+    equal(count,13)
     equal(comp.disk.files["apps_coffee.lua.pre_update"],nil)
 end
 function tests.app_installer_downloads_actual_switchboard_and_boots_it_with_only_extracted_core_files()
@@ -1608,6 +1638,7 @@ function tests.v53_boots_with_only_counter_space_then_compacts_the_legacy_state_
 end
 
 assert(hostLoadfile("tests_coffee.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
+assert(hostLoadfile("tests_file_explorer.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_desktop.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_appearance.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
 assert(hostLoadfile("tests_switchboard.lua"))()(tests, newBus, monitor, serialize, unserialize, equal)
