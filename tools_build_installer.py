@@ -17,7 +17,7 @@ def lua_string(value):
         equals += "="
     return "[" + equals + "[" + value + "]" + equals + "]"
 
-header = '''-- SmartHome OS installer: bundled-v55
+header = '''-- SmartHome OS installer: bundled-v56
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -40,7 +40,7 @@ local function install()
 '''
 install_body = r'''local role, autorun = args[1], false
 local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-print("SmartHome installer: bundled-v55")
+print("SmartHome installer: bundled-v56")
 local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
 local appsUsage = "Usage: inst apps [--ref REF]"
 local restoreUsage = "Usage: inst restore [FILE] | inst restore io|monitor|sensor|relay CLIENT_ID [FILE]"
@@ -336,6 +336,7 @@ elseif not appMode then
     end
 end
 -- Check every file before replacing any installed program.
+print("Checking " .. #files .. " files")
 for _, path in ipairs(files) do
     local contents = assert(sources[path], "Missing bundled file: " .. path)
     if path:match("%.lua$") or path == "startup" then

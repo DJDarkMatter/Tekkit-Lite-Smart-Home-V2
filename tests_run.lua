@@ -169,11 +169,21 @@ local function newBus()
             end
         end}
         local disk = comp.disk
+        local function fileSize(path, length)
+            if not disk.legacyFileSizes then return length end
+            return math.max(512, length + #(path:match("[^/]+$") or path))
+        end
         local function freeSpace()
             if not disk.capacity then return math.huge end
             local used = 0
-            for _, value in pairs(disk.files) do used = used + #value end
+            for path, value in pairs(disk.files) do used = used + fileSize(path, #value) end
+            if disk.legacyFileSizes then for _ in pairs(disk.dirs) do used = used + 512 end end
             return math.max(0, disk.capacity - used)
+        end
+        local function fits(path, length)
+            if not disk.capacity then return true end
+            local old = disk.files[path]
+            return fileSize(path, length) - (old and fileSize(path, #old) or 0) <= freeSpace()
         end
         local function childOf(file, folder)
             return file:sub(1, #folder + 1) == folder .. "/"
@@ -183,7 +193,7 @@ local function newBus()
             exists = function(path) return disk.files[path] ~= nil or disk.dirs[path] == true end,
             isDir = function(path) return disk.dirs[path] == true end,
             getFreeSpace = freeSpace,
-            getSize = function(path) return #(disk.files[path] or "") end,
+            getSize = function(path) return disk.files[path] and fileSize(path, #disk.files[path]) or 0 end,
             isReadOnly = rom,
             getDrive = function(path) return rom(path) and "rom" or "hdd" end,
             makeDir = function(path) assert(not rom(path)); disk.dirs[path] = true end,
@@ -199,7 +209,7 @@ local function newBus()
             copy = function(from, to)
                 assert(not rom(to) and not disk.files[to] and not disk.dirs[to], "Invalid copy")
                 if disk.files[from] then
-                    assert(#disk.files[from] <= freeSpace(), "Copy failed")
+                    assert(fits(to, #disk.files[from]), "Copy failed")
                     disk.files[to] = disk.files[from]
                 else
                     assert(disk.dirs[from], "Missing source")
@@ -209,7 +219,7 @@ local function newBus()
                     disk.dirs[to] = true
                     for name in pairs(dirs) do disk.dirs[name] = true end
                     for name, data in pairs(files) do
-                        assert(#data <= freeSpace(), "Copy failed")
+                        assert(fits(name, #data), "Copy failed")
                         disk.files[name] = data
                     end
                 end
@@ -217,7 +227,7 @@ local function newBus()
             move = function(from, to)
                 if disk.failMove and from:sub(-4) == ".tmp" then error("Simulated interrupted replace") end
                 assert(disk.files[from] ~= nil and disk.files[to] == nil, "Invalid move")
-                if disk.copyMove and #disk.files[from] > freeSpace() then error("Copy failed.") end
+                if disk.copyMove and not fits(to, #disk.files[from]) then error("Copy failed.") end
                 disk.files[to], disk.files[from] = disk.files[from], nil
             end,
             list = function(path)
@@ -237,15 +247,19 @@ local function newBus()
             end,
             open = function(path, mode)
                 if mode == "w" then
-                    if disk.failWrite then return nil end
+                    if disk.failWrite or not fits(path, 0) then return nil end
                     disk.files[path] = ""
                     return {write = function(value)
-                        if disk.capacity and #value > freeSpace() then error("Out of space") end
-                        disk.files[path] = disk.files[path] .. value
+                        local contents = disk.files[path] .. value
+                        if not fits(path, #contents) then error("Out of space") end
+                        disk.files[path] = contents
                     end, close = function() end}
                 end
                 if disk.files[path] == nil then return nil end
                 if mode == "rb" then
+                    if not disk.legacyTextReads and not disk.legacyFileSizes then
+                        return {readAll = function() return disk.files[path] end, close = function() end}
+                    end
                     local offset = 0
                     return {read = function() offset = offset + 1; return disk.files[path]:byte(offset) end,
                         close = function() end}
@@ -986,6 +1000,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp.env.http = nil
         equal(comp.env.fs.getDir, nil)
         comp.env.shell = {dir = function() return "" end}
+        comp.disk.legacyTextReads, comp.disk.legacyFileSizes = true, true
         comp.disk.dirs.Configs = true
         comp.disk.files["configs_network.txt"] = '{networkId="saved-home",channel=45231}'
         comp.disk.files.startup = "-- old startup"
@@ -1008,7 +1023,7 @@ function tests.bundled_installer_boots_all_roles_without_http_or_newer_fs_api()
         comp:start()
         assert(role == "server" and comp.server or comp.client)
         if role == "server" then equal(next(comp.server.apps), nil) end
-        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v55", 1, true))
+        assert(table.concat(comp.log, "\n"):find("SmartHome installer: bundled-v56", 1, true))
     end
 end
 
@@ -1035,7 +1050,7 @@ function tests.v55_installer_verifies_program_bytes_when_legacy_text_reads_drop_
     install("server", "--startup") -- Byte-identical programs must be skipped.
     comp.disk.failWrite = false
     local open = comp.env.fs.open
-    for _, damaged in ipairs({"Line\n", "lin\n"}) do
+    for _, damaged in ipairs({"Line\n", "lin\n", "line\r"}) do
         comp.env.fs.open = function(name, mode)
             local file = open(name, mode)
             if name == "damaged.txt" and mode == "w" then
@@ -1558,6 +1573,84 @@ local function diskBytes(disk)
     local bytes = 0
     for _, contents in pairs(disk.files) do bytes = bytes + #contents end
     return bytes
+end
+
+function tests.v56_installer_upgrades_a_legacy_disk_with_quota_sizes_and_existing_data()
+    local comp = newBus().computer(10, "server")
+    comp.env.shell = {dir = function() return "" end}
+    local install = assert(comp.env.loadfile("install.lua"))
+    install("server", "--startup")
+    local disk = comp.disk
+    local current = disk.files["lib_storage.lua"]
+    disk.files["lib_storage.lua"] = current .. "\n-- previous server version\n"
+    disk.files["main_os.lua.pre_update"] = disk.files["main_os.lua"]
+    disk.files.startup = "-- previous autorun\n"
+    local config = serialize({enabledApps = {}})
+    local state = serialize({clientNames = {io_11 = "Pump"}, appStates = {coffee = {totalHarvests = 44}},
+        desktops = {monitor_12 = {layout = {id = "existing"}}}})
+    disk.files["configs_network.txt"] = serialize({networkId = "persisted", channel = 45231})
+    disk.files["configs_transport.txt"] = serialize({bootCounter = 3})
+    disk.files["configs_os.txt"], disk.files["configs_os_state.txt"] = config, state
+    disk.files["backup_os_all.txt"], disk.files["apps_local.lua"] = "Existing backup", "return {}\n"
+    disk.legacyTextReads, disk.legacyFileSizes, disk.copyMove = true, true, true
+    disk.capacity = 1000000
+    disk.files["user_file.txt"] = string.rep("x", comp.env.fs.getFreeSpace("/") - 4096 - #"user_file.txt")
+    equal(comp.env.fs.getFreeSpace("/"), 4096)
+    equal(comp.env.fs.getSize("startup"), 512)
+    equal(comp.env.fs.getSize("lib_storage.lua"), #disk.files["lib_storage.lua"] + #"lib_storage.lua")
+    install("server", "--startup")
+    equal(disk.files["lib_storage.lua"], current)
+    equal(disk.files.startup, 'shell.setDir("/")\nshell.run("main_os.lua")\n')
+    for _, path in ipairs({"install_plan.txt", "install_pending.txt", "main_os.lua.pre_update"}) do
+        equal(disk.files[path], nil, path)
+    end
+    equal(disk.files["configs_os.txt"], config)
+    equal(disk.files["configs_os_state.txt"], state)
+    equal(disk.files["backup_os_all.txt"], "Existing backup")
+    equal(disk.files["apps_local.lua"], "return {}\n")
+    disk.failWrite = true
+    install("server", "--startup") -- An unchanged install should need no writes.
+    disk.failWrite = false
+    comp.env.loadfile = function(path)
+        local source = disk.files[path]
+        if not source then return nil, "Missing installed program: " .. path end
+        local chunk, err = loadstring(source, path)
+        if chunk then setfenv(chunk, comp.env) end
+        return chunk, err
+    end
+    comp:start()
+    equal(comp.server.api.clientName("io_11"), "Pump")
+    equal(comp.server.state.appStates.coffee.totalHarvests, 44)
+end
+
+function tests.v56_installer_reports_quota_exhaustion_before_replacing_files()
+    local comp = newBus().computer(10, "server")
+    comp.env.shell = {dir = function() return "" end}
+    local install = assert(comp.env.loadfile("install.lua"))
+    local disk = comp.disk
+    disk.legacyFileSizes = true
+    disk.files["main_os.lua"], disk.files["lib_server.lua"] = "-- old OS", "-- old server"
+    disk.files["my_app.lua"] = "return {}"
+    local config = serialize({enabledApps = {custom = true}})
+    disk.files["configs_os.txt"] = config
+    disk.capacity = 5 * 512 + 1024 -- Five current allocations, with space for the two journal files.
+    local open, targetWrites = comp.env.fs.open, 0
+    comp.env.fs.open = function(path, mode)
+        if path == "apps_custom.lua" and mode == "w" then targetWrites = targetWrites + 1 end
+        return open(path, mode)
+    end
+    local ok, err = pcall(install, "app", "custom", "--file", "my_app.lua")
+    assert(not ok and tostring(err):find("Not enough disk space for install", 1, true), tostring(err))
+    equal(targetWrites, 0)
+    equal(disk.files["configs_os.txt"], config)
+    equal(disk.files["install_plan.txt"], nil)
+    equal(disk.files["install_pending.txt"], nil)
+    disk.capacity = disk.capacity + 512
+    install("app", "custom", "--file", "my_app.lua")
+    equal(targetWrites, 1)
+    equal(disk.files["apps_custom.lua"], "return {}")
+    equal(disk.files["configs_os.txt"], config)
+    equal(disk.files["install_pending.txt"], nil)
 end
 
 function tests.v53_small_installer_reclaims_old_program_copies_and_updates_under_quota()

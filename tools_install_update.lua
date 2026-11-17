@@ -55,9 +55,17 @@ end
 local function preflight(storage, changes, journalBytes)
     local available = storage.freeSpace(journalPath)
     if not available then return end
+    -- An empty marker reveals whether this filesystem reports quota usage.
+    -- Once the journal is on disk, use the remaining capacity for the targets.
+    local minimum = fs.getSize and fs.exists(journalPath) and fs.getSize(journalPath) or 0
     local used, peak = journalBytes, journalBytes
     for _, change in ipairs(changes) do
-        used = used + #change.contents - #(change.previous or "")
+        local current, replacement = #(change.previous or ""), #change.contents
+        if minimum > 0 then
+            current = change.previous and fs.getSize(change.path) or 0
+            replacement = math.max(minimum, replacement + #change.path)
+        end
+        used = used + replacement - current
         peak = math.max(peak, used)
     end
     if available < peak then
@@ -74,6 +82,7 @@ function Update.apply(storage, files, sources, command, pending, references, bun
         plan.targets[path] = Update.signature(contents)
         if not references[path] and path:match("^configs_[%w_-]+%.txt$") then plan.settings[path] = contents end
         local previous = storage.readBytes(path)
+        assert(previous ~= nil or not fs.exists(path), "Cannot read installed file: " .. path)
         if previous == contents then unchanged = unchanged + 1
         else changes[#changes + 1] = {path = path, contents = contents, previous = previous} end
     end
@@ -98,14 +107,15 @@ function Update.apply(storage, files, sources, command, pending, references, bun
     end
 
     local journal = not pending and Work.serialize(plan)
-    preflight(storage, changes, journal and #journal or 0)
-    if journal then
-        -- An incomplete plan has no marker and can be discarded on retry.
-        storage.writeVerified(planPath, journal)
-        storage.writeVerified(journalPath, "")
-    end
+    if journal then preflight(storage, changes, #journal) end
     local started = 0
     local ok, err = Work.call(function()
+        if journal then
+            -- An incomplete plan has no marker and can be discarded on retry.
+            storage.writeVerified(planPath, journal)
+            storage.writeVerified(journalPath, "")
+        end
+        preflight(storage, changes, 0)
         for index, change in ipairs(changes) do
             started = index
             storage.writeVerified(change.path, change.contents)
