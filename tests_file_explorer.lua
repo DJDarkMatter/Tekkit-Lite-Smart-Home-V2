@@ -214,4 +214,46 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         assert(t.text(id):find("Pastebin error", 1, true) and t.text(id):find("upload rejected", 1, true))
         equal(t.disk.files[path], bytes)
     end
+
+    function tests.v57_file_explorer_forwards_legacy_pastebin_http_events()
+        local t = setup([[
+            local mode, path = ...
+            assert(mode == "put" and path == "/guide.lua")
+            local file = assert(fs.open(shell.resolve(path), "r"))
+            local bytes = file.readAll(); file.close()
+            local url = "http://pastebin.com/api/api_post.php"
+            write("Connecting to pastebin.com... ")
+            http.request(url, "content=" .. bytes)
+            while true do
+                local event, address, response = os.pullEvent()
+                if address == url and event == "http_success" then
+                    print("Success.")
+                    print("Uploaded as " .. response.readAll())
+                    response.close()
+                    return
+                elseif address == url and event == "http_failure" then
+                    printError(response or "Failed.")
+                    return
+                end
+            end
+        ]])
+        local id = t.open("top")
+        local requests = t.requests()
+        t.click(id, "open", "guide.lua"); t.click(id, "upload"); t.click(id, "sendPaste")
+        equal(#requests, 1)
+        assert(t.text(id):find("Uploading", 1, true), t.text(id))
+        assert(requests[1].url:match("^http://pastebin%.com/api/api_post%.php%?smarthome="))
+        equal(requests[1].body, "content=" .. t.disk.files["guide.lua"])
+        local before = t.central.server.lastTick
+        t.bus.advance(1)
+        assert(t.central.server.lastTick > before)
+        t.respond(requests[1], "http://pastebin.com/Z7qx")
+        assert(t.text(id):find("ID: Z7qx", 1, true))
+        t.click(id, "file"); t.click(id, "upload"); t.click(id, "sendPaste")
+        equal(#requests, 2)
+        assert(requests[1].url ~= requests[2].url)
+        t.bus.queue(t.central, {"http_failure", requests[2].url, "Connection refused"})
+        t.bus.pump()
+        assert(t.text(id):find("Connection refused", 1, true))
+    end
 end
