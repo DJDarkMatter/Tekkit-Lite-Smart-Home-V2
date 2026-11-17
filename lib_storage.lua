@@ -5,16 +5,6 @@ local Codec = rawget(_G, "__smarthomeCodec") or dofile("lib_codec.lua")
 local validatedContents = {}
 local checkpoints = {}
 
-local function readFile(path, mode, read)
-    local file = fs.open(path, mode)
-    if not file then return nil end
-    local ok, contents = Work.call(read, file)
-    local closed, err = pcall(file.close)
-    if not ok then error(contents, 0) end
-    if not closed then error(err, 0) end
-    return contents
-end
-
 local function readBinary(file)
     if file.readAll then return file.readAll() or "" end
     local parts, block = {}, {}
@@ -24,22 +14,23 @@ local function readBinary(file)
         block[#block + 1] = string.char(byte)
         if #block == 256 then
             parts[#parts + 1], block = table.concat(block), {}
-            Work.check(4096)
+            Work.check(1024)
         end
     end
     parts[#parts + 1] = table.concat(block)
     return table.concat(parts)
 end
 
-function storage.readBytes(path, expected)
+function storage.readBytes(path)
     if not fs.exists(path) or fs.isDir(path) then return nil end
-    local size = fs.getSize and fs.getSize(path)
-    if expected and size and size ~= #expected then return nil end
-    local contents = readFile(path, "r", function(file) return file.readAll() end)
-    if contents and (not size or #contents == size) and (not expected or contents == expected) then return contents end
-    -- Legacy text handles can normalize line endings and omit the final LF.
-    -- Check the binary bytes before writing off a complete program as corrupt.
-    return readFile(path, "rb", readBinary)
+    -- Legacy fs.getSize can report quota usage, and text reads can change line endings.
+    local file = fs.open(path, "rb")
+    if not file then return nil end
+    local ok, contents = Work.call(readBinary, file)
+    local closed, err = pcall(file.close)
+    if not ok then error(contents, 0) end
+    if not closed then error(err, 0) end
+    return contents
 end
 
 local function readTable(path)
@@ -77,7 +68,7 @@ function storage.writeVerified(path, contents)
     local wrote, err = pcall(file.write, contents)
     local closed, closeError = pcall(file.close)
     local read, actual
-    if wrote and closed then read, actual = Work.call(storage.readBytes, path, contents) end
+    if wrote and closed then read, actual = Work.call(storage.readBytes, path) end
     if not read or actual ~= contents then
         pcall(fs.delete, path)
         local reason = err or closeError or not read and actual or "incomplete file or readback mismatch"

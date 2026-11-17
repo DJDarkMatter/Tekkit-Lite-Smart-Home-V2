@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v55
+-- SmartHome OS installer: bundled-v56
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -217,16 +217,6 @@ local Codec = rawget(_G, "__smarthomeCodec") or dofile("lib_codec.lua")
 local validatedContents = {}
 local checkpoints = {}
 
-local function readFile(path, mode, read)
-    local file = fs.open(path, mode)
-    if not file then return nil end
-    local ok, contents = Work.call(read, file)
-    local closed, err = pcall(file.close)
-    if not ok then error(contents, 0) end
-    if not closed then error(err, 0) end
-    return contents
-end
-
 local function readBinary(file)
     if file.readAll then return file.readAll() or "" end
     local parts, block = {}, {}
@@ -236,22 +226,23 @@ local function readBinary(file)
         block[#block + 1] = string.char(byte)
         if #block == 256 then
             parts[#parts + 1], block = table.concat(block), {}
-            Work.check(4096)
+            Work.check(1024)
         end
     end
     parts[#parts + 1] = table.concat(block)
     return table.concat(parts)
 end
 
-function storage.readBytes(path, expected)
+function storage.readBytes(path)
     if not fs.exists(path) or fs.isDir(path) then return nil end
-    local size = fs.getSize and fs.getSize(path)
-    if expected and size and size ~= #expected then return nil end
-    local contents = readFile(path, "r", function(file) return file.readAll() end)
-    if contents and (not size or #contents == size) and (not expected or contents == expected) then return contents end
-    -- Legacy text handles can normalize line endings and omit the final LF.
-    -- Check the binary bytes before writing off a complete program as corrupt.
-    return readFile(path, "rb", readBinary)
+    -- Legacy fs.getSize can report quota usage, and text reads can change line endings.
+    local file = fs.open(path, "rb")
+    if not file then return nil end
+    local ok, contents = Work.call(readBinary, file)
+    local closed, err = pcall(file.close)
+    if not ok then error(contents, 0) end
+    if not closed then error(err, 0) end
+    return contents
 end
 
 local function readTable(path)
@@ -289,7 +280,7 @@ function storage.writeVerified(path, contents)
     local wrote, err = pcall(file.write, contents)
     local closed, closeError = pcall(file.close)
     local read, actual
-    if wrote and closed then read, actual = Work.call(storage.readBytes, path, contents) end
+    if wrote and closed then read, actual = Work.call(storage.readBytes, path) end
     if not read or actual ~= contents then
         pcall(fs.delete, path)
         local reason = err or closeError or not read and actual or "incomplete file or readback mismatch"
@@ -6300,7 +6291,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v55: starting")
+console.log("SmartHome OS v56: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -7704,9 +7695,17 @@ end
 local function preflight(storage, changes, journalBytes)
     local available = storage.freeSpace(journalPath)
     if not available then return end
+    -- An empty marker reveals whether this filesystem reports quota usage.
+    -- Once the journal is on disk, use the remaining capacity for the targets.
+    local minimum = fs.getSize and fs.exists(journalPath) and fs.getSize(journalPath) or 0
     local used, peak = journalBytes, journalBytes
     for _, change in ipairs(changes) do
-        used = used + #change.contents - #(change.previous or "")
+        local current, replacement = #(change.previous or ""), #change.contents
+        if minimum > 0 then
+            current = change.previous and fs.getSize(change.path) or 0
+            replacement = math.max(minimum, replacement + #change.path)
+        end
+        used = used + replacement - current
         peak = math.max(peak, used)
     end
     if available < peak then
@@ -7723,6 +7722,7 @@ function Update.apply(storage, files, sources, command, pending, references, bun
         plan.targets[path] = Update.signature(contents)
         if not references[path] and path:match("^configs_[%w_-]+%.txt$") then plan.settings[path] = contents end
         local previous = storage.readBytes(path)
+        assert(previous ~= nil or not fs.exists(path), "Cannot read installed file: " .. path)
         if previous == contents then unchanged = unchanged + 1
         else changes[#changes + 1] = {path = path, contents = contents, previous = previous} end
     end
@@ -7747,14 +7747,15 @@ function Update.apply(storage, files, sources, command, pending, references, bun
     end
 
     local journal = not pending and Work.serialize(plan)
-    preflight(storage, changes, journal and #journal or 0)
-    if journal then
-        -- An incomplete plan has no marker and can be discarded on retry.
-        storage.writeVerified(planPath, journal)
-        storage.writeVerified(journalPath, "")
-    end
+    if journal then preflight(storage, changes, #journal) end
     local started = 0
     local ok, err = Work.call(function()
+        if journal then
+            -- An incomplete plan has no marker and can be discarded on retry.
+            storage.writeVerified(planPath, journal)
+            storage.writeVerified(journalPath, "")
+        end
+        preflight(storage, changes, 0)
         for index, change in ipairs(changes) do
             started = index
             storage.writeVerified(change.path, change.contents)
@@ -7797,7 +7798,7 @@ local args = {...}
 local function install()
     local role, autorun = args[1], false
     local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-    print("SmartHome installer: bundled-v55")
+    print("SmartHome installer: bundled-v56")
     local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
     local appsUsage = "Usage: inst apps [--ref REF]"
     local restoreUsage = "Usage: inst restore [FILE] | inst restore io|monitor|sensor|relay CLIENT_ID [FILE]"
@@ -8093,6 +8094,7 @@ local function install()
         end
     end
     -- Check every file before replacing any installed program.
+    print("Checking " .. #files .. " files")
     for _, path in ipairs(files) do
         local contents = assert(sources[path], "Missing bundled file: " .. path)
         if path:match("%.lua$") or path == "startup" then
