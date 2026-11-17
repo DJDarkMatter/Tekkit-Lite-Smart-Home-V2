@@ -2021,13 +2021,21 @@ function Server.new(net, storage, config, logger, craftShell)
                 placement.hits[#placement.hits + 1] = {x1 = x, x2 = monitor.width, y = area.y, action = "place"}
             end
         end
+        if not fullscreen and monitor.width > 1 then
+            local edge = borderColour == taskbarColour and Gui.contrast(taskbarColour) or borderColour
+            surface.fill(monitor.width, barY, 1, 1, Gui.contrast(edge), edge)
+        end
         monitor.inboxModel = nil
         if not fullscreen and monitor.inbox then
             local model = Inbox.render(monitor, state.alertHistory, api)
             monitor.inboxModel = model
-            for y = 1, model.height do write(model.x, model.y + y - 1, model.lines[y], model.width) end
+            if model.contentX > model.x then
+                local edge = borderColour == 32768 and 1 or borderColour
+                surface.fill(model.x, model.y, 1, model.height, Gui.contrast(edge), edge)
+            end
+            for y = 1, model.height do write(model.contentX, model.y + y - 1, model.lines[y]) end
             for _, style in ipairs(model.lines.styles) do
-                surface.style(model.x + style.x - 1, model.y + style.y - 1, style.width, style.height or 1, style.fg, style.bg)
+                surface.style(model.contentX + style.x - 1, model.y + style.y - 1, style.width, style.height or 1, style.fg, style.bg)
             end
         end
         local notification = firstNotification()

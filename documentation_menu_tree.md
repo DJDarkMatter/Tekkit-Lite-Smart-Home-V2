@@ -16,7 +16,7 @@ Launcher, taskbar, title-bar controls and window placement.
 
 **Source** [lib_desktop.lua](lib_desktop.lua), [lib_server.lua](lib_server.lua), [lib_monitor.lua](lib_monitor.lua), [documentation_desktop.md](documentation_desktop.md)
 
-- Taskbar — Appears at the edge selected in Settings.
+- Taskbar — Appears at the edge selected in Settings with a frame on the right.
   - Start [+] — One alphabetical column. Roomy monitors use two rows per entry. A star marks a running app.
     - [Settings](#settings) — Opens the built-in Settings window.
     - [App] — Opens the app or focuses its existing window on this monitor.
@@ -115,7 +115,7 @@ Appearance, system diagnostics, client names and saved app data.
 
 ### Alert inbox
 
-Recent alert history and the separate acknowledgment popup.
+Recent alert history in a sidebar with a left border, and the separate acknowledgment popup.
 
 **Path** Desktop → Clock / alert badge or Start → Alert inbox
 

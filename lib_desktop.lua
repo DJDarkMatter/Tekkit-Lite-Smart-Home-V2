@@ -290,10 +290,10 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
     return rect, ui.lines, ui.hits, page, pages
 end
 
--- Returns a complete taskbar line and exact touch regions, with stable window order.
+-- Leave the rightmost column for the frame and keep the clock's edge shortcut.
 function Desktop.taskbar(windows, monitor, clock, saved, active)
     local visible={}; for _,win in ipairs(windows) do if not win.hideTaskbar then visible[#visible+1]=win end end; windows=visible
-    local width = monitor.width
+    local width = math.max(1, monitor.width - 1)
     local line, hits = string.rep(" ", width), {}
     local function put(x, label, stop)
         label = label:sub(1, math.max(0, math.min(stop or width, width) - x + 1))
@@ -301,8 +301,8 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
     end
     local function hit(x1, x2, action, id) hits[#hits + 1] = {x1 = x1, x2 = x2, action = action, id = id} end
     put(1, "[+]"); hit(1, math.min(3, width), "launcher")
-    local clockWidth = (width >= 22 or (#windows == 0 and width >= 10)) and 6 or 0
-    if clockWidth > 0 then put(width - 4, clock); hit(width - 4, width, "inbox") end
+    local clockWidth = (monitor.width >= 22 or (#windows == 0 and monitor.width >= 10)) and 6 or 0
+    if clockWidth > 0 then put(width - 4, clock); hit(width - 4, monitor.width, "inbox") end
     local first, last = 5, width - clockWidth
     if last < first then return line, hits end
     local labels, needed = {}, 0

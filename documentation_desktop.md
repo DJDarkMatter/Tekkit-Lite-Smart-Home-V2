@@ -8,7 +8,7 @@ Bundled-v33 updates the `server` role for direct 1x1 layout selection, red notif
 
 The background contains no branding text. `[+]` → **OS settings** opens the built-in Settings window, including before any user apps are installed. **Appearance** contains **Background**, **Window border**, and **Taskbar**. Open **Taskbar → Color** to pick a swatch or **Taskbar → Position** to select **Top** or **Bottom**. These settings apply across every monitor. Window border colors the complete frame and title bar of every window, including OS settings; Close remains red. The optional [Screensaver](documentation_screensaver.md) app always fills its monitor and is opened manually from Start. Top-left selects the previous design; top-right selects the next. Any other touch closes it. It never restores at reboot and adds no other-monitor taskbar entry. Alarm popups retain priority. Start lists apps and OS settings alphabetically by displayed title. Appearance preferences are checkpointed centrally; they do not alter app timers, IO wiring or enabled-app choices.
 
-Window borders and the taskbar default to gray. Text switches between white and black for contrast; the selected taskbar button and open launcher use an inverted highlight. A selected border color is honoured even if it matches the desktop. App accents remain independent: Coffee offers **Menu → Settings → UI color**, and future apps should use the same OS-owned palette. The taskbar uses one character row at the chosen edge. Windows and layout previews occupy the rest of the desktop.
+Window borders and the taskbar default to gray. Text switches between white and black for contrast; the selected taskbar button and open launcher use an inverted highlight. A selected border color is honoured even if it matches the desktop. App accents remain independent: Coffee offers **Menu → Settings → UI color**, and future apps should use the same OS-owned palette. The taskbar uses one row with a right border at the chosen screen edge. The clock shortcut also responds at that edge. Windows and layout previews occupy the rest of the desktop.
 
 ## Taskbar
 
@@ -116,6 +116,6 @@ App notifications use a red panel, white text and a white OK strip independently
 
 ## Alert Inbox and presets (v39)
 
-Tap the clock to review recent alerts. On a taskbar without room for the clock, open **Start → Alert inbox**. The inbox overlays the desktop as a right sidebar and fills a small screen with a Back button. A screensaver covers the inbox until you exit it. New red popups remain modal above both.
+Tap the clock to review recent alerts. On a taskbar without room for the clock, open **Start → Alert inbox**. The inbox opens as a right sidebar with a left border. On a small screen it fills the display and has a Back button. A screensaver covers the inbox until you exit it. New red popups remain modal above both.
 
 Install **Window Presets** with `inst app window_presets`. Capture one monitor or all online monitors. A preset remembers the open app views and relative positions. Preview and reassign slots before applying. Small monitors use minimum window sizes and can minimize windows that would otherwise overlap.

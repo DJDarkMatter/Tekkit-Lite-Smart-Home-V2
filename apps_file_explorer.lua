@@ -162,6 +162,12 @@ local function resumeUpload(job, api, ...)
     local ok, url, body, headers = coroutine.resume(job.thread, ...)
     if not ok then return finishUpload(job, url) end
     if coroutine.status(job.thread) == "dead" then return finishUpload(job, job.requestError) end
+    local eventRequest = job.eventRequest
+    job.eventRequest = nil
+    if eventRequest and (url == nil or url == "http_success" or url == "http_failure") then
+        url, body, headers = eventRequest.url, eventRequest.body, eventRequest.headers
+        job.eventUrl = url
+    end
     if type(url) ~= "string" or not url:match("^https?://") then
         return finishUpload(job, "The Pastebin command paused unexpectedly")
     end
@@ -181,10 +187,16 @@ local function putFile(window, api, path)
         end
         write("\n")
     end
-    -- Run the program from this computer's shell path with its output captured.
-    -- Yield only this program while the OS dispatches its HTTP response.
-    local programHttp = setmetatable({post = function(url, data, headers) return coroutine.yield(url, data, headers) end,
-        get = function(url, headers) return coroutine.yield(url, nil, headers) end}, {__index = http})
+    -- Older pastebin programs queue a request, then wait in os.pullEvent.
+    local programHttp = setmetatable({
+        request = function(url, data, headers)
+            if job.eventRequest then return false, "Another Pastebin request is pending" end
+            job.eventRequest = {url = url, body = data, headers = headers}
+            return true
+        end,
+        post = function(url, data, headers) return coroutine.yield(url, data, headers) end,
+        get = function(url, headers) return coroutine.yield(url, nil, headers) end,
+    }, {__index = http})
     local command = assert(api.loadShellProgram("pastebin", {http = programHttp, print = printLine, write = write,
         printError = function(...) job.printedError = true; printLine(...) end}))
     job.thread = coroutine.create(command)
@@ -381,7 +393,12 @@ function app.handleHttp(url, response, errorMessage, api)
         job.requestError = errorMessage
         -- The OS owns the response handle and closes it after this hook.
         local handle = response and setmetatable({close = function() end}, {__index = response})
-        resumeUpload(job, api, handle, errorMessage)
+        local eventUrl = job.eventUrl
+        job.eventUrl = nil
+        if eventUrl then
+            local event = handle and "http_success" or "http_failure"
+            resumeUpload(job, api, event, eventUrl, handle or errorMessage)
+        else resumeUpload(job, api, handle, errorMessage) end
         api.invalidateAppViews(appName)
         return
     end

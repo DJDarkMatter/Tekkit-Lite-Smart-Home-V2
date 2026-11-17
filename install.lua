@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v56
+-- SmartHome OS installer: bundled-v57
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -2461,10 +2461,12 @@ function Inbox.render(monitor, entries, api)
         small and monitor.height or area.height
     local y = small and 1 or area.y
     local x = monitor.width - width + 1
-    local ui = api.ui.form(width, height, view, 2048)
+    local contentX = math.min(x + 1, monitor.width)
+    local contentWidth = monitor.width - contentX + 1
+    local ui = api.ui.form(contentWidth, height, view, 2048)
     local selected
     for _, item in ipairs(entries) do if item.sequence == view.selected then selected = item; break end end
-    if height < 5 or width < 8 then
+    if height < 5 or contentWidth < 8 then
         ui.heading("Alerts", 2048)
         ui.footer({{"Back", "close"}})
     elseif selected then
@@ -2481,13 +2483,13 @@ function Inbox.render(monitor, entries, api)
         ui.menu("Alert inbox", rows, "alerts", {{"Back", "close"}})
     end
     ui.finish()
-    return {x = x, y = y, width = width, height = height, lines = ui.lines, hits = ui.hits}
+    return {x = x, contentX = contentX, y = y, width = width, height = height, lines = ui.lines, hits = ui.hits}
 end
 
 function Inbox.touch(monitor, model, api, x, y)
     if x < model.x or y < model.y or y >= model.y + model.height then return false end
     local view = monitor.inbox
-    local action, value = api.ui.actionAt(model.hits, x - model.x + 1, y - model.y + 1)
+    local action, value = api.ui.actionAt(model.hits, x - model.contentX + 1, y - model.y + 1)
     if action == "close" then monitor.inbox = nil
     elseif action == "list" then view.selected = nil
     elseif action == "details" then view.selected, view.pages.details = value, 1
@@ -2971,10 +2973,10 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
     return rect, ui.lines, ui.hits, page, pages
 end
 
--- Returns a complete taskbar line and exact touch regions, with stable window order.
+-- Leave the rightmost column for the frame and keep the clock's edge shortcut.
 function Desktop.taskbar(windows, monitor, clock, saved, active)
     local visible={}; for _,win in ipairs(windows) do if not win.hideTaskbar then visible[#visible+1]=win end end; windows=visible
-    local width = monitor.width
+    local width = math.max(1, monitor.width - 1)
     local line, hits = string.rep(" ", width), {}
     local function put(x, label, stop)
         label = label:sub(1, math.max(0, math.min(stop or width, width) - x + 1))
@@ -2982,8 +2984,8 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
     end
     local function hit(x1, x2, action, id) hits[#hits + 1] = {x1 = x1, x2 = x2, action = action, id = id} end
     put(1, "[+]"); hit(1, math.min(3, width), "launcher")
-    local clockWidth = (width >= 22 or (#windows == 0 and width >= 10)) and 6 or 0
-    if clockWidth > 0 then put(width - 4, clock); hit(width - 4, width, "inbox") end
+    local clockWidth = (monitor.width >= 22 or (#windows == 0 and monitor.width >= 10)) and 6 or 0
+    if clockWidth > 0 then put(width - 4, clock); hit(width - 4, monitor.width, "inbox") end
     local first, last = 5, width - clockWidth
     if last < first then return line, hits end
     local labels, needed = {}, 0
@@ -5084,13 +5086,21 @@ function Server.new(net, storage, config, logger, craftShell)
                 placement.hits[#placement.hits + 1] = {x1 = x, x2 = monitor.width, y = area.y, action = "place"}
             end
         end
+        if not fullscreen and monitor.width > 1 then
+            local edge = borderColour == taskbarColour and Gui.contrast(taskbarColour) or borderColour
+            surface.fill(monitor.width, barY, 1, 1, Gui.contrast(edge), edge)
+        end
         monitor.inboxModel = nil
         if not fullscreen and monitor.inbox then
             local model = Inbox.render(monitor, state.alertHistory, api)
             monitor.inboxModel = model
-            for y = 1, model.height do write(model.x, model.y + y - 1, model.lines[y], model.width) end
+            if model.contentX > model.x then
+                local edge = borderColour == 32768 and 1 or borderColour
+                surface.fill(model.x, model.y, 1, model.height, Gui.contrast(edge), edge)
+            end
+            for y = 1, model.height do write(model.contentX, model.y + y - 1, model.lines[y]) end
             for _, style in ipairs(model.lines.styles) do
-                surface.style(model.x + style.x - 1, model.y + style.y - 1, style.width, style.height or 1, style.fg, style.bg)
+                surface.style(model.contentX + style.x - 1, model.y + style.y - 1, style.width, style.height or 1, style.fg, style.bg)
             end
         end
         local notification = firstNotification()
@@ -6291,7 +6301,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v56: starting")
+console.log("SmartHome OS v57: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -7798,7 +7808,7 @@ local args = {...}
 local function install()
     local role, autorun = args[1], false
     local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-    print("SmartHome installer: bundled-v56")
+    print("SmartHome installer: bundled-v57")
     local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
     local appsUsage = "Usage: inst apps [--ref REF]"
     local restoreUsage = "Usage: inst restore [FILE] | inst restore io|monitor|sensor|relay CLIENT_ID [FILE]"

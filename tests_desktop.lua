@@ -107,6 +107,39 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.window(id), nil)
         equal(t.central.server.running.pane, nil)
     end
+
+    function tests.v57_desktop_frames_the_taskbar_right_and_inbox_left()
+        for _, size in ipairs({{48, 16}, {12, 7}}) do
+            local t = setup(size[1], size[2])
+            assert(t.api.setWindowBorderColour(2)); assert(t.api.setTaskbarColour(8192))
+            t.central.server.state.alertHistory = {{sequence = 1, title = "Job", time = "08:00", message = "Done"}}
+            for _, position in ipairs({"bottom", "top"}) do
+                assert(t.api.setTaskbarPosition(position)); t.paint()
+                local width, barY = t.top.width, Desktop.taskbarY(t.model())
+                equal(t.top.bg[barY][1], 8192)
+                equal(t.top.bg[barY][width - 1], 8192)
+                equal(t.top.bg[barY][width], 2)
+                equal(t.top.lines[barY]:sub(width - 5, width - 1):gsub(" +$", ""), t.central.server.gameTime)
+                t.touch("top", width, barY) -- The existing edge shortcut still works.
+                local model = assert(t.model().inboxModel)
+                equal(model.contentX, model.x + 1)
+                equal(t.top.bg[model.y][model.x], 2)
+                equal(t.top.bg[model.y + model.height - 1][model.x], 2)
+                assert(t.top.bg[model.y][model.contentX] ~= 2)
+                local detail
+                for _, hit in ipairs(model.hits) do
+                    if hit.action == "details" then detail = hit; break end
+                end
+                assert(detail)
+                local row = model.y + detail.y - 1
+                t.touch("top", model.x, row)
+                equal(t.model().inbox.selected, nil)
+                t.touch("top", model.contentX + detail.x1 - 1, row)
+                equal(t.model().inbox.selected, 1)
+            end
+        end
+    end
+
     function tests.desktop_window_ui_checkpoint_is_plain_bounded_and_failed_saves_keep_the_previous_navigation()
         local t=setup()
         local id=t.open()

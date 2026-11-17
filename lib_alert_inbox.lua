@@ -10,10 +10,12 @@ function Inbox.render(monitor, entries, api)
         small and monitor.height or area.height
     local y = small and 1 or area.y
     local x = monitor.width - width + 1
-    local ui = api.ui.form(width, height, view, 2048)
+    local contentX = math.min(x + 1, monitor.width)
+    local contentWidth = monitor.width - contentX + 1
+    local ui = api.ui.form(contentWidth, height, view, 2048)
     local selected
     for _, item in ipairs(entries) do if item.sequence == view.selected then selected = item; break end end
-    if height < 5 or width < 8 then
+    if height < 5 or contentWidth < 8 then
         ui.heading("Alerts", 2048)
         ui.footer({{"Back", "close"}})
     elseif selected then
@@ -30,13 +32,13 @@ function Inbox.render(monitor, entries, api)
         ui.menu("Alert inbox", rows, "alerts", {{"Back", "close"}})
     end
     ui.finish()
-    return {x = x, y = y, width = width, height = height, lines = ui.lines, hits = ui.hits}
+    return {x = x, contentX = contentX, y = y, width = width, height = height, lines = ui.lines, hits = ui.hits}
 end
 
 function Inbox.touch(monitor, model, api, x, y)
     if x < model.x or y < model.y or y >= model.y + model.height then return false end
     local view = monitor.inbox
-    local action, value = api.ui.actionAt(model.hits, x - model.x + 1, y - model.y + 1)
+    local action, value = api.ui.actionAt(model.hits, x - model.contentX + 1, y - model.y + 1)
     if action == "close" then monitor.inbox = nil
     elseif action == "list" then view.selected = nil
     elseif action == "details" then view.selected, view.pages.details = value, 1
