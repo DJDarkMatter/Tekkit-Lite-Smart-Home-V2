@@ -13,4 +13,6 @@ On the central computer, install with `inst app file_explorer`. Open **Start →
 
 **Menu → Get paste** accepts a public or unlisted paste ID or a `pastebin.com` link. Confirm a filename to save the paste as a text file in the current folder. The get operation uses HTTP access to `pastebin.com`.
 
-Select a text file, tap **Send paste**, then confirm **Send**. File Explorer uses the central computer's `pastebin put` command and shows the resulting ID and URL. The app handles older CraftOS commands that wait for HTTP events. Paste visibility follows the installed Pastebin command, which may publish the file. If Pastebin or the server rejects the transfer, the window displays the command's error.
+Select a text file, tap **Send paste**, then confirm **Send**. File Explorer uses the central computer's `pastebin put` command and shows the resulting ID and URL. The app preserves that command's upload URL, body and headers and handles older CraftOS commands that wait for HTTP events. Paste visibility follows the installed Pastebin command, which may publish the file. If Pastebin or the server rejects the transfer, the window displays the command's error.
+
+Uploads to the same URL run one at a time. If the OS reports a timeout, that URL remains busy until the original HTTP request finishes, so a late response cannot be mistaken for a newer upload. The exact cause of the reported backup upload failure has not been verified on the Minecraft server.

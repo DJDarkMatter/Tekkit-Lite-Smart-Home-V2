@@ -353,24 +353,31 @@ function Server.new(net, storage, config, logger, craftShell)
         return setfenv(program, setmetatable(environment, {__index = getfenv(program)}))
     end
 
-    function api.requestHttp(url, body, headers)
+    function api.requestHttp(url, body, headers, exact)
         local app = callingApp and definition(callingApp)
         if not app or not app.handleHttp then return false, "App has no HTTP handler" end
         if not http or type(http.request) ~= "function" then return false, "HTTP is disabled" end
         if type(url) ~= "string" or httpRequests[url] then return false, "HTTP request already pending" end
-        headers = headers or (body and {["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"} or nil)
-        local ok, started, reason = pcall(http.request, url, body, headers)
+        if exact ~= true then
+            headers = headers or (body and {["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"} or nil)
+        end
+        local ok, started, reason
+        if exact == true and headers == nil then
+            ok, started, reason = pcall(http.request, url, body)
+        else ok, started, reason = pcall(http.request, url, body, headers) end
         if not ok or started == false or started == nil and reason then
             return false, tostring(ok and reason or started or "HTTP request refused")
         end
-        httpRequests[url] = {name = callingApp, app = app, deadline = os.clock() + 30}
+        httpRequests[url] = {name = callingApp, app = app, deadline = os.clock() + 30, exact = exact == true}
         return true
     end
 
-    local function dispatchHttp(url, response, reason)
+    local function dispatchHttp(url, response, reason, timedOut)
         local request = httpRequests[url]
         if not request then return end
-        httpRequests[url] = nil
+        -- An unchanged URL has no request ID. Wait for its native completion
+        -- after a timeout so a late result cannot be given to another upload.
+        httpRequests[url] = timedOut and request.exact and {deadline = math.huge} or nil
         if server.running[request.name] and definition(request.name) == request.app then
             appCall(request.name, "handleHttp", url, response, reason, api)
         end
@@ -1970,6 +1977,10 @@ function Server.new(net, storage, config, logger, craftShell)
                         hit.item and hit.item.enabled == false and 128 or 32768, hit.action == "item" and 256 or 128)
                 end
             end
+            if monitor.launcher and rect.width > 1 then
+                local edge = borderColour == 32768 and 1 or borderColour
+                surface.fill(rect.x + rect.width - 1, rect.y, 1, rect.height, Gui.contrast(edge), edge)
+            end
         end
         local placement = not fullscreen and monitor.placement
         if placement then
@@ -2020,10 +2031,6 @@ function Server.new(net, storage, config, logger, craftShell)
                 surface.write(x, area.y, "Place", 32768, 256)
                 placement.hits[#placement.hits + 1] = {x1 = x, x2 = monitor.width, y = area.y, action = "place"}
             end
-        end
-        if not fullscreen and monitor.width > 1 then
-            local edge = borderColour == taskbarColour and Gui.contrast(taskbarColour) or borderColour
-            surface.fill(monitor.width, barY, 1, 1, Gui.contrast(edge), edge)
         end
         monitor.inboxModel = nil
         if not fullscreen and monitor.inbox then
@@ -2513,7 +2520,7 @@ function Server.new(net, storage, config, logger, craftShell)
         server.lastTick = now
         updateClock()
         for _, url in ipairs(sortedKeys(httpRequests)) do
-            if now >= httpRequests[url].deadline then dispatchHttp(url, nil, "HTTP request timed out") end
+            if now >= httpRequests[url].deadline then dispatchHttp(url, nil, "HTTP request timed out", true) end
         end
         for _, name in ipairs(sortedKeys(server.running)) do
             if server.running[name] then

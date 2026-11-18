@@ -290,10 +290,10 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
     return rect, ui.lines, ui.hits, page, pages
 end
 
--- Leave the rightmost column for the frame and keep the clock's edge shortcut.
+-- Returns a complete taskbar line and exact touch regions, with stable window order.
 function Desktop.taskbar(windows, monitor, clock, saved, active)
     local visible={}; for _,win in ipairs(windows) do if not win.hideTaskbar then visible[#visible+1]=win end end; windows=visible
-    local width = math.max(1, monitor.width - 1)
+    local width = monitor.width
     local line, hits = string.rep(" ", width), {}
     local function put(x, label, stop)
         label = label:sub(1, math.max(0, math.min(stop or width, width) - x + 1))
@@ -301,8 +301,8 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
     end
     local function hit(x1, x2, action, id) hits[#hits + 1] = {x1 = x1, x2 = x2, action = action, id = id} end
     put(1, "[+]"); hit(1, math.min(3, width), "launcher")
-    local clockWidth = (monitor.width >= 22 or (#windows == 0 and monitor.width >= 10)) and 6 or 0
-    if clockWidth > 0 then put(width - 4, clock); hit(width - 4, monitor.width, "inbox") end
+    local clockWidth = (width >= 22 or (#windows == 0 and width >= 10)) and 6 or 0
+    if clockWidth > 0 then put(width - 4, clock); hit(width - 4, width, "inbox") end
     local first, last = 5, width - clockWidth
     if last < first then return line, hits end
     local labels, needed = {}, 0
@@ -342,6 +342,7 @@ end
 function Desktop.menu(monitor, title, items, page, anchor)
     local area = Desktop.area(monitor)
     local width = math.min(area.width, anchor and 26 or 22)
+    local contentWidth = not anchor and width > 1 and width - 1 or width
     local depth = anchor and math.min(4, Gui.controlHeight(area.height)) or area.height >= 17 and 2 or 1
     local pagerDepth = anchor and depth or 1
     local slots = math.max(1, math.floor((area.height - 1) / depth))
@@ -354,13 +355,13 @@ function Desktop.menu(monitor, title, items, page, anchor)
     local origin = monitor.taskbarPosition == "top" and area.y or lastY
     local rect = {x = clamp(anchor and anchor.x or 1, 1, area.width - width + 1),
         y = clamp(anchor and anchor.y or origin, area.y, lastY), width = width, height = height}
-    local ui = Gui.content(width, height)
-    ui.style(1, 1, width, height, 1, 32768)
+    local ui = Gui.content(contentWidth, height)
+    ui.style(1, 1, contentWidth, height, 1, 32768)
     ui.heading(title .. (pages > 1 and " " .. page .. "/" .. pages or ""), 128)
     for slot = 1, slots do
         local item = items[(page - 1) * slots + slot]
         if item then
-            local hit = ui.button(2 + (slot-1)*depth, item.label, "item", 1, width,
+            local hit = ui.button(2 + (slot-1)*depth, item.label, "item", 1, contentWidth,
                 item.enabled, slot % 2 == 0 and 128 or 256, nil, nil, depth)
             hit.item, hit.secondary = item, false
         end

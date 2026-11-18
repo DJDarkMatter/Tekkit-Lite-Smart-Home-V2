@@ -1,4 +1,4 @@
--- SmartHome OS installer: bundled-v57
+-- SmartHome OS installer: bundled-v58
 -- Flat-root layout: lib_*, clients_*, apps_*, configs_*.
 -- Upload this ONE file to Pastebin. All role files are included below.
 -- Usage: inst server|io|monitor|sensor|relay [--startup]
@@ -2973,10 +2973,10 @@ function Desktop.layoutPicker(win, app, monitor, page, title, selectedGrid)
     return rect, ui.lines, ui.hits, page, pages
 end
 
--- Leave the rightmost column for the frame and keep the clock's edge shortcut.
+-- Returns a complete taskbar line and exact touch regions, with stable window order.
 function Desktop.taskbar(windows, monitor, clock, saved, active)
     local visible={}; for _,win in ipairs(windows) do if not win.hideTaskbar then visible[#visible+1]=win end end; windows=visible
-    local width = math.max(1, monitor.width - 1)
+    local width = monitor.width
     local line, hits = string.rep(" ", width), {}
     local function put(x, label, stop)
         label = label:sub(1, math.max(0, math.min(stop or width, width) - x + 1))
@@ -2984,8 +2984,8 @@ function Desktop.taskbar(windows, monitor, clock, saved, active)
     end
     local function hit(x1, x2, action, id) hits[#hits + 1] = {x1 = x1, x2 = x2, action = action, id = id} end
     put(1, "[+]"); hit(1, math.min(3, width), "launcher")
-    local clockWidth = (monitor.width >= 22 or (#windows == 0 and monitor.width >= 10)) and 6 or 0
-    if clockWidth > 0 then put(width - 4, clock); hit(width - 4, monitor.width, "inbox") end
+    local clockWidth = (width >= 22 or (#windows == 0 and width >= 10)) and 6 or 0
+    if clockWidth > 0 then put(width - 4, clock); hit(width - 4, width, "inbox") end
     local first, last = 5, width - clockWidth
     if last < first then return line, hits end
     local labels, needed = {}, 0
@@ -3025,6 +3025,7 @@ end
 function Desktop.menu(monitor, title, items, page, anchor)
     local area = Desktop.area(monitor)
     local width = math.min(area.width, anchor and 26 or 22)
+    local contentWidth = not anchor and width > 1 and width - 1 or width
     local depth = anchor and math.min(4, Gui.controlHeight(area.height)) or area.height >= 17 and 2 or 1
     local pagerDepth = anchor and depth or 1
     local slots = math.max(1, math.floor((area.height - 1) / depth))
@@ -3037,13 +3038,13 @@ function Desktop.menu(monitor, title, items, page, anchor)
     local origin = monitor.taskbarPosition == "top" and area.y or lastY
     local rect = {x = clamp(anchor and anchor.x or 1, 1, area.width - width + 1),
         y = clamp(anchor and anchor.y or origin, area.y, lastY), width = width, height = height}
-    local ui = Gui.content(width, height)
-    ui.style(1, 1, width, height, 1, 32768)
+    local ui = Gui.content(contentWidth, height)
+    ui.style(1, 1, contentWidth, height, 1, 32768)
     ui.heading(title .. (pages > 1 and " " .. page .. "/" .. pages or ""), 128)
     for slot = 1, slots do
         local item = items[(page - 1) * slots + slot]
         if item then
-            local hit = ui.button(2 + (slot-1)*depth, item.label, "item", 1, width,
+            local hit = ui.button(2 + (slot-1)*depth, item.label, "item", 1, contentWidth,
                 item.enabled, slot % 2 == 0 and 128 or 256, nil, nil, depth)
             hit.item, hit.secondary = item, false
         end
@@ -3418,24 +3419,31 @@ function Server.new(net, storage, config, logger, craftShell)
         return setfenv(program, setmetatable(environment, {__index = getfenv(program)}))
     end
 
-    function api.requestHttp(url, body, headers)
+    function api.requestHttp(url, body, headers, exact)
         local app = callingApp and definition(callingApp)
         if not app or not app.handleHttp then return false, "App has no HTTP handler" end
         if not http or type(http.request) ~= "function" then return false, "HTTP is disabled" end
         if type(url) ~= "string" or httpRequests[url] then return false, "HTTP request already pending" end
-        headers = headers or (body and {["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"} or nil)
-        local ok, started, reason = pcall(http.request, url, body, headers)
+        if exact ~= true then
+            headers = headers or (body and {["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"} or nil)
+        end
+        local ok, started, reason
+        if exact == true and headers == nil then
+            ok, started, reason = pcall(http.request, url, body)
+        else ok, started, reason = pcall(http.request, url, body, headers) end
         if not ok or started == false or started == nil and reason then
             return false, tostring(ok and reason or started or "HTTP request refused")
         end
-        httpRequests[url] = {name = callingApp, app = app, deadline = os.clock() + 30}
+        httpRequests[url] = {name = callingApp, app = app, deadline = os.clock() + 30, exact = exact == true}
         return true
     end
 
-    local function dispatchHttp(url, response, reason)
+    local function dispatchHttp(url, response, reason, timedOut)
         local request = httpRequests[url]
         if not request then return end
-        httpRequests[url] = nil
+        -- An unchanged URL has no request ID. Wait for its native completion
+        -- after a timeout so a late result cannot be given to another upload.
+        httpRequests[url] = timedOut and request.exact and {deadline = math.huge} or nil
         if server.running[request.name] and definition(request.name) == request.app then
             appCall(request.name, "handleHttp", url, response, reason, api)
         end
@@ -5035,6 +5043,10 @@ function Server.new(net, storage, config, logger, craftShell)
                         hit.item and hit.item.enabled == false and 128 or 32768, hit.action == "item" and 256 or 128)
                 end
             end
+            if monitor.launcher and rect.width > 1 then
+                local edge = borderColour == 32768 and 1 or borderColour
+                surface.fill(rect.x + rect.width - 1, rect.y, 1, rect.height, Gui.contrast(edge), edge)
+            end
         end
         local placement = not fullscreen and monitor.placement
         if placement then
@@ -5085,10 +5097,6 @@ function Server.new(net, storage, config, logger, craftShell)
                 surface.write(x, area.y, "Place", 32768, 256)
                 placement.hits[#placement.hits + 1] = {x1 = x, x2 = monitor.width, y = area.y, action = "place"}
             end
-        end
-        if not fullscreen and monitor.width > 1 then
-            local edge = borderColour == taskbarColour and Gui.contrast(taskbarColour) or borderColour
-            surface.fill(monitor.width, barY, 1, 1, Gui.contrast(edge), edge)
         end
         monitor.inboxModel = nil
         if not fullscreen and monitor.inbox then
@@ -5578,7 +5586,7 @@ function Server.new(net, storage, config, logger, craftShell)
         server.lastTick = now
         updateClock()
         for _, url in ipairs(sortedKeys(httpRequests)) do
-            if now >= httpRequests[url].deadline then dispatchHttp(url, nil, "HTTP request timed out") end
+            if now >= httpRequests[url].deadline then dispatchHttp(url, nil, "HTTP request timed out", true) end
         end
         for _, name in ipairs(sortedKeys(server.running)) do
             if server.running[name] then
@@ -6301,7 +6309,7 @@ return Monitor
 -- events without running commands or changing app state during a checkpoint.
 local Console = dofile("lib_console.lua")
 local console = Console.new(term)
-console.log("SmartHome OS v57: starting")
+console.log("SmartHome OS v58: starting")
 local Work = dofile("lib_work.lua")
 -- The installer and another OS run may share CraftOS globals until reboot.
 Work.disable()
@@ -7808,7 +7816,7 @@ local args = {...}
 local function install()
     local role, autorun = args[1], false
     local entry = {server = "main_os.lua", io = "clients_io_client.lua", monitor = "clients_monitor_client.lua", sensor = "clients_sensor_client.lua", relay = "clients_relay_client.lua"}
-    print("SmartHome installer: bundled-v57")
+    print("SmartHome installer: bundled-v58")
     local appUsage = "Usage: inst app NAME [--ref REF] | inst app NAME PASTE_ID | inst app NAME --file PATH"
     local appsUsage = "Usage: inst apps [--ref REF]"
     local restoreUsage = "Usage: inst restore [FILE] | inst restore io|monitor|sensor|relay CLIENT_ID [FILE]"

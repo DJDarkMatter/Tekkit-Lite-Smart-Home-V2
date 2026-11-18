@@ -132,10 +132,12 @@ local function pasteID(text, urlOnly)
         or text:match("^https?://pastebin%.com/raw/([A-Za-z0-9]+)/?$")
 end
 local function startRequest(job, api, url, data, headers)
-    sequence = sequence + 1
-    local session = api.getSystem().session:gsub("[^%w]", "-")
-    url = url .. (url:find("?", 1, true) and "&" or "?") .. "smarthome=" .. session .. "-" .. sequence
-    local ok, err = api.requestHttp(url, data, headers)
+    if not job.thread then
+        sequence = sequence + 1
+        local session = api.getSystem().session:gsub("[^%w]", "-")
+        url = url .. (url:find("?", 1, true) and "&" or "?") .. "smarthome=" .. session .. "-" .. sequence
+    end
+    local ok, err = api.requestHttp(url, data, headers, job.thread ~= nil)
     if not ok then return false, err end
     jobs[url] = job
     job.window.screen, job.window.job = "waiting", url
@@ -204,7 +206,7 @@ local function putFile(window, api, path)
 end
 
 function app.init(_, api)
-    assert(api.requestHttp and api.loadShellProgram, "File Explorer requires the v55 server")
+    assert(api.requestHttp and api.loadShellProgram, "File Explorer requires the v58 server")
 end
 
 local function render(w, h, api, view, window)

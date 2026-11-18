@@ -16,8 +16,8 @@ Launcher, taskbar, title-bar controls and window placement.
 
 **Source** [lib_desktop.lua](lib_desktop.lua), [lib_server.lua](lib_server.lua), [lib_monitor.lua](lib_monitor.lua), [documentation_desktop.md](documentation_desktop.md)
 
-- Taskbar — Appears at the edge selected in Settings with a frame on the right.
-  - Start [+] — One alphabetical column. Roomy monitors use two rows per entry. A star marks a running app.
+- Taskbar — Appears at the edge selected in Settings.
+  - Start [+] — One alphabetical column with a right border. Roomy monitors use two rows per entry. A star marks a running app.
     - [Settings](#settings) — Opens the built-in Settings window.
     - [App] — Opens the app or focuses its existing window on this monitor.
     - [Alert inbox](#alert-inbox) — Launcher entry on monitors without the clock shortcut.

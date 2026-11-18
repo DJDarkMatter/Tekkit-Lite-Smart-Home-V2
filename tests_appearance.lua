@@ -107,7 +107,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
                     for _,hit in ipairs(hits) do
                         if hit.item then
                             index=index+1
-                            equal(hit.x1,rect.x); equal(hit.x2,rect.x+rect.width-1)
+                            equal(hit.x1,rect.x); equal(hit.x2,rect.x+rect.width-2)
                             equal(hit.y2-hit.y1+1,size[3]); equal(hit.item.value,index)
                             if previous then equal(hit.y1,previous.y2+1) end
                             equal(Gui.actionAt(hits,hit.x2,hit.y2),"item")
@@ -686,7 +686,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
             equal(screen.bg[win.y + win.height - 1][win.x], 16)
             equal(screen.fg[win.y][win.x], 32768)
             equal(screen.bg[win.y][win.x + win.width - 2], 16384, "Close stays red")
-            equal(screen.bg[screen.height][screen.width], 16, "The right edge follows the border color")
+            equal(screen.bg[screen.height][screen.width], 8192)
             equal(screen.bg[screen.height][screen.width - 1], 8192)
             equal(screen.bg[screen.height - 1][screen.width], t.api.getOSSettings().backgroundColour, "Taskbar colouring must not extend upward")
             equal(screen.fg[screen.height][screen.width - 1], 1)
