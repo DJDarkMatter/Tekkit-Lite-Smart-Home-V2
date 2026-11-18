@@ -108,7 +108,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.central.server.running.pane, nil)
     end
 
-    function tests.v57_desktop_frames_the_taskbar_right_and_inbox_left()
+    function tests.v58_desktop_frames_start_menu_and_inbox_and_preserves_taskbar_clock()
         for _, size in ipairs({{48, 16}, {12, 7}}) do
             local t = setup(size[1], size[2])
             assert(t.api.setWindowBorderColour(2)); assert(t.api.setTaskbarColour(8192))
@@ -118,8 +118,20 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
                 local width, barY = t.top.width, Desktop.taskbarY(t.model())
                 equal(t.top.bg[barY][1], 8192)
                 equal(t.top.bg[barY][width - 1], 8192)
-                equal(t.top.bg[barY][width], 2)
-                equal(t.top.lines[barY]:sub(width - 5, width - 1):gsub(" +$", ""), t.central.server.gameTime)
+                equal(t.top.bg[barY][width], 8192)
+                equal(t.top.lines[barY]:sub(width - 4, width):gsub(" +$", ""), t.central.server.gameTime)
+                t.touch("top", 1, barY)
+                local first
+                for _, hit in ipairs(t.model().menuHits) do
+                    if hit.action == "item" then first = hit; break end
+                end
+                assert(first)
+                local edge = math.min(22, width)
+                equal(t.top.bg[first.y][edge], 2)
+                assert(first.x2 < edge, "The right border must sit outside the app buttons")
+                t.touch("top", edge, first.y)
+                equal(t.central.server.running.pane, nil, "A touch on the frame must not launch an app")
+                if t.model().launcher then t.touch("top", 1, barY) end
                 t.touch("top", width, barY) -- The existing edge shortcut still works.
                 local model = assert(t.model().inboxModel)
                 equal(model.contentX, model.x + 1)

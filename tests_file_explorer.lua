@@ -79,8 +79,9 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         function t.text(id) return table.concat(t.lines(id), "\n") end
         function t.requests()
             local requests = {}
-            central.env.http = {request = function(url, body, headers)
-                requests[#requests + 1] = {url = url, body = body, headers = headers}
+            central.env.http = {request = function(...)
+                local url, body, headers = ...
+                requests[#requests + 1] = {url = url, body = body, headers = headers, argumentCount = select("#", ...)}
                 -- CraftOS versions may return nothing for a queued request.
             end, post = function() error("The native blocking post must not run inside the app") end}
             return requests
@@ -200,7 +201,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(#requests, 0, "Wait for the explicit send confirmation")
         t.click(id, "sendPaste")
         equal(#requests, 1)
-        assert(requests[1].url:match("^https://pastebin%.com/api/api_post%.php%?source=fixture&smarthome="))
+        equal(requests[1].url, "https://pastebin.com/api/api_post.php?source=fixture")
         equal(requests[1].body, "command-generated content=" .. bytes)
         equal(requests[1].headers.Provider, "command")
         local before = t.central.server.lastTick
@@ -215,7 +216,7 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         equal(t.disk.files[path], bytes)
     end
 
-    function tests.v57_file_explorer_forwards_legacy_pastebin_http_events()
+    function tests.v58_file_explorer_matches_the_manual_legacy_pastebin_request()
         local t = setup([[
             local mode, path = ...
             assert(mode == "put" and path == "/guide.lua")
@@ -239,11 +240,23 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         ]])
         local id = t.open("top")
         local requests = t.requests()
+        local native = assert(t.central.env.loadfile("tools/server-pastebin"))
+        local manual = coroutine.create(function() native("put", "/guide.lua") end)
+        local running, event = coroutine.resume(manual)
+        assert(running, event)
+        equal(#requests, 1)
+        local expected = table.remove(requests, 1)
+        local complete, err = coroutine.resume(manual, "http_success", expected.url,
+            {readAll = function() return "http://pastebin.com/MANUAL" end, close = function() end})
+        assert(complete, err)
+        equal(coroutine.status(manual), "dead")
         t.click(id, "open", "guide.lua"); t.click(id, "upload"); t.click(id, "sendPaste")
         equal(#requests, 1)
         assert(t.text(id):find("Uploading", 1, true), t.text(id))
-        assert(requests[1].url:match("^http://pastebin%.com/api/api_post%.php%?smarthome="))
-        equal(requests[1].body, "content=" .. t.disk.files["guide.lua"])
+        equal(requests[1].url, expected.url, "Preserve the URL accepted by the manual command")
+        equal(requests[1].headers, expected.headers, "Preserve omitted headers")
+        equal(requests[1].body, expected.body)
+        equal(requests[1].argumentCount, expected.argumentCount)
         local before = t.central.server.lastTick
         t.bus.advance(1)
         assert(t.central.server.lastTick > before)
@@ -251,9 +264,33 @@ return function(tests, newBus, monitor, serialize, unserialize, equal)
         assert(t.text(id):find("ID: Z7qx", 1, true))
         t.click(id, "file"); t.click(id, "upload"); t.click(id, "sendPaste")
         equal(#requests, 2)
-        assert(requests[1].url ~= requests[2].url)
+        equal(requests[1].url, requests[2].url)
         t.bus.queue(t.central, {"http_failure", requests[2].url, "Connection refused"})
         t.bus.pump()
         assert(t.text(id):find("Connection refused", 1, true))
+    end
+
+    function tests.v58_file_explorer_cannot_reuse_a_timed_out_upload_until_its_native_reply()
+        local t = setup([[
+            local response, err = http.post("https://pastebin.com/api/api_post.php", "text=example")
+            if not response then printError(err); return end
+            print("Uploaded as " .. response.readAll())
+            response.close()
+        ]])
+        local id = t.open("top")
+        local requests = t.requests()
+        t.click(id, "open", "guide.lua"); t.click(id, "upload"); t.click(id, "sendPaste")
+        equal(#requests, 1)
+        t.bus.advance(31)
+        assert(t.text(id):find("timed out", 1, true))
+        t.click(id, "file"); t.click(id, "upload"); t.click(id, "sendPaste")
+        equal(#requests, 1, "Hold the URL until the first native request completes")
+        assert(t.text(id):find("pending", 1, true))
+        t.respond(requests[1], "https://pastebin.com/OLD")
+        assert(not t.text(id):find("ID: OLD", 1, true))
+        t.click(id, "file"); t.click(id, "upload"); t.click(id, "sendPaste")
+        equal(#requests, 2)
+        t.respond(requests[2], "https://pastebin.com/NEW")
+        assert(t.text(id):find("ID: NEW", 1, true))
     end
 end
